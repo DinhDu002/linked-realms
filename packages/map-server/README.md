@@ -42,7 +42,9 @@ LAND_ID=1 pnpm --filter @linked-realms/map-server start
 Players reach a Land through the Hub (PLAN.md section 3.5, `docs/decisions/0004-hub-relay-and-travel.md`):
 
 1. The Land owner registers this server's Mining key with the Hub by signing a Delegation in the
-   client (the address is in the `land` message and printed at start-up).
+   client: they paste the address the server prints at start-up (`Mining key created: 0x…`) into
+   "Register Map server" under their Land. Until then the relay refuses the link (4404) and the
+   agent keeps retrying, at most every 30 seconds.
 2. With `RELAY_URL` set, the server opens one outbound link to the relay as this Land
    (`connectHost` from `@linked-realms/relay/agent`), proving itself by signing a challenge with
    the Mining key. The relay accepts it only if that key is the Land's Delegation in the Hub. No

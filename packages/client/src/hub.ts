@@ -131,26 +131,6 @@ function errorText(body: unknown): string {
   return typeof e === "string" ? e.slice(0, 200) : "";
 }
 
-/**
- * Only the Land owner may offer to register: the Map server's `land` message is untrusted, so the
- * Land must be the one the owner's chain data says they own, and the one we entered.
- */
-export function ownerMayRegister(args: {
-  message: { landId: number; owner: string; miningKey: string };
-  joinedLandId: number;
-  ownLandId: number | undefined;
-  wallet: Address;
-}): boolean {
-  const { message, joinedLandId, ownLandId, wallet } = args;
-  return (
-    ownLandId === joinedLandId &&
-    message.landId === joinedLandId &&
-    isAddress(message.owner, { strict: false }) &&
-    getAddress(message.owner) === getAddress(wallet) &&
-    isAddress(message.miningKey, { strict: false })
-  );
-}
-
 export interface HubOptions {
   baseUrl: string;
   chainId: number;

@@ -1,7 +1,6 @@
 import { describe, expect, it } from "vitest";
 import {
   createHub,
-  ownerMayRegister,
   parseDirectory,
   parseNonce,
   parseSession,
@@ -64,30 +63,6 @@ describe("response validation", () => {
     expect(() =>
       parseTicketGrant({ ticket: wire, signature: "0x12" }),
     ).toThrow();
-  });
-});
-
-describe("ownerMayRegister", () => {
-  const message = { landId: 3, owner: A.toLowerCase(), miningKey: B };
-  const base = {
-    message,
-    joinedLandId: 3,
-    ownLandId: 3,
-    wallet: A as `0x${string}`,
-  };
-  it("needs the owner, the own Land and the joined Land to agree", () => {
-    expect(ownerMayRegister(base)).toBe(true);
-    expect(ownerMayRegister({ ...base, ownLandId: 4 })).toBe(false);
-    expect(ownerMayRegister({ ...base, ownLandId: undefined })).toBe(false);
-    expect(
-      ownerMayRegister({ ...base, message: { ...message, landId: 4 } }),
-    ).toBe(false);
-    expect(
-      ownerMayRegister({ ...base, message: { ...message, owner: B } }),
-    ).toBe(false);
-    expect(
-      ownerMayRegister({ ...base, message: { ...message, miningKey: "0x1" } }),
-    ).toBe(false);
   });
 });
 

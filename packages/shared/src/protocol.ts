@@ -75,8 +75,6 @@ export interface LandMessage {
   owner: Address;
   x: number;
   y: number;
-  /** The Map server's Mining key, which the Land owner signs a Delegation for. */
-  miningKey: Address;
 }
 
 export type InputMessage = MoveInput;
