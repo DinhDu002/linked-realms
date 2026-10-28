@@ -6,3 +6,7 @@ libs = ["node_modules"]
 solc_version = "0.8.38"
 # Base Sepolia (D3) supports Cancun; raise only when a newer opcode is needed.
 evm_version = "cancun"
+fs_permissions = [
+  { access = "read", path = "../packages/shared/test-vectors" },
+  { access = "write", path = "../packages/shared/src/deployments" },
+]

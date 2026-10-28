@@ -1,2 +1,7 @@
 *.md
 pnpm-lock.yaml
+# Generated files (packages/shared/scripts).
+packages/shared/src/abi/
+packages/shared/test-vectors/
+maps/empty-land.json
+packages/shared/src/deployments/*.json
