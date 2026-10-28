@@ -1,11 +1,13 @@
 // Off-chain movement inside a Land. The map server is authoritative and uses `step`;
 // the client may use the same function to predict its own movement.
 import { isBlockedTile, type LandMap } from "./map/index.ts";
+import { CHARACTER_HALF_SIZE_PX } from "./rules/world.ts";
+
+// Defined in rules/world.ts (Gate geometry needs it); re-exported for existing importers.
+export { CHARACTER_HALF_SIZE_PX };
 
 export const SERVER_TICK_HZ = 20;
 export const MOVE_SPEED_PX_PER_SECOND = 128;
-/** Half the side of the square a Character occupies, in pixels. */
-export const CHARACTER_HALF_SIZE_PX = 10;
 
 export interface MoveInput {
   up: boolean;

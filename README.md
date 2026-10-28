@@ -43,6 +43,31 @@ pnpm --filter @linked-realms/map-server e2e:mining
 
 After changing a rule in `packages/shared/src/rules`, run `pnpm --filter @linked-realms/shared generate`; after changing a contract, run `forge build` in `contracts/` and `pnpm --filter @linked-realms/shared export-abi`.
 
+## Run the world
+
+The `world` profile adds the Hub, the relay and three Map servers (one Land each) to the default services, so a Player can walk from Land to Land. Run it as its own Compose project, so it never touches the state of a default stack:
+
+```bash
+pnpm install   # the deploy step reads contracts/node_modules
+ANVIL_PORT=8546 POSTGRES_PORT=5433 docker compose -p linked-realms-world --profile world up -d --build
+pnpm e2e:world   # sign in, walk from Land 1 into Land 2, stop and restart Land 1's Map server
+docker compose -p linked-realms-world --profile world down -v   # reset everything
+```
+
+| Service    | What it is                                                                                                                  | Host port                   |
+| ---------- | --------------------------------------------------------------------------------------------------------------------------- | --------------------------- |
+| `anvil`    | Local chain                                                                                                                 | `ANVIL_PORT` (8545)         |
+| `postgres` | The Hub's database                                                                                                          | `POSTGRES_PORT` (5432)      |
+| `deploy`   | One-shot: deploys the contracts on a copy of the repo and fails if the addresses differ from `packages/shared/src/deployments/31337.json` | none                        |
+| `hub-api`  | Directory, sign-in, Travel tickets, reports                                                                                 | `HUB_PORT` (8787)           |
+| `relay`    | Carries Players to Map servers that have no open port                                                                       | `RELAY_PORT` (8080)         |
+| `seed`     | One-shot: Characters for anvil accounts 1 to 3 (Lands 1, 2, 3 at (0, 0), (1, 0), (1, 1)), a Mining key per Map server, signed Delegations posted to the Hub | none                        |
+| `map-1..3` | One Map server per Land; each links out to the relay and keeps its Mining key in its own volume                             | none                        |
+
+Run the client against it with `VITE_HUB_URL=http://127.0.0.1:8787 pnpm --filter @linked-realms/client dev`; "Use dev wallet" uses anvil account 0, and the dev accounts 1 to 3 own the Lands.
+
+**All keys here are public test keys.** They come from anvil's well-known mnemonic (`test test ... junk`), including `HUB_TICKET_KEY` (account 9) and the session secret in `compose.yaml`. They exist for local development only; never reuse them anywhere else. Anvil keeps no state across restarts: after restarting only `anvil`, run `down -v` so the Hub's database matches the new chain.
+
 ## Documents
 
 - [PLAN.md](PLAN.md): principles, architecture, rules, roadmap and progress.

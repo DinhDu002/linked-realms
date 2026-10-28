@@ -2,7 +2,12 @@
 // parseLandMap, which accepts a small subset of the Tiled JSON format and returns only the
 // fields the game uses. Images are never loaded from a map: tilesets are referenced by name
 // and drawn from the client's own bundle.
-import { LAND_SIZE_TILES } from "../rules/world.ts";
+import {
+  DIRECTIONS,
+  LAND_SIZE_TILES,
+  type Direction,
+  type GateRect,
+} from "../rules/world.ts";
 
 export const TILE_SIZE_PX = 32;
 export const MAX_MAP_BYTES = 256 * 1024;
@@ -29,6 +34,8 @@ export interface LandMap {
   tileLayers: Array<{ name: string; data: number[] }>;
   tilesets: Array<{ firstGid: number; name: string; tileCount: number }>;
   mine: { tileX: number; tileY: number; width: number; height: number };
+  /** One Gate per edge; walkable. */
+  gates: Record<Direction, GateRect>;
 }
 
 export class MapValidationError extends Error {
@@ -66,6 +73,35 @@ function list(value: unknown, what: string, maxLength: number): unknown[] {
   if (!Array.isArray(value) || value.length > maxLength)
     fail(`${what} must be an array of at most ${maxLength} items`);
   return value;
+}
+
+/** Reads a Gate's `direction` property (Tiled stores custom properties as a name/value list). */
+function parseGateDirection(object: Record<string, unknown>): Direction {
+  const props = list(object.properties, "gate.properties", 16);
+  const prop = props
+    .map((p, i) => record(p, `gate.properties[${i}]`))
+    .find((p) => p.name === "direction");
+  if (!DIRECTIONS.includes(prop?.value as Direction))
+    fail(`gate direction must be one of ${DIRECTIONS.join(", ")}`);
+  return prop?.value as Direction;
+}
+
+/** A Gate lies on its own edge, inside the map. */
+function checkGate(
+  direction: Direction,
+  g: GateRect,
+  width: number,
+  height: number,
+): void {
+  const onEdge = {
+    north: g.tileY === 0,
+    south: g.tileY + g.height === height,
+    west: g.tileX === 0,
+    east: g.tileX + g.width === width,
+  }[direction];
+  if (!onEdge) fail(`the ${direction} Gate must lie on the ${direction} edge`);
+  if (g.tileX + g.width > width || g.tileY + g.height > height)
+    fail(`the ${direction} Gate must lie inside the map`);
 }
 
 /** Validates an untrusted Land map (a JSON string or an already-parsed value). */
@@ -118,6 +154,7 @@ export function parseLandMap(input: unknown): LandMap {
 
   const tileLayers: LandMap["tileLayers"] = [];
   let mine: LandMap["mine"] | undefined;
+  const gates: Partial<LandMap["gates"]> = {};
   for (const [i, raw] of list(map.layers, "map.layers", MAX_LAYERS).entries()) {
     const layer = record(raw, `layers[${i}]`);
     const name = text(layer.name, `layers[${i}].name`);
@@ -141,6 +178,21 @@ export function parseLandMap(input: unknown): LandMap {
       ).entries()) {
         const object = record(rawObject, `layers[${i}].objects[${j}]`);
         const kind = object.type ?? object.class;
+        if (kind === "gate") {
+          const direction = parseGateDirection(object);
+          if (gates[direction])
+            fail(`a Land has exactly one ${direction} Gate`);
+          const px = width * tileSize;
+          const rect = {
+            tileX: int(object.x, "gate.x", 0, px) / tileSize,
+            tileY: int(object.y, "gate.y", 0, px) / tileSize,
+            width: int(object.width, "gate.width", 1, px) / tileSize,
+            height: int(object.height, "gate.height", 1, px) / tileSize,
+          };
+          checkGate(direction, rect, width, height);
+          gates[direction] = rect;
+          continue;
+        }
         if (kind !== "mine") continue;
         if (mine) fail("a Land has exactly one Mine");
         const px = width * tileSize;
@@ -164,8 +216,18 @@ export function parseLandMap(input: unknown): LandMap {
   ) {
     fail("the Mine must cover the 2×2 tiles in the middle of the Land");
   }
+  for (const d of DIRECTIONS)
+    if (!gates[d]) fail(`a Land has exactly one ${d} Gate`);
   if (tileLayers.length === 0) fail("a Land needs at least one tile layer");
-  return { width, height, tileSize, tileLayers, tilesets, mine };
+  return {
+    width,
+    height,
+    tileSize,
+    tileLayers,
+    tilesets,
+    mine,
+    gates: gates as LandMap["gates"],
+  };
 }
 
 /** Whether a tile blocks movement. In stage 1 only the Mine does. */

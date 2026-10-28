@@ -11,12 +11,16 @@ import { join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { Client } from "@colyseus/sdk";
 import {
+  GATE_NONE,
+  HUB_EIP712_DOMAIN,
+  TRAVEL_TICKET_TTL_SECONDS,
+  TravelTicketTypes,
+  ticketToWire,
   LAND_ROOM,
   Messages,
   deploymentFor,
   goldMineAbi,
   goldTokenAbi,
-  joinMessage,
   landAbi,
   playerRegistryAbi,
 } from "@linked-realms/shared";
@@ -27,9 +31,12 @@ import {
   http,
   numberToHex,
   type Address,
-  type Hex,
 } from "viem";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import {
+  generatePrivateKey,
+  privateKeyToAccount,
+  type PrivateKeyAccount,
+} from "viem/accounts";
 import { foundry } from "viem/chains";
 
 const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8545";
@@ -46,6 +53,28 @@ const publicClient = createPublicClient({
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
 const sameAddress = (a: string, b: string) =>
   a.toLowerCase() === b.toLowerCase();
+
+// No Hub here: a throwaway key plays the Hub. The Map servers trust its address, and this
+// script signs the Travel tickets (the same typed data hub-api signs).
+const hub = privateKeyToAccount(generatePrivateKey());
+async function ticketFor(account: PrivateKeyAccount, landId: number) {
+  const ticket = {
+    player: account.address,
+    landId: BigInt(landId),
+    gate: GATE_NONE,
+    expiresAt: BigInt(
+      Math.floor(Date.now() / 1000) + TRAVEL_TICKET_TTL_SECONDS,
+    ),
+    nonce: generatePrivateKey(), // 32 random bytes
+  };
+  const signature = await hub.signTypedData({
+    domain: HUB_EIP712_DOMAIN(foundry.id),
+    types: TravelTicketTypes,
+    primaryType: "TravelTicket",
+    message: ticket,
+  });
+  return { ticket: ticketToWire(ticket), signature };
+}
 
 async function newCharacter() {
   const account = privateKeyToAccount(generatePrivateKey());
@@ -123,6 +152,7 @@ function startServer(index: number): Promise<Address> {
       ...process.env,
       LAND_ID: String(character.landId),
       PORT: String(PORTS[index]),
+      HUB_TICKET_SIGNER: hub.address,
       RPC_URL,
       MINING_KEY_FILE: join(dir, `key-${index}`),
       MINING_MAX_THREADS: "1",
@@ -150,11 +180,9 @@ const check = (ok: boolean, text: string) => {
 
 async function joinAndMine(index: number) {
   const { account, landId } = characters[index]!;
-  const message = joinMessage(landId, Math.floor(Date.now() / 1000) + 60);
-  const signature: Hex = await account.signMessage({ message });
   const room = await new Client(`ws://127.0.0.1:${PORTS[index]}`).joinOrCreate(
     LAND_ROOM,
-    { message, signature },
+    await ticketFor(account, landId),
   );
   // P5: a fresh Map server must not be mining until the Land owner asks.
   await sleep(1000);
