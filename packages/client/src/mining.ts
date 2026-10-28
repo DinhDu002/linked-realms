@@ -1,5 +1,4 @@
-import type { MiningStateShape } from "@linked-realms/shared";
-import { formatHashRate } from "./format.ts";
+import { formatHashRate, type MiningStateShape } from "@linked-realms/shared";
 
 const count = (v: unknown): v is number =>
   typeof v === "number" && Number.isSafeInteger(v) && v >= 0;
