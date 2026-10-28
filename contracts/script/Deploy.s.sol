@@ -22,10 +22,14 @@ contract Deploy is Script, WorldDeployer {
         if (owner != deployer) {
             world.land.transferOwnership(owner);
             world.registry.transferOwnership(owner);
+            world.gold.transferOwnership(owner);
+            world.mine.transferOwnership(owner);
         }
         vm.stopBroadcast();
 
         _writeDeployment("Land", address(world.land), startBlock);
+        _writeDeployment("GoldToken", address(world.gold), startBlock);
+        _writeDeployment("GoldMine", address(world.mine), startBlock);
         string memory json = _writeDeployment("PlayerRegistry", address(world.registry), startBlock);
         vm.writeJson(
             json,

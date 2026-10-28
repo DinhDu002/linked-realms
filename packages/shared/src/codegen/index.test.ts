@@ -3,6 +3,7 @@ import { describe, expect, it } from "vitest";
 import {
   outputs,
   renderEmptyLand,
+  renderMiningVectors,
   renderRulesSol,
   renderSpiralVectors,
 } from "./index.ts";
@@ -16,6 +17,12 @@ describe("generated artefacts are up to date", () => {
   it("test-vectors/spiral.json", () => {
     expect(readFileSync(outputs.spiralVectors, "utf8")).toBe(
       renderSpiralVectors(),
+    );
+  });
+
+  it("test-vectors/mining.json", () => {
+    expect(readFileSync(outputs.miningVectors, "utf8")).toBe(
+      renderMiningVectors(),
     );
   });
 

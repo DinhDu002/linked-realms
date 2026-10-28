@@ -1,6 +1,7 @@
 // Renders the artefacts that carry the TypeScript rules into the contracts (P9):
 // contracts/src/generated/Rules.sol and the cross-check vectors read by `forge test`.
 import { MINE_TILES, TILE_SIZE_PX } from "../map/index.ts";
+import { keccak256, toHex, type Address } from "viem";
 import * as rules from "../rules/index.ts";
 
 const repoRoot = new URL("../../../../", import.meta.url);
@@ -9,6 +10,7 @@ export const outputs = {
   rulesSol: new URL("contracts/src/generated/Rules.sol", repoRoot),
   spiralVectors: new URL("packages/shared/test-vectors/spiral.json", repoRoot),
   emptyLand: new URL("maps/empty-land.json", repoRoot),
+  miningVectors: new URL("packages/shared/test-vectors/mining.json", repoRoot),
 } as const;
 
 /** Writes round numbers in scientific notation (50e18), which Solidity accepts and reviewers can read. */
@@ -28,6 +30,7 @@ export function renderRulesSol(): string {
     ["INITIAL_ROUND_REWARD", rules.INITIAL_ROUND_REWARD],
     ["HALVING_INTERVAL_ROUNDS", rules.HALVING_INTERVAL_ROUNDS],
     ["MAX_SUPPLY", rules.MAX_SUPPLY],
+    ["INITIAL_TARGET", rules.INITIAL_TARGET],
   ];
   const keys = rules.CHARACTER_STAT_KEYS;
   return [
@@ -124,4 +127,79 @@ export function renderEmptyLand(): string {
     ],
   };
   return `${JSON.stringify(map)}\n`;
+}
+
+const hex = (value: bigint) => toHex(value);
+
+/** Solution hashes, Retargets and rewards computed by the TypeScript rules, checked by `forge test`. */
+export function renderMiningVectors(): string {
+  const solution = Array.from({ length: 16 }, (_, i) => {
+    const challenge = keccak256(toHex(`challenge ${i}`));
+    const wallet = keccak256(toHex(`wallet ${i}`)).slice(0, 42) as Address;
+    const nonce = BigInt(keccak256(toHex(`nonce ${i}`))) >> BigInt(i * 16);
+    return {
+      challenge,
+      wallet,
+      nonce: hex(nonce),
+      hash: rules.solutionHash(challenge, wallet, nonce),
+    };
+  });
+  const expected =
+    rules.INTENDED_ROUND_SECONDS * rules.RETARGET_INTERVAL_ROUNDS;
+  const currents = [
+    1n,
+    2n,
+    1_000_000n,
+    rules.INITIAL_TARGET,
+    2n ** 200n,
+    rules.MAX_TARGET / 4n,
+    rules.MAX_TARGET / 4n + 1n,
+    rules.MAX_TARGET,
+  ];
+  const actuals = [
+    0n,
+    1n,
+    expected / 4n - 1n,
+    expected / 4n,
+    expected / 2n,
+    expected - 1n,
+    expected,
+    expected + 7n,
+    expected * 4n,
+    expected * 4n + 1n,
+    10n ** 12n,
+  ];
+  const retarget = currents.flatMap((current) =>
+    actuals.map((actual) => ({
+      current: hex(current),
+      actual: hex(actual),
+      next: hex(rules.nextTarget(current, actual)),
+    })),
+  );
+  const h = rules.HALVING_INTERVAL_ROUNDS;
+  const rounds = [
+    0n,
+    1n,
+    h - 1n,
+    h,
+    h + 1n,
+    2n * h,
+    4n * h,
+    33n * h,
+    63n * h,
+    64n * h,
+    255n * h,
+    256n * h,
+    2n ** 64n,
+  ];
+  const reward = rounds.map((round) => ({
+    round: hex(round),
+    reward: hex(rules.rewardForRound(round)),
+  }));
+  const columns = <T extends object>(rows: T[]) =>
+    Object.fromEntries(
+      Object.keys(rows[0]!).map((k) => [k, rows.map((r) => r[k as keyof T])]),
+    );
+  // Parallel arrays of hex strings: forge's JSON cheatcodes read whole arrays, and uint256 does not fit a JSON number.
+  return `${JSON.stringify({ solution: columns(solution), retarget: columns(retarget), reward: columns(reward) })}\n`;
 }
