@@ -2,7 +2,7 @@
 
 A multiplayer world made of lands that players host themselves. Lands join into one shared world through the Hub. Characters, land ownership and gold are decided by smart contracts on an EVM testnet, never by the servers that players run.
 
-> **Status:** Phase 1 (stage 1). **Testnet only:** nothing in this project has real value.
+> **Status:** Phase 2 (open testing). **Testnet only:** nothing in this project has real value.
 
 ## Stage 1
 
@@ -64,7 +64,7 @@ docker compose -p linked-realms-world --profile world down -v   # reset everythi
 | `seed`     | One-shot: Characters for anvil accounts 1 to 3 (Lands 1, 2, 3 at (0, 0), (1, 0), (1, 1)), a Mining key per Map server, signed Delegations posted to the Hub | none                        |
 | `map-1..3` | One Map server per Land; each links out to the relay and keeps its Mining key in its own volume                             | none                        |
 
-Run the client against it with `VITE_HUB_URL=http://127.0.0.1:8787 pnpm --filter @linked-realms/client dev`; "Use dev wallet" uses anvil account 0, and the dev accounts 1 to 3 own the Lands.
+Run the client against it with `VITE_RPC_URL=http://127.0.0.1:8546 VITE_HUB_URL=http://127.0.0.1:8787 pnpm --filter @linked-realms/client dev` (the RPC port is `ANVIL_PORT`). "Use dev wallet" makes a key in the browser and funds it on anvil; "Create Character" then gives it a Land, which you can host with the steps in [docs/self-hosting.md](docs/self-hosting.md) (on the world's network: add `--network linked-realms-world_default` and use `CHAIN_ID=31337`, `RPC_URL=http://anvil:8545`, `RELAY_URL=ws://relay:8080`, and `HUB_TICKET_SIGNER` from `compose.yaml`). The dev accounts 1 to 3 own Lands 1 to 3.
 
 **All keys here are public test keys.** They come from anvil's well-known mnemonic (`test test ... junk`), including `HUB_TICKET_KEY` (account 9) and the session secret in `compose.yaml`. They exist for local development only; never reuse them anywhere else. Anvil keeps no state across restarts: after restarting only `anvil`, run `down -v` so the Hub's database matches the new chain.
 
@@ -73,6 +73,8 @@ Run the client against it with `VITE_HUB_URL=http://127.0.0.1:8787 pnpm --filter
 - [PLAN.md](PLAN.md): principles, architecture, rules, roadmap and progress.
 - [CONTEXT.md](CONTEXT.md): domain glossary.
 - [docs/decisions/](docs/decisions/): architecture decision records.
+- [docs/self-hosting.md](docs/self-hosting.md): host your own Land with Docker.
+- [docs/runbooks/base-sepolia.md](docs/runbooks/base-sepolia.md): open the testnet world (project owner).
 - [CONTRIBUTING.md](CONTRIBUTING.md): how changes get in.
 
 ## License

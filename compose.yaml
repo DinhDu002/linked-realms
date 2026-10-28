@@ -14,13 +14,11 @@ x-node: &node
 
 x-map: &map
   <<: *node
-  command: ["node", "packages/map-server/src/main.ts"]
   environment: &map-env
     RPC_URL: http://anvil:8545
     RELAY_URL: ws://relay:8080
     # anvil dev account 9, the address of HUB_TICKET_KEY below
     HUB_TICKET_SIGNER: "0xa0Ee7A142d267C1f36714E4a8F75612F20a79720"
-    MINING_KEY_FILE: /data/mining-key
   depends_on:
     seed:
       condition: service_completed_successfully
