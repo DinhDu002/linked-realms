@@ -1,13 +1,15 @@
 // Messages between a Map server and the client (Colyseus). State is synchronised by
 // Colyseus schema reflection: LandState { landId, players: Map<sessionId, PlayerState>, mining: MiningState }.
 import type { Address, Hex } from "viem";
+import type { WireTravelTicket } from "./hub.ts";
 import type { MoveInput } from "./movement.ts";
 
 export const LAND_ROOM = "land";
 
 /** Options passed to `joinOrCreate(LAND_ROOM, options)`. */
 export interface JoinOptions {
-  message: string;
+  /** Signed by the Hub; the Map server verifies it offline (verifyTravelTicket). */
+  ticket: WireTravelTicket;
   signature: Hex;
 }
 
@@ -73,6 +75,8 @@ export interface LandMessage {
   owner: Address;
   x: number;
   y: number;
+  /** The Map server's Mining key, which the Land owner signs a Delegation for. */
+  miningKey: Address;
 }
 
 export type InputMessage = MoveInput;

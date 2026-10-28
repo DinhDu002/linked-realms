@@ -1,0 +1,26 @@
+{
+  "name": "@linked-realms/hub-api",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "node --watch src/main.ts",
+    "start": "node src/main.ts",
+    "typecheck": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@hono/node-server": "1.19.5",
+    "@linked-realms/shared": "workspace:*",
+    "hono": "4.13.14",
+    "pg": "8.23.1",
+    "viem": "2.57.12"
+  },
+  "devDependencies": {
+    "@electric-sql/pglite": "0.2.13",
+    "@types/node": "26.6.5",
+    "@types/pg": "8.23.1",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  }
+}

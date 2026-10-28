@@ -45,8 +45,12 @@ The Hub's list of registered Map servers and whether each one is online.
 _Avoid_: registry, server list
 
 **Mining key**:
-A Map server's own wallet. It holds no assets and only pays fees for submitting Solutions.
+A Map server's own wallet. It holds no assets; it pays fees for submitting Solutions and, under a Delegation, identifies the Map server to the Hub and the relay.
 _Avoid_: hot wallet, server key
+
+**Delegation**:
+The Land owner's signature naming the Mining key allowed to host their Land.
+_Avoid_: authorisation, registration token
 
 ### Gold
 

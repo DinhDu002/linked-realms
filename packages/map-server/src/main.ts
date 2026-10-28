@@ -4,6 +4,7 @@ import {
   createMinerChain,
   loadOrCreateMiningKey,
 } from "@linked-realms/miner";
+import { connectHost } from "@linked-realms/relay/agent";
 import { parseLandMap } from "@linked-realms/shared";
 import { createPublicClient, http, numberToHex } from "viem";
 import { createChain } from "./chain.ts";
@@ -59,15 +60,35 @@ async function main(): Promise<void> {
     map,
     mapText,
     land,
-    chain,
+    miningKey: key.address,
+    hubSigner: config.hubTicketSigner,
+    chainId: config.chainId,
     mining,
   });
   // Workers must not outlive the server, even if the process is slow to exit.
   server.onShutdown(() => mining.stop());
-  await server.listen(config.port);
+  await server.listen(config.port, config.host);
   console.log(
-    `Map server for Land ${config.landId} (owner ${land.owner}) at ws://localhost:${config.port}`,
+    `Map server for Land ${config.landId} (owner ${land.owner}) at ws://${config.host}:${config.port}`,
   );
+  console.log(`Accepting Travel tickets signed by ${config.hubTicketSigner}`);
+  if (config.relayUrl) {
+    const host = connectHost({
+      relayUrl: config.relayUrl,
+      landId: config.landId,
+      privateKey: key.privateKey,
+      localPort: config.port,
+      log: console.log,
+    });
+    server.onShutdown(() => host.close());
+    console.log(
+      `Reachable through the relay at ${config.relayUrl} (once the Land owner registers the Mining key with the Hub), and directly on ${config.host}:${config.port}`,
+    );
+  } else {
+    console.log(
+      "RELAY_URL is not set: reachable only directly, not through the relay",
+    );
+  }
   // Colyseus handles SIGINT/SIGTERM itself (gracefullyShutdown defaults to true).
 }
 

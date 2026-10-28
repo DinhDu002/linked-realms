@@ -55,6 +55,13 @@
         margin: 6px 6px 0 0;
         padding: 4px 10px;
       }
+      #hud-notice {
+        color: #fc6;
+      }
+      #hud {
+        max-width: 320px;
+        overflow-wrap: anywhere;
+      }
       #status {
         color: #9cf;
       }
@@ -72,6 +79,7 @@
     <div id="hud" hidden>
       <div id="hud-land"></div>
       <div id="hud-mine"></div>
+      <div id="hud-notice"></div>
       <div id="mine-controls" hidden>
         <button id="mine-toggle"></button>
         <label
@@ -85,12 +93,22 @@
             style="width: 4em"
         /></label>
       </div>
+      <div id="land-tools">
+        <button id="register" hidden>
+          Register this Map server with the Hub
+        </button>
+        <div id="register-result"></div>
+        <input id="report-reason" placeholder="Reason" style="width: 12em" />
+        <button id="report">Report this Land</button>
+        <div id="report-result"></div>
+      </div>
     </div>
     <div id="panel">
       <h1>linked-realms</h1>
       <p id="wallet">No wallet connected.</p>
       <div id="actions"></div>
       <div id="character"></div>
+      <div id="directory"></div>
       <p id="status"></p>
       <p id="error"></p>
     </div>

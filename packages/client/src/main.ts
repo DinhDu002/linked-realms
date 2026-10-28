@@ -1,18 +1,28 @@
 import { Client, type Room } from "@colyseus/sdk";
 import {
-  joinMessage,
   LAND_ROOM,
   Messages,
+  relayLandUrl,
+  type Direction,
+  type Directory,
   type JoinOptions,
   type LandMessage,
   type MapMessage,
   type MiningMessage,
 } from "@linked-realms/shared";
 import type { Game } from "phaser";
+import { getAddress } from "viem";
 import { createCharacter, hasCharacter, loadCharacter } from "./character.ts";
 import { DEV_CHAIN_ID, parseConfig } from "./config.ts";
 import { formatGold, statRows } from "./format.ts";
+import { createGateEdge, decideGate } from "./gate.ts";
 import { goldBalance, roundsWon } from "./gold.ts";
+import {
+  createHub,
+  ownerMayRegister,
+  REPORT_REASON_MAX,
+  signDelegation,
+} from "./hub.ts";
 import { miningLabel } from "./mining.ts";
 import { LandScene, startGame } from "./scene.ts";
 import {
@@ -25,6 +35,12 @@ import {
 
 const config = parseConfig(import.meta.env);
 const reader = createReader(config);
+const hub = createHub({
+  baseUrl: config.hubUrl,
+  chainId: config.chainId,
+  domain: window.location.host,
+  uri: window.location.origin,
+});
 
 function el(id: string): HTMLElement {
   const found = document.getElementById(id);
@@ -34,6 +50,7 @@ function el(id: string): HTMLElement {
 const walletEl = el("wallet");
 const actionsEl = el("actions");
 const characterEl = el("character");
+const directoryEl = el("directory");
 const statusEl = el("status");
 const errorEl = el("error");
 const hudEl = el("hud");
@@ -42,6 +59,12 @@ const hudMineEl = el("hud-mine");
 const mineControlsEl = el("mine-controls");
 const mineToggleEl = el("mine-toggle") as HTMLButtonElement;
 const mineThreadsEl = el("mine-threads") as HTMLInputElement;
+const noticeEl = el("hud-notice");
+const registerEl = el("register") as HTMLButtonElement;
+const registerResultEl = el("register-result");
+const reportReasonEl = el("report-reason") as HTMLInputElement;
+const reportEl = el("report") as HTMLButtonElement;
+const reportResultEl = el("report-result");
 const ROUNDS_SHOWN = 10;
 const GOLD_REFRESH_MIN_MS = 5000;
 
@@ -53,6 +76,10 @@ let lastWon: number | undefined;
 let goldTimer: ReturnType<typeof setTimeout> | undefined;
 let goldAt = 0;
 let miningOn = false;
+let directory: Directory | undefined;
+let ownLandId: number | undefined;
+let currentLandId: number | undefined;
+let travelling = false;
 
 /** Everything shown to the user goes through textContent, never innerHTML. */
 function button(
@@ -98,7 +125,22 @@ async function connect(open: (c: typeof config) => Promise<Wallet>) {
   statusEl.textContent = "Connecting…";
   wallet = await open(config);
   walletEl.textContent = `${wallet.label}: ${wallet.address}`;
+  await signIn().catch(showError);
   await refresh();
+}
+
+async function signIn() {
+  const w = wallet;
+  if (!w) return;
+  statusEl.textContent = "Sign in to the Hub in your wallet…";
+  await hub.signIn(w.address, (message) =>
+    w.client.signMessage({ account: w.account, message }),
+  );
+}
+
+async function loadDirectory() {
+  directory = await hub.directory();
+  return directory;
 }
 
 async function refresh() {
@@ -106,6 +148,7 @@ async function refresh() {
   const player = wallet.address;
   actionsEl.replaceChildren();
   characterEl.replaceChildren();
+  directoryEl.replaceChildren();
   statusEl.textContent = "Reading chain…";
   if (!(await hasCharacter(reader, config.chainId, player))) {
     actionsEl.append(
@@ -127,13 +170,41 @@ async function refresh() {
     row.insertCell().textContent = key;
     row.insertCell().textContent = value;
   }
+  ownLandId = Number(view.landId);
   const land = document.createElement("p");
   land.textContent = `Your Land: ${view.landId} at (${view.x}, ${view.y})`;
   goldEl = document.createElement("div");
   characterEl.append(table, land, goldEl);
   // a failing log query must not hide the Enter button
   await refreshGold().catch(showError);
-  actionsEl.append(button(`Enter Land ${config.landId}`, enterLand));
+  if (!hub.signedIn()) actionsEl.append(button("Sign in to the Hub", signIn));
+  await renderDirectory().catch(showError);
+}
+
+/** The Directory panel: every Land, online or not; "Enter" only for online ones. */
+async function renderDirectory() {
+  const { lands } = await loadDirectory();
+  const heading = document.createElement("p");
+  heading.textContent = `Lands: ${lands.length}`;
+  const table = document.createElement("table");
+  const head = table.insertRow();
+  for (const title of ["Land", "At", "Status", ""])
+    head.insertCell().textContent = title;
+  for (const l of lands) {
+    const row = table.insertRow();
+    row.insertCell().textContent = String(l.landId);
+    row.insertCell().textContent = `(${l.x}, ${l.y})`;
+    row.insertCell().textContent = l.online ? "online" : "offline";
+    if (l.online)
+      row
+        .insertCell()
+        .append(button("Enter", () => joinLand(l.landId, undefined)));
+  }
+  directoryEl.replaceChildren(
+    heading,
+    table,
+    button("Refresh Directory", renderDirectory),
+  );
 }
 
 /** The GOLD balance and the last Rounds won, read from the chain. */
@@ -187,23 +258,61 @@ mineToggleEl.addEventListener("click", () => {
   room?.send(Messages.mining, message);
 });
 
-async function enterLand() {
-  if (!wallet || room) return;
-  statusEl.textContent = "Sign the join message in your wallet…";
-  const message = joinMessage(
-    config.landId,
-    Math.floor(Date.now() / 1000) + 120,
-  );
-  const signature = await wallet.client.signMessage({
-    account: wallet.account,
-    message,
-  });
-  statusEl.textContent = "Joining…";
-  const options: JoinOptions = { message, signature };
-  const joined = await new Client(config.mapServerUrl).joinOrCreate(
-    LAND_ROOM,
-    options,
-  );
+/** Leaves the Land on screen, if any. Its onLeave then sees `room` changed and does nothing. */
+function teardown() {
+  game?.destroy(true);
+  game = undefined;
+  hudEl.hidden = true;
+  noticeEl.textContent = "";
+  lastWon = undefined;
+  currentLandId = undefined;
+  room = undefined;
+}
+
+/** `from` is set when walking through a Gate. */
+async function joinLand(landId: number, from: number | undefined) {
+  if (!wallet || travelling) return;
+  travelling = true;
+  try {
+    if (!hub.signedIn()) await signIn();
+    statusEl.textContent = "Getting a ticket…";
+    const grant = await hub.ticket(landId, from);
+    const dir = directory ?? (await loadDirectory());
+    // the old room is left only once the ticket is in hand
+    const old = room;
+    teardown();
+    await old?.leave();
+    statusEl.textContent = "Joining…";
+    const options: JoinOptions = grant;
+    const joined = await new Client(
+      relayLandUrl(dir.relayUrl, landId),
+    ).joinOrCreate(LAND_ROOM, options);
+    startScene(joined, landId);
+  } catch (error) {
+    showError(error);
+    if (!room) void refresh();
+  } finally {
+    statusEl.textContent = "";
+    travelling = false;
+  }
+}
+
+/** Reached the Gate: ask the Hub who is next door right now, then walk through or say why not. */
+async function onGateStep(gate: Direction, land: LandMessage) {
+  if (travelling) return;
+  noticeEl.textContent = "";
+  try {
+    const { lands } = await loadDirectory();
+    const decision = decideGate(gate, land, lands);
+    if (decision.kind === "notice") noticeEl.textContent = decision.text;
+    else await joinLand(decision.landId, decision.from);
+  } catch (error) {
+    showError(error);
+  }
+}
+
+function startScene(joined: Room, landId: number) {
+  const gateEdge = createGateEdge();
   const scene = new LandScene(
     joined,
     (text) => {
@@ -226,22 +335,79 @@ async function enterLand() {
     (reason) => {
       errorEl.textContent = `Map rejected: ${reason}`;
     },
+    (gate, land) => {
+      const stepped = gateEdge(gate);
+      if (stepped && joined === room) void onGateStep(stepped, land);
+    },
   );
   joined.onMessage(Messages.map, (m: MapMessage) => scene.setMap(m.tiled));
-  joined.onMessage(Messages.land, (m: LandMessage) => scene.setLand(m));
+  joined.onMessage(Messages.land, (m: LandMessage) => {
+    scene.setLand(m);
+    showOwnerTools(m, landId);
+  });
   joined.onLeave(() => {
+    if (room !== joined) return; // replaced by a newer room or torn down on purpose
     errorEl.textContent = "Left the Land.";
-    game?.destroy(true);
-    game = undefined;
-    hudEl.hidden = true;
-    lastWon = undefined;
-    room = undefined;
+    teardown();
     void refresh();
   });
   room = joined;
+  currentLandId = landId;
+  registerEl.hidden = true;
+  registerResultEl.textContent = "";
+  reportResultEl.textContent = "";
   hudEl.hidden = false;
   game = startGame(el("game"), scene);
   actionsEl.replaceChildren();
 }
+
+/** Land owner on their own Land: offer to register the Map server's Mining key with the Hub. */
+function showOwnerTools(message: LandMessage, landId: number) {
+  registerEl.hidden =
+    !wallet ||
+    !ownerMayRegister({
+      message,
+      joinedLandId: landId,
+      ownLandId,
+      wallet: wallet.address,
+    });
+  registerEl.onclick = () =>
+    void run(registerEl, async () => {
+      if (!wallet || currentLandId !== landId) return;
+      // issuedAt: the newest Delegation wins
+      const issuedAt = Math.floor(Date.now() / 1000);
+      const miningKey = getAddress(message.miningKey);
+      statusEl.textContent = "Sign the Delegation in your wallet…";
+      const signature = await signDelegation(
+        wallet,
+        config.chainId,
+        landId,
+        miningKey,
+        issuedAt,
+      );
+      try {
+        await hub.delegate(landId, { miningKey, issuedAt, signature });
+        registerResultEl.textContent = `Registered ${miningKey} for Land ${landId}.`;
+      } catch (error) {
+        registerResultEl.textContent = `Registration failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    });
+}
+
+reportReasonEl.maxLength = REPORT_REASON_MAX;
+reportEl.addEventListener(
+  "click",
+  () =>
+    void run(reportEl, async () => {
+      if (currentLandId === undefined) return;
+      try {
+        await hub.report(currentLandId, reportReasonEl.value);
+        reportReasonEl.value = "";
+        reportResultEl.textContent = `Reported Land ${currentLandId}.`;
+      } catch (error) {
+        reportResultEl.textContent = `Report failed: ${error instanceof Error ? error.message : String(error)}`;
+      }
+    }),
+);
 
 showConnectButtons();
