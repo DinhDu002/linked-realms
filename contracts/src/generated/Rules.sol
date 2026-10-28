@@ -8,9 +8,9 @@ library Rules {
     uint256 internal constant INTENDED_ROUND_SECONDS = 60;
     uint256 internal constant RETARGET_INTERVAL_ROUNDS = 60;
     uint256 internal constant MAX_RETARGET_FACTOR = 4;
-    uint256 internal constant INITIAL_ROUND_REWARD = 50000000000000000000;
+    uint256 internal constant INITIAL_ROUND_REWARD = 5e19;
     uint256 internal constant HALVING_INTERVAL_ROUNDS = 210000;
-    uint256 internal constant MAX_SUPPLY = 21000000000000000000000000;
+    uint256 internal constant MAX_SUPPLY = 21e24;
 
     function characterStatKeys() internal pure returns (bytes32[] memory keys) {
         keys = new bytes32[](4);

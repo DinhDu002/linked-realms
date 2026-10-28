@@ -45,6 +45,8 @@ contract PlayerRegistry is OwnableUpgradeable, UUPSUpgradeable {
             _stats[msg.sender][key] = value;
             emit StatChanged(msg.sender, key, value);
         }
+        // `land` is our own contract and mints with _mint (no receiver callback), so the event order is safe.
+        // slither-disable-next-line reentrancy-events
         landId = land.mint(msg.sender);
         emit CharacterCreated(msg.sender, landId);
     }

@@ -78,6 +78,8 @@ contract Land is ERC721Upgradeable, OwnableUpgradeable, UUPSUpgradeable {
     /// @notice Coordinates of spiral index `n`; must match `spiralCoordinates` in packages/shared (P9).
     function spiralCoordinates(uint256 n) public pure returns (int32 x, int32 y) {
         if (n == 0) return (0, 0);
+        // Ring k holds indices (2k-1)^2 .. (2k+1)^2 - 1; the integer division is intended.
+        // slither-disable-next-line divide-before-multiply
         uint256 k = (Math.sqrt(n) + 1) / 2;
         int256 ki = SafeCast.toInt256(k);
         int256 t = SafeCast.toInt256(n - (2 * k - 1) ** 2);
