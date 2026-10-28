@@ -1,5 +1,5 @@
 // Messages between a Map server and the client (Colyseus). State is synchronised by
-// Colyseus schema reflection: LandState { landId, players: Map<sessionId, PlayerState> }.
+// Colyseus schema reflection: LandState { landId, players: Map<sessionId, PlayerState>, mining: MiningState }.
 import type { Address, Hex } from "viem";
 import type { MoveInput } from "./movement.ts";
 
@@ -19,6 +19,19 @@ export interface PlayerStateShape {
   isOwner: boolean;
 }
 
+/** Fields of the room state's `mining` entry. Everyone on the Land sees it, so mining is never covert (P5). */
+export interface MiningStateShape {
+  on: boolean;
+  threads: number;
+  /** Hashes per second over the last few seconds. */
+  hashRate: number;
+  /** The GoldMine Round the miner is working on (as a number; Rounds stay far below 2^53). */
+  round: number;
+  /** Solutions this Map server has submitted and won since it started. */
+  submitted: number;
+  won: number;
+}
+
 export const Messages = {
   /** Server → client, once after joining: the Land's Tiled JSON text. The client must run parseLandMap on it (P6). */
   map: "map",
@@ -26,7 +39,30 @@ export const Messages = {
   land: "land",
   /** Client → server, whenever the pressed keys change. */
   input: "input",
+  /** Client → server, Land owner only: turn mining on or off (P5). */
+  mining: "mining",
 } as const;
+
+export interface MiningMessage {
+  on: boolean;
+  /** Worker threads; the Map server clamps it to its configured maximum. */
+  threads: number;
+}
+
+/** Accepts only a well-formed mining switch from an untrusted client. */
+export function parseMiningMessage(value: unknown): MiningMessage | undefined {
+  if (typeof value !== "object" || value === null) return undefined;
+  const v = value as Record<string, unknown>;
+  if (
+    typeof v.on !== "boolean" ||
+    !Number.isInteger(v.threads) ||
+    (v.threads as number) < 1 ||
+    (v.threads as number) > 256
+  ) {
+    return undefined;
+  }
+  return { on: v.on, threads: v.threads as number };
+}
 
 export interface MapMessage {
   tiled: string;

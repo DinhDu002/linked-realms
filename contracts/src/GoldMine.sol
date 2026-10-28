@@ -57,7 +57,7 @@ contract GoldMine is OwnableUpgradeable, UUPSUpgradeable {
         land = land_;
         _params = params_;
         target = params_.initialTarget;
-        challenge = keccak256(abi.encode(block.chainid, address(this), blockhash(block.number - 1)));
+        challenge = keccak256(abi.encode(block.chainid, address(this), _previousBlockHash()));
         roundStartedAt = block.timestamp;
         retargetWindowStartedAt = block.timestamp;
         emit RoundStarted(0, challenge, params_.initialTarget);
@@ -89,9 +89,7 @@ contract GoldMine is OwnableUpgradeable, UUPSUpgradeable {
         round = next;
         lastWinBlock = block.number;
         challenge = keccak256(
-            abi.encode(
-                previousChallenge, rewardWallet, nonce, blockhash(block.number - 1), block.prevrandao, block.timestamp
-            )
+            abi.encode(previousChallenge, rewardWallet, nonce, _previousBlockHash(), block.prevrandao, block.timestamp)
         );
         if (next % _params.retargetIntervalRounds == 0) {
             uint256 actual = block.timestamp - retargetWindowStartedAt;
@@ -125,4 +123,8 @@ contract GoldMine is OwnableUpgradeable, UUPSUpgradeable {
     }
 
     function _authorizeUpgrade(address) internal override onlyOwner {}
+
+    function _previousBlockHash() private view returns (bytes32) {
+        return block.number == 0 ? bytes32(0) : blockhash(block.number - 1);
+    }
 }

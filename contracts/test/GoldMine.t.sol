@@ -186,6 +186,13 @@ contract GoldMineTest is MineHelpers {
         assertEq(w.mine.round(), 4);
     }
 
+    function test_DeploysAtBlockZero() public {
+        vm.roll(0);
+        World memory w = _deployWorld(address(this));
+        assertEq(w.mine.round(), 0);
+        assertTrue(w.mine.challenge() != bytes32(0));
+    }
+
     function test_RevertWhen_NonOwnerUpgrades() public {
         address next = address(new GoldMine());
         vm.prank(alice);

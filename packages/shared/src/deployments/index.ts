@@ -7,6 +7,8 @@ export interface ContractDeployment {
 }
 
 export interface Deployment {
+  GoldMine: ContractDeployment;
+  GoldToken: ContractDeployment;
   Land: ContractDeployment;
   PlayerRegistry: ContractDeployment;
 }
