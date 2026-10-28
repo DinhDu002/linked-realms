@@ -1,7 +1,7 @@
 // Copies contract ABIs from contracts/out (run `forge build` first) into src/abi as typed constants.
 import { mkdirSync, readFileSync, writeFileSync } from "node:fs";
 
-const CONTRACTS = ["Land", "PlayerRegistry"];
+const CONTRACTS = ["GoldMine", "GoldToken", "Land", "PlayerRegistry"];
 const repoRoot = new URL("../../../", import.meta.url);
 const abiDir = new URL("packages/shared/src/abi/", repoRoot);
 mkdirSync(abiDir, { recursive: true });

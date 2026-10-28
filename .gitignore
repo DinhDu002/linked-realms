@@ -10,3 +10,6 @@ contracts/cache/
 contracts/broadcast/
 .DS_Store
 .playwright-mcp/
+
+# Map server Mining keys
+.data/

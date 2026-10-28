@@ -1,6 +1,7 @@
 import { createConfig } from "ponder";
 import {
   deploymentFor,
+  goldMineAbi,
   landAbi,
   playerRegistryAbi,
 } from "@linked-realms/shared";
@@ -33,6 +34,12 @@ export default createConfig({
       abi: landAbi,
       address: deployment.Land.address,
       startBlock: deployment.Land.startBlock,
+    },
+    GoldMine: {
+      chain: "main",
+      abi: goldMineAbi,
+      address: deployment.GoldMine.address,
+      startBlock: deployment.GoldMine.startBlock,
     },
   },
 });

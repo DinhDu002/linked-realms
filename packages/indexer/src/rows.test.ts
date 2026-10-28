@@ -1,6 +1,12 @@
 import { statKeyToBytes32 } from "@linked-realms/shared";
 import { describe, expect, it } from "vitest";
-import { characterRow, landRow, statRow } from "./rows.ts";
+import {
+  characterRow,
+  landRow,
+  retargetRow,
+  roundWonRow,
+  statRow,
+} from "./rows.ts";
 
 const player = "0x00000000000000000000000000000000000000aa";
 const block = { number: 7n, timestamp: 1700n };
@@ -34,5 +40,36 @@ describe("rows", () => {
       mintedAtTimestamp: 1700n,
     });
     expect("designHash" in row).toBe(false);
+  });
+
+  it("builds a round_won row", () => {
+    const hash = `0x${"ab".repeat(32)}` as const;
+    const args = {
+      round: 4n,
+      rewardWallet: player,
+      submitter: "0x00000000000000000000000000000000000000bb",
+      nonce: 99n,
+      reward: 50n,
+    } as const;
+    expect(roundWonRow(args, block, hash)).toEqual({
+      ...args,
+      blockNumber: 7n,
+      timestamp: 1700n,
+      transactionHash: hash,
+    });
+  });
+
+  it("builds a retarget row", () => {
+    const args = {
+      round: 10n,
+      oldTarget: 100n,
+      newTarget: 50n,
+      actualSeconds: 300n,
+    };
+    expect(retargetRow(args, block)).toEqual({
+      ...args,
+      blockNumber: 7n,
+      timestamp: 1700n,
+    });
   });
 });
