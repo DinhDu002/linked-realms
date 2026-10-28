@@ -2,12 +2,18 @@ import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { boot, type ColyseusTestServer } from "@colyseus/testing";
 import {
-  JOIN_TTL_SECONDS,
+  HUB_EIP712_DOMAIN,
   LAND_ROOM,
   Messages,
-  joinMessage,
+  TRAVEL_TICKET_TTL_SECONDS,
+  TravelTicketTypes,
+  gateNumber,
+  gateOf,
+  gateSpawn,
   parseLandMap,
   spawnPosition,
+  ticketToWire,
+  type Direction,
   type JoinOptions,
 } from "@linked-realms/shared";
 import type { MinerStatus } from "@linked-realms/miner";
@@ -22,7 +28,6 @@ import {
   onTestFinished,
   vi,
 } from "vitest";
-import type { Chain } from "./chain.ts";
 import { clock, type LandRoom } from "./LandRoom.ts";
 import { createServer } from "./server.ts";
 
@@ -36,13 +41,12 @@ const spawn = spawnPosition(map);
 
 const owner = privateKeyToAccount(generatePrivateKey());
 const visitor = privateKeyToAccount(generatePrivateKey());
-const stranger = privateKeyToAccount(generatePrivateKey()); // no Character
 
-const chain: Chain = {
-  hasCharacter: async (address) =>
-    [owner.address, visitor.address].includes(address),
-  landInfo: async () => ({ owner: owner.address, x: 1, y: 0 }),
-};
+const hub = privateKeyToAccount(generatePrivateKey());
+const forger = privateKeyToAccount(generatePrivateKey());
+const CHAIN_ID = 31337;
+const land = { owner: owner.address, x: 1, y: 0 };
+const miningKey = privateKeyToAccount(generatePrivateKey()).address;
 
 const fakeStatus: MinerStatus = {
   on: false,
@@ -60,15 +64,31 @@ const mining = {
 
 type Account = typeof owner;
 
+/** A Travel ticket for `account`, signed by `signer` (the Hub unless a test forges it). */
 async function joinOptions(
   account: Account,
-  { landId = LAND_ID, expiresIn = 60 } = {},
+  {
+    landId = LAND_ID,
+    expiresIn = TRAVEL_TICKET_TTL_SECONDS,
+    gate = 0,
+    signer = hub,
+    nonce = generatePrivateKey(), // any 32 random bytes
+  } = {},
 ): Promise<JoinOptions> {
-  const message = joinMessage(
-    landId,
-    Math.floor(Date.now() / 1000) + expiresIn,
-  );
-  return { message, signature: await account.signMessage({ message }) };
+  const ticket = {
+    player: account.address,
+    landId: BigInt(landId),
+    gate,
+    expiresAt: BigInt(Math.floor(Date.now() / 1000) + expiresIn),
+    nonce,
+  };
+  const signature = await signer.signTypedData({
+    domain: HUB_EIP712_DOMAIN(CHAIN_ID),
+    types: TravelTicketTypes,
+    primaryType: "TravelTicket",
+    message: ticket,
+  });
+  return { ticket: ticketToWire(ticket), signature };
 }
 
 const idle = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
@@ -82,8 +102,10 @@ describe("LandRoom", () => {
       landId: LAND_ID,
       map,
       mapText,
-      land: await chain.landInfo(LAND_ID),
-      chain,
+      land,
+      miningKey,
+      hubSigner: hub.address,
+      chainId: CHAIN_ID,
       mining,
     });
     colyseus = await boot(server);
@@ -138,6 +160,7 @@ describe("LandRoom", () => {
       owner: owner.address,
       x: 1,
       y: 0,
+      miningKey,
     });
   });
 
@@ -198,6 +221,21 @@ describe("LandRoom", () => {
     expect(room.state.players.get(client.sessionId)!.x).toBe(spawn.x);
   });
 
+  it.each(["north", "east", "south", "west"] as Direction[])(
+    "spawns a Player arriving at the %s Gate one tile inside it",
+    async (direction) => {
+      const room = await createRoom();
+      const client = await colyseus.connectTo(
+        room,
+        await joinOptions(visitor, { gate: gateNumber(direction) }),
+      );
+      const player = room.state.players.get(client.sessionId)!;
+      const expected = gateSpawn(map, direction);
+      expect({ x: player.x, y: player.y }).toEqual(expected);
+      expect(gateOf(map, expected)).toBeUndefined(); // not on the Gate: no instant bounce back
+    },
+  );
+
   it("ignores a client-supplied clock option", async () => {
     const client = await colyseus.sdk.create(LAND_ROOM, {
       ...(await joinOptions(owner)),
@@ -235,37 +273,69 @@ describe("LandRoom", () => {
       return error!;
     }
 
-    it("a bad signature", async () => {
-      const good = await joinOptions(owner);
-      // Valid signature of the same text by a wallet without a Character.
-      const other = await stranger.signMessage({ message: good.message });
-      const error = await rejected({ ...good, signature: other });
-      expect(error.message).toMatch(/no Character/);
-      await rejected({ message: good.message, signature: "0x1234" });
+    it("a ticket not signed by the Hub", async () => {
+      const error = await rejected(
+        await joinOptions(owner, { signer: forger }),
+      );
+      expect(error.message).toMatch(/not signed by the Hub/);
     });
 
-    it("a message for another Land", async () => {
+    it("a ticket whose fields were changed after signing", async () => {
+      const good = await joinOptions(owner);
+      const error = await rejected({
+        ...good,
+        ticket: { ...good.ticket, gate: 2 },
+      });
+      expect(error.message).toMatch(/not signed by the Hub/);
+    });
+
+    it("a ticket for another Land", async () => {
       const error = await rejected(await joinOptions(owner, { landId: 8 }));
       expect(error.message).toMatch(/another Land/);
     });
 
-    it("an expired message", async () => {
+    it("an expired ticket", async () => {
       const error = await rejected(
         await joinOptions(owner, { expiresIn: -10 }),
       );
       expect(error.message).toMatch(/expired/);
     });
 
-    it("a message that expires too far ahead", async () => {
+    it("a ticket that expires too far ahead", async () => {
       await rejected(
-        await joinOptions(owner, { expiresIn: JOIN_TTL_SECONDS + 100 }),
+        await joinOptions(owner, {
+          expiresIn: TRAVEL_TICKET_TTL_SECONDS + 100,
+        }),
       );
     });
 
-    it("a wallet without a Character, without leaking a stack", async () => {
-      const error = await rejected(await joinOptions(stranger));
-      expect(error.message).toMatch(/no Character/);
-      expect(error.stack ?? "").not.toMatch(/LandRoom\.ts/);
+    it("a reused ticket", async () => {
+      const options = await joinOptions(owner);
+      const room = await createRoom();
+      await colyseus.connectTo(room, options);
+      const error = await colyseus.connectTo(room, options).then(
+        () => undefined,
+        (e: unknown) => e as Error,
+      );
+      expect(error?.message).toMatch(/already used/);
+      expect(room.state.players.size).toBe(1);
+    });
+
+    it("a malformed ticket or signature", async () => {
+      const good = await joinOptions(owner);
+      for (const bad of [
+        { ...good, ticket: { ...good.ticket, player: "0x1234" } },
+        { ...good, ticket: { ...good.ticket, gate: 9 } },
+        { ...good, ticket: { ...good.ticket, expiresAt: "-1" } },
+        { ...good, ticket: { ...good.ticket, nonce: "0x01" } },
+        { ...good, ticket: "ticket" },
+        { ...good, signature: "0x1234" },
+        { ticket: good.ticket },
+      ]) {
+        const error = await rejected(bad);
+        expect(error.message).toMatch(/malformed/);
+        expect(error.stack ?? "").not.toMatch(/LandRoom\.ts/);
+      }
     });
 
     it("missing join options", async () => {

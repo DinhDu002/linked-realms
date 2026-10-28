@@ -9,6 +9,8 @@
     "typecheck": "tsc",
     "e2e": "node scripts/e2e.ts",
     "e2e:mining": "node scripts/mining-e2e.ts",
+    "e2e:world": "node scripts/world-e2e.ts",
+    "seed:world": "node scripts/seed-world.ts",
     "test": "vitest run"
   },
   "dependencies": {
@@ -16,6 +18,7 @@
     "@colyseus/schema": "5.0.42",
     "@colyseus/ws-transport": "0.18.4",
     "@linked-realms/miner": "workspace:*",
+    "@linked-realms/relay": "workspace:*",
     "@linked-realms/shared": "workspace:*",
     "viem": "2.57.12"
   },

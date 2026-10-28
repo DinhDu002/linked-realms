@@ -2,8 +2,11 @@
 import Phaser from "phaser";
 import {
   CHARACTER_HALF_SIZE_PX,
+  DIRECTIONS,
+  gateOf,
   Messages,
   parseLandMap,
+  type Direction,
   type LandMap,
   type LandMessage,
   type MiningStateShape,
@@ -28,12 +31,17 @@ export class LandScene extends Phaser.Scene {
   private keys?: Record<string, Phaser.Input.Keyboard.Key>;
   private pendingTiled?: string;
   private land?: LandMessage;
+  private map?: LandMap;
   private mapDrawn = false;
   private ready = false;
 
   private readonly room: Room;
   private readonly hud: (text: string) => void;
   private readonly onMapError: (message: string) => void;
+  private readonly onGate: (
+    gate: Direction | undefined,
+    land: LandMessage,
+  ) => void;
   private following = false;
   private hudText = "";
   private miningKey = "";
@@ -47,12 +55,14 @@ export class LandScene extends Phaser.Scene {
     hud: (text: string) => void,
     onMining: (mining: MiningStateShape | undefined, isOwner: boolean) => void,
     onMapError: (message: string) => void,
+    onGate: (gate: Direction | undefined, land: LandMessage) => void,
   ) {
     super("land");
     this.room = room;
     this.hud = hud;
     this.onMining = onMining;
     this.onMapError = onMapError;
+    this.onGate = onGate;
   }
 
   /** Called with the Messages.map payload. */
@@ -85,6 +95,7 @@ export class LandScene extends Phaser.Scene {
       return;
     }
     this.mapDrawn = true;
+    this.map = map;
     const size = map.width * map.tileSize;
     this.textures.addCanvas("ground", paintGround(map));
     this.add.image(0, 0, "ground").setOrigin(0, 0).setDepth(0);
@@ -100,6 +111,17 @@ export class LandScene extends Phaser.Scene {
     g.fillStyle(0xf2c230).fillCircle(mx + mw / 2, my + mh / 2, mw / 4);
     g.lineStyle(3, 0x1e150c).strokeRect(mx, my, mw, mh);
 
+    // Gates: stepping on one travels to the neighbouring Land.
+    for (const d of DIRECTIONS) {
+      const gate = map.gates[d];
+      g.fillStyle(0x6fa8dc).fillRect(
+        gate.tileX * map.tileSize,
+        gate.tileY * map.tileSize,
+        gate.width * map.tileSize,
+        gate.height * map.tileSize,
+      );
+    }
+
     this.cameras.main.setBounds(0, 0, size, size);
   }
 
@@ -113,6 +135,9 @@ export class LandScene extends Phaser.Scene {
         this.following = true;
         this.cameras.main.startFollow(view.body, true, 0.15, 0.15);
       }
+      // the server's position decides, not the interpolated sprite
+      if (id === this.room.sessionId && this.map && this.land)
+        this.onGate(gateOf(this.map, view.target), this.land);
     }
     const coords = this.land ? ` (${this.land.x}, ${this.land.y})` : "";
     const hud = `Land ${this.land?.landId ?? "…"}${coords} · ${this.players.size} player(s)`;

@@ -4,10 +4,12 @@ import {
   Messages,
   SERVER_TICK_HZ,
   parseInputMessage,
+  gateDirection,
+  gateSpawn,
   parseMiningMessage,
   spawnPosition,
   step,
-  verifyJoinRequest,
+  verifyTravelTicket,
   JoinRejected,
   type LandMap,
   type LandMessage,
@@ -16,7 +18,7 @@ import {
 } from "@linked-realms/shared";
 import type { Miner } from "@linked-realms/miner";
 import type { Address } from "viem";
-import type { Chain, LandInfo } from "./chain.ts";
+import type { LandInfo } from "./chain.ts";
 
 // Field names match PlayerStateShape in shared/src/protocol.ts.
 export const PlayerState = schema(
@@ -61,7 +63,11 @@ export interface LandRoomOptions {
   mapText: string;
   /** Read once at start-up: a Land is soulbound, so its owner never changes. */
   land: LandInfo;
-  chain: Chain;
+  /** The Mining key address, sent to clients so the Land owner can register it with the Hub. */
+  miningKey: Address;
+  /** Travel tickets must be signed by this Hub address (verified offline). */
+  hubSigner: Address;
+  chainId: number;
   /** Lives as long as the process, not the room: mining goes on while the Land is empty. */
   mining: Pick<Miner, "start" | "stop" | "status">;
 }
@@ -73,6 +79,15 @@ export const clock = { now: (): number => Date.now() };
 // Rooms are created before onAuth runs, so any client could otherwise open extra rooms:
 // unauthenticated resource use, and the same address in two rooms. One Land = one room.
 const liveRooms = new Set<unknown>();
+
+// Ticket nonces already used, with their expiry: an expired ticket is rejected anyway, so a
+// nonce can be forgotten then. Per process, not per room: the room may be recreated.
+const usedNonces = new Map<string, bigint>();
+
+interface Arrival {
+  address: Address;
+  gate: number;
+}
 
 const MINING_REFRESH_MS = 500;
 
@@ -119,37 +134,45 @@ export class LandRoom extends Room<{ state: LandState }> {
 
   override async onAuth(
     _client: Client,
-    joinOptions: { message?: unknown; signature?: unknown },
-  ): Promise<Address> {
-    const { landId, chain } = this.#options;
+    joinOptions: { ticket?: unknown; signature?: unknown },
+  ): Promise<Arrival> {
+    const { landId, hubSigner, chainId } = this.#options;
     try {
-      const signer = await verifyJoinRequest({
-        message: joinOptions?.message,
+      const nowSeconds = Math.floor(clock.now() / 1000);
+      const ticket = await verifyTravelTicket({
+        ticket: joinOptions?.ticket,
         signature: joinOptions?.signature,
+        hubSigner,
+        chainId,
         landId,
-        nowSeconds: Math.floor(clock.now() / 1000),
+        nowSeconds,
       });
-      if (!(await chain.hasCharacter(signer)))
-        throw new JoinRejected("wallet has no Character");
-      if (this.#playerOf(signer))
+      // No await from here on, so two joins with one ticket cannot both pass.
+      for (const [nonce, expiresAt] of usedNonces)
+        if (expiresAt <= BigInt(nowSeconds)) usedNonces.delete(nonce);
+      const nonce = ticket.nonce.toLowerCase();
+      if (usedNonces.has(nonce)) throw new JoinRejected("ticket already used");
+      if (this.#playerOf(ticket.player))
         throw new JoinRejected("already in this Land");
-      return signer;
+      usedNonces.set(nonce, ticket.expiresAt);
+      return { address: ticket.player, gate: ticket.gate };
     } catch (error) {
-      // Never leak stack traces or RPC details to an untrusted client.
+      // Never leak stack traces or internals to an untrusted client.
       if (error instanceof JoinRejected)
         throw new ServerError(4401, error.message);
       console.error("join check failed:", error);
-      throw new ServerError(4500, "could not verify the join request");
+      throw new ServerError(4500, "could not verify the ticket");
     }
   }
 
   override onJoin(client: Client): void {
-    const signer = client.auth as Address;
+    const { address: signer, gate } = client.auth as Arrival;
     // Re-checked here because two onAuth calls for one address can interleave.
     if (this.#playerOf(signer))
       throw new ServerError(4401, "already in this Land");
-    const { map, mapText, land, landId } = this.#options;
-    const spawn = spawnPosition(map);
+    const { map, mapText, land, landId, miningKey } = this.#options;
+    const direction = gateDirection(gate);
+    const spawn = direction ? gateSpawn(map, direction) : spawnPosition(map);
     const player = new PlayerState();
     player.address = signer;
     player.x = spawn.x;
@@ -167,6 +190,7 @@ export class LandRoom extends Room<{ state: LandState }> {
       owner: land.owner,
       x: land.x,
       y: land.y,
+      miningKey,
     } satisfies LandMessage);
   }
 

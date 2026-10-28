@@ -1,13 +1,18 @@
 // Manual end-to-end check against a local anvil: two fresh wallets create Characters, a Map
-// server starts for the first one's Land, and two SDK clients join with signed messages.
+// server starts for the first one's Land, and two SDK clients join with Travel tickets signed by a
+// throwaway key standing in for the Hub.
 // Usage: node scripts/e2e.ts   (anvil must be running with the contracts deployed)
 import { spawn } from "node:child_process";
 import { Client } from "@colyseus/sdk";
 import {
+  GATE_NONE,
+  HUB_EIP712_DOMAIN,
+  TRAVEL_TICKET_TTL_SECONDS,
+  TravelTicketTypes,
+  ticketToWire,
   LAND_ROOM,
   Messages,
   deploymentFor,
-  joinMessage,
   landAbi,
   playerRegistryAbi,
   type PlayerStateShape,
@@ -17,9 +22,12 @@ import {
   createWalletClient,
   http,
   numberToHex,
-  type Hex,
 } from "viem";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import {
+  generatePrivateKey,
+  privateKeyToAccount,
+  type PrivateKeyAccount,
+} from "viem/accounts";
 import { foundry } from "viem/chains";
 
 const RPC_URL = process.env.RPC_URL ?? "http://127.0.0.1:8545";
@@ -33,6 +41,28 @@ interface PlayersView {
   players: Map<string, PlayerStateShape>;
 }
 const sleep = (ms: number) => new Promise((resolve) => setTimeout(resolve, ms));
+
+// No Hub here: a throwaway key plays the Hub. The Map servers trust its address, and this
+// script signs the Travel tickets (the same typed data hub-api signs).
+const hub = privateKeyToAccount(generatePrivateKey());
+async function ticketFor(account: PrivateKeyAccount, landId: number) {
+  const ticket = {
+    player: account.address,
+    landId: BigInt(landId),
+    gate: GATE_NONE,
+    expiresAt: BigInt(
+      Math.floor(Date.now() / 1000) + TRAVEL_TICKET_TTL_SECONDS,
+    ),
+    nonce: generatePrivateKey(), // 32 random bytes
+  };
+  const signature = await hub.signTypedData({
+    domain: HUB_EIP712_DOMAIN(foundry.id),
+    types: TravelTicketTypes,
+    primaryType: "TravelTicket",
+    message: ticket,
+  });
+  return { ticket: ticketToWire(ticket), signature };
+}
 
 async function newCharacter() {
   const account = privateKeyToAccount(generatePrivateKey());
@@ -70,6 +100,7 @@ const server = spawn("node", ["src/main.ts"], {
     ...process.env,
     LAND_ID: String(a.landId),
     PORT: String(PORT),
+    HUB_TICKET_SIGNER: hub.address,
     RPC_URL,
   },
   stdio: ["ignore", "pipe", "inherit"],
@@ -81,11 +112,8 @@ server.stdout.on("data", (chunk: Buffer) =>
 try {
   await sleep(1500);
   const client = new Client(`ws://127.0.0.1:${PORT}`);
-  const join = async (account: typeof a.account) => {
-    const message = joinMessage(a.landId, Math.floor(Date.now() / 1000) + 60);
-    const signature: Hex = await account.signMessage({ message });
-    return client.joinOrCreate(LAND_ROOM, { message, signature });
-  };
+  const join = async (account: typeof a.account) =>
+    client.joinOrCreate(LAND_ROOM, await ticketFor(account, a.landId));
   const roomA = await join(a.account);
   const roomB = await join(b.account);
   await sleep(500);

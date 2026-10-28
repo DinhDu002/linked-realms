@@ -1,0 +1,28 @@
+{
+  "name": "@linked-realms/relay",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": "./src/index.ts",
+    "./agent": "./src/agent.ts"
+  },
+  "scripts": {
+    "dev": "node --watch src/main.ts",
+    "start": "node src/main.ts",
+    "typecheck": "tsc",
+    "test": "vitest run",
+    "load-host": "node scripts/load-host.ts"
+  },
+  "dependencies": {
+    "@linked-realms/shared": "workspace:*",
+    "viem": "2.57.12",
+    "ws": "8.22.0"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "@types/ws": "8.18.2",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  }
+}
