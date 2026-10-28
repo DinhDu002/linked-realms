@@ -127,6 +127,28 @@ importers:
         specifier: 5.0.5
         version: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(vite@8.3.5(@types/node@26.6.5))
 
+  packages/miner:
+    dependencies:
+      '@linked-realms/shared':
+        specifier: workspace:*
+        version: link:../shared
+      hash-wasm:
+        specifier: 4.12.0
+        version: 4.12.0
+      viem:
+        specifier: 2.57.12
+        version: 2.57.12(typescript@6.0.3)
+    devDependencies:
+      '@types/node':
+        specifier: 26.6.5
+        version: 26.6.5
+      typescript:
+        specifier: 6.0.3
+        version: 6.0.3
+      vitest:
+        specifier: 5.0.5
+        version: 5.0.5(@opentelemetry/api@1.10.0)(@types/node@26.6.5)(vite@8.3.5(@types/node@26.6.5))
+
   packages/shared:
     dependencies:
       viem:
@@ -1283,6 +1305,9 @@ packages:
   has-symbols@1.1.0:
     resolution: {integrity: sha512-1cDNdwJ2Jaohmb3sg4OmKaMBwuC48sYni5HUw2DvsC8LjGTLK9h+eb1X6RyuOHe4hT0ULCW68iomhjUoKUqlPQ==}
     engines: {node: '>= 0.4'}
+
+  hash-wasm@4.12.0:
+    resolution: {integrity: sha512-+/2B2rYLb48I/evdOIhP+K/DD2ca2fgBjp6O+GBEnCDk2e4rpeXIK8GvIyRPjTezgmWn9gmKwkQjjx6BtqDHVQ==}
 
   hashery@1.5.1:
     resolution: {integrity: sha512-iZyKG96/JwPz1N55vj2Ie2vXbhu440zfUfJvSwEqEbeLluk7NnapfGqa7LH0mOsnDxTF85Mx8/dyR6HfqcbmbQ==}
@@ -3194,6 +3219,8 @@ snapshots:
   graphql@16.8.2: {}
 
   has-symbols@1.1.0: {}
+
+  hash-wasm@4.12.0: {}
 
   hashery@1.5.1:
     dependencies:
