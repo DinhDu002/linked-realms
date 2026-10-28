@@ -11,6 +11,13 @@ export const outputs = {
   emptyLand: new URL("maps/empty-land.json", repoRoot),
 } as const;
 
+/** Writes round numbers in scientific notation (50e18), which Solidity accepts and reviewers can read. */
+function solidityNumber(value: bigint): string {
+  const digits = value.toString();
+  const zeros = digits.length - digits.replace(/0+$/, "").length;
+  return zeros >= 6 ? `${digits.slice(0, -zeros)}e${zeros}` : digits;
+}
+
 export function renderRulesSol(): string {
   const uints: Array<[string, bigint | number]> = [
     ["LAND_SIZE_TILES", rules.LAND_SIZE_TILES],
@@ -30,7 +37,8 @@ export function renderRulesSol(): string {
     "",
     "library Rules {",
     ...uints.map(
-      ([name, value]) => `    uint256 internal constant ${name} = ${value};`,
+      ([name, value]) =>
+        `    uint256 internal constant ${name} = ${solidityNumber(BigInt(value))};`,
     ),
     "",
     "    function characterStatKeys() internal pure returns (bytes32[] memory keys) {",
