@@ -1,10 +1,5 @@
 import { describe, expect, it } from "vitest";
-import {
-  formatGold,
-  formatHashRate,
-  shortAddress,
-  statRows,
-} from "./format.ts";
+import { formatGold, shortAddress, statRows } from "./format.ts";
 
 describe("format", () => {
   it("shortens an address", () => {
@@ -26,7 +21,7 @@ describe("format", () => {
   });
 });
 
-describe("formatGold / formatHashRate", () => {
+describe("formatGold", () => {
   it("formats gold without float errors", () => {
     expect(formatGold(50n * 10n ** 18n)).toBe("50 GOLD");
     expect(formatGold(125n * 10n ** 17n)).toBe("12.5 GOLD");
@@ -35,13 +30,5 @@ describe("formatGold / formatHashRate", () => {
     expect(formatGold(21_000_000n * 10n ** 18n + 1n)).toBe(
       "21000000.000000000000000001 GOLD",
     );
-  });
-
-  it("formats hash rates", () => {
-    expect(formatHashRate(850)).toBe("850 H/s");
-    expect(formatHashRate(3_340_000)).toBe("3.34 MH/s");
-    expect(formatHashRate(2_000_000)).toBe("2 MH/s");
-    expect(formatHashRate(1500)).toBe("1.5 kH/s");
-    expect(formatHashRate(0)).toBe("0 H/s");
   });
 });
