@@ -69,7 +69,23 @@
   </head>
   <body>
     <div id="game"></div>
-    <div id="hud" hidden></div>
+    <div id="hud" hidden>
+      <div id="hud-land"></div>
+      <div id="hud-mine"></div>
+      <div id="mine-controls" hidden>
+        <button id="mine-toggle"></button>
+        <label
+          >threads
+          <input
+            id="mine-threads"
+            type="number"
+            min="1"
+            step="1"
+            value="1"
+            style="width: 4em"
+        /></label>
+      </div>
+    </div>
     <div id="panel">
       <h1>linked-realms</h1>
       <p id="wallet">No wallet connected.</p>

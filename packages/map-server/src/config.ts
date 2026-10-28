@@ -1,4 +1,5 @@
 import { fileURLToPath } from "node:url";
+import { defaultMaxThreads } from "@linked-realms/miner";
 
 export interface Config {
   landId: number;
@@ -6,10 +7,16 @@ export interface Config {
   rpcUrl: string;
   chainId: number;
   mapFile: string;
+  miningKeyFile: string;
+  miningMaxThreads: number;
 }
 
 const DEFAULT_MAP_FILE = fileURLToPath(
   new URL("../../../maps/empty-land.json", import.meta.url),
+);
+// .data/ is gitignored at the repo root
+const DEFAULT_MINING_KEY_FILE = fileURLToPath(
+  new URL("../.data/mining-key", import.meta.url),
 );
 
 function integer(
@@ -47,5 +54,13 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     rpcUrl,
     chainId: integer(env, "CHAIN_ID", 31337, 1, Number.MAX_SAFE_INTEGER),
     mapFile: env.MAP_FILE || DEFAULT_MAP_FILE,
+    miningKeyFile: env.MINING_KEY_FILE || DEFAULT_MINING_KEY_FILE,
+    miningMaxThreads: integer(
+      env,
+      "MINING_MAX_THREADS",
+      defaultMaxThreads(),
+      1,
+      256,
+    ),
   };
 }

@@ -11,8 +11,12 @@ export const INITIAL_ROUND_REWARD = 50n * 10n ** 18n;
 export const HALVING_INTERVAL_ROUNDS = 210_000n;
 export const MAX_SUPPLY = 21_000_000n * 10n ** 18n;
 
-/** Placeholder until the step 1B calibration (see docs/decisions). */
-export const INITIAL_TARGET = 2n ** 256n / 60_000_000n;
+/** Hashes per second of one `miner` thread on the reference machine (Apple M5), measured with `pnpm --filter @linked-realms/miner bench` (3.19-3.27 million). */
+export const REFERENCE_HASH_RATE = 3_200_000n;
+
+/** One Solution per INTENDED_ROUND_SECONDS for one reference thread (D9, docs/decisions/0003-mine.md). */
+export const INITIAL_TARGET =
+  2n ** 256n / (REFERENCE_HASH_RATE * INTENDED_ROUND_SECONDS);
 
 export const MAX_TARGET = 2n ** 256n - 1n;
 

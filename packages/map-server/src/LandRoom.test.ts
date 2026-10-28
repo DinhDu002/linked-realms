@@ -10,6 +10,7 @@ import {
   spawnPosition,
   type JoinOptions,
 } from "@linked-realms/shared";
+import type { MinerStatus } from "@linked-realms/miner";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
 import {
   afterAll,
@@ -19,6 +20,7 @@ import {
   expect,
   it,
   onTestFinished,
+  vi,
 } from "vitest";
 import type { Chain } from "./chain.ts";
 import { clock, type LandRoom } from "./LandRoom.ts";
@@ -40,6 +42,20 @@ const chain: Chain = {
   hasCharacter: async (address) =>
     [owner.address, visitor.address].includes(address),
   landInfo: async () => ({ owner: owner.address, x: 1, y: 0 }),
+};
+
+const fakeStatus: MinerStatus = {
+  on: false,
+  threads: 1,
+  hashRate: 0,
+  round: 0n,
+  submitted: 0,
+  won: 0,
+};
+const mining = {
+  start: vi.fn<(threads: number) => void>(),
+  stop: vi.fn(async () => {}),
+  status: vi.fn((): MinerStatus => fakeStatus),
 };
 
 type Account = typeof owner;
@@ -68,10 +84,16 @@ describe("LandRoom", () => {
       mapText,
       land: await chain.landInfo(LAND_ID),
       chain,
+      mining,
     });
     colyseus = await boot(server);
   });
-  afterEach(() => colyseus.cleanup());
+  afterEach(() => {
+    mining.start.mockClear();
+    mining.stop.mockClear();
+    mining.status.mockImplementation(() => fakeStatus);
+    return colyseus.cleanup();
+  });
   afterAll(() => colyseus.shutdown());
 
   async function createRoom() {
@@ -271,6 +293,96 @@ describe("LandRoom", () => {
       ]);
       expect(results.filter((r) => r.status === "fulfilled")).toHaveLength(1);
       expect(room.state.players.size).toBe(1);
+    });
+  });
+
+  describe("mining", () => {
+    it("ignores a switch from anyone but the Land owner", async () => {
+      const room = await createRoom();
+      const client = await colyseus.connectTo(room, await joinOptions(visitor));
+      client.send(Messages.mining, { on: true, threads: 2 });
+      client.send(Messages.mining, { on: false, threads: 2 });
+      await idle(200);
+      expect(mining.start).not.toHaveBeenCalled();
+      expect(mining.stop).not.toHaveBeenCalled();
+    });
+
+    it("starts and stops mining for the Land owner", async () => {
+      const room = await createRoom();
+      const client = await colyseus.connectTo(room, await joinOptions(owner));
+      client.send(Messages.mining, { on: true, threads: 2 });
+      await idle(200);
+      expect(mining.start).toHaveBeenCalledExactlyOnceWith(2);
+      client.send(Messages.mining, { on: false, threads: 2 });
+      await idle(200);
+      expect(mining.stop).toHaveBeenCalledOnce();
+    });
+
+    it("survives a failing stop", async () => {
+      mining.stop.mockRejectedValueOnce(new Error("boom"));
+      const error = vi.spyOn(console, "error").mockImplementation(() => {});
+      onTestFinished(() => error.mockRestore());
+      const room = await createRoom();
+      const client = await colyseus.connectTo(room, await joinOptions(owner));
+      client.send(Messages.mining, { on: false, threads: 1 });
+      await idle(200);
+      expect(error).toHaveBeenCalledOnce();
+    });
+
+    it("ignores malformed messages", async () => {
+      const room = await createRoom();
+      const client = await colyseus.connectTo(room, await joinOptions(owner));
+      for (const bad of [
+        null,
+        "on",
+        {},
+        { on: "yes", threads: 1 },
+        { on: true, threads: 0 },
+        { on: true, threads: 1.5 },
+        { on: true },
+      ])
+        client.send(Messages.mining, bad);
+      await idle(200);
+      expect(mining.start).not.toHaveBeenCalled();
+      expect(mining.stop).not.toHaveBeenCalled();
+    });
+
+    it("mirrors the miner status in the room state", async () => {
+      mining.status.mockImplementation(() => ({
+        on: true,
+        threads: 3,
+        hashRate: 1234.5,
+        round: 42n,
+        submitted: 5,
+        won: 4,
+      }));
+      const room = await createRoom();
+      const client = await colyseus.connectTo(room, await joinOptions(visitor));
+      await idle(800); // one refresh (500 ms) plus a patch
+      expect(client.state.mining.toJSON()).toEqual({
+        on: true,
+        threads: 3,
+        hashRate: 1234.5,
+        round: 42,
+        submitted: 5,
+        won: 4,
+      });
+    });
+
+    it("counts mining messages toward the rate limit", async () => {
+      const room = await createRoom();
+      const real = clock.now;
+      const frozen = Date.now();
+      clock.now = () => frozen;
+      onTestFinished(() => {
+        clock.now = real;
+      });
+      const client = await colyseus.connectTo(room, await joinOptions(owner));
+      const stop = { up: false, down: false, left: false, right: false };
+      for (let i = 0; i < 30; i++) client.send(Messages.input, stop);
+      client.send(Messages.mining, { on: true, threads: 1 });
+      await idle(300);
+      expect(mining.start).not.toHaveBeenCalled();
     });
   });
 });
