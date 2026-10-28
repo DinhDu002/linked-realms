@@ -5,3 +5,4 @@ export * from "./join.ts";
 export * from "./map/index.ts";
 export * from "./movement.ts";
 export * from "./rules/index.ts";
+export * from "./protocol.ts";
