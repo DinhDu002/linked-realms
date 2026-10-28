@@ -1,0 +1,83 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>linked-realms</title>
+    <style>
+      html,
+      body {
+        margin: 0;
+        height: 100%;
+        background: #111;
+        color: #eee;
+        font:
+          14px/1.4 system-ui,
+          sans-serif;
+      }
+      #game {
+        position: fixed;
+        inset: 0;
+      }
+      #panel,
+      #hud {
+        position: fixed;
+        z-index: 1;
+        background: rgba(0, 0, 0, 0.8);
+        border: 1px solid #555;
+        border-radius: 6px;
+        padding: 10px 12px;
+      }
+      #panel {
+        top: 12px;
+        left: 12px;
+        width: 300px;
+      }
+      #hud {
+        top: 12px;
+        right: 12px;
+      }
+      #panel h1 {
+        margin: 0 0 8px;
+        font-size: 16px;
+      }
+      #panel p {
+        margin: 4px 0;
+      }
+      #panel table {
+        border-collapse: collapse;
+        margin: 6px 0;
+      }
+      #panel td {
+        padding: 1px 12px 1px 0;
+      }
+      #panel button {
+        margin: 6px 6px 0 0;
+        padding: 4px 10px;
+      }
+      #status {
+        color: #9cf;
+      }
+      #error {
+        color: #f88;
+        overflow-wrap: anywhere;
+      }
+      [hidden] {
+        display: none !important;
+      }
+    </style>
+  </head>
+  <body>
+    <div id="game"></div>
+    <div id="hud" hidden></div>
+    <div id="panel">
+      <h1>linked-realms</h1>
+      <p id="wallet">No wallet connected.</p>
+      <div id="actions"></div>
+      <div id="character"></div>
+      <p id="status"></p>
+      <p id="error"></p>
+    </div>
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

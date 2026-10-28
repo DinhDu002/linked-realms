@@ -1,6 +1,6 @@
 # Phase 1A — Land and characters
 
-Status: in progress, 2026-10-29. The project owner waived the per-step approval gate for this run (PLAN.md section 11); this file is the plan of record.
+Status: done, 2026-10-29. The project owner waived the per-step approval gate for this run (PLAN.md section 11); this file is the plan of record.
 
 **Done when** (PLAN.md section 6): on anvil, a player creates a Character with 4 stats equal to 1, receives a Land and walks around; two clients on the same Land see each other.
 
