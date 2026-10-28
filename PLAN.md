@@ -175,11 +175,11 @@ Split into three steps, done in order.
 
 #### 1A – Land and characters
 
-- [ ] `PlayerRegistry` contract (UUPS): one character per wallet, non-transferable; stats stored as key–value pairs, all initialised to 1.
-- [ ] `Land` contract (ERC-721, UUPS): one land per wallet; spiral coordinates assigned automatically; stores the hash of the land design.
-- [ ] `indexer` (Ponder) reads events from both contracts into Postgres.
-- [ ] `map-server`: a Colyseus room for one empty 64×64 land; several people join, see each other and walk around.
-- [ ] `client` (Phaser): create a character by signing a transaction, view stats, walk around.
+- [x] `PlayerRegistry` contract (UUPS): one character per wallet, non-transferable; stats stored as key–value pairs, all initialised to 1.
+- [x] `Land` contract (ERC-721, UUPS): one land per wallet; spiral coordinates assigned automatically; stores the hash of the land design.
+- [x] `indexer` (Ponder) reads events from both contracts into Postgres.
+- [x] `map-server`: a Colyseus room for one empty 64×64 land; several people join, see each other and walk around.
+- [x] `client` (Phaser): create a character by signing a transaction, view stats, walk around.
 
 **Done when:** on anvil, a player creates a character with 4 stats equal to 1, receives a land and walks around; two clients on the same land see each other.
 
@@ -297,7 +297,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 
 - [x] Phase 0 – Foundations
 - [ ] Phase 1 – Stage 1
-  - [ ] 1A – Land and characters
+  - [x] 1A – Land and characters
   - [ ] 1B – Mine
   - [ ] 1C – Connectivity and travel between lands
 - [ ] Phase 2 – Open source and testing
@@ -307,5 +307,6 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
 
+- 2026-10-29: Phase 1A built on branch `phase-1a/land-and-characters` (plan: `docs/plans/phase-1a-land-and-characters.md`, decisions: ADR 0002). Contracts `PlayerRegistry` and soulbound `Land` (owner's decision) with spiral coordinates; rules reach the contracts through generated `Rules.sol` and cross-check vectors (P9). `indexer` (Ponder 0.18), `map-server` (Colyseus 0.18, authoritative 20 Hz movement, signed join message checked against the chain) and `client` (Phaser 4, dev wallet on anvil, Land map validated per P6). Verified: `forge test` (19), Slither 0 findings, `pnpm test` (101); on anvil two browser Players each created a Character with 4 stats equal to 1, received Lands 11 and 12, entered Land 1, saw each other and walked; the Mine blocks movement.
 - 2026-10-29: Phase 0 built on branch `phase-0/foundations`: monorepo (Node.js 26, pnpm 11.3, Turborepo, TypeScript 6.0, ESLint, Prettier, Vitest), `contracts/` (Foundry 1.8.6, OpenZeppelin 5.6.1), `compose.yaml` (PostgreSQL 18.6, anvil), `packages/shared` rules, CI, ADR 0001. Verified locally: `pnpm test`, `forge test`, Slither and `docker compose up -d` are green. CI (`typescript`, `contracts`) is green on GitHub; secret scanning, push protection and `main` branch protection (PR required, both checks required, no force-push) are on. Phase 0 is done once the project owner merges PR #1.
 - 2026-10-29: Section 10 confirmed (D1–D4, D6–D10; D5 before Phase 2); connection scaling rules added as section 3.5. PLAN.md and CLAUDE.md translated to English; `CONTEXT.md` glossary added.

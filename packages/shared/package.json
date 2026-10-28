@@ -8,10 +8,16 @@
   },
   "scripts": {
     "typecheck": "tsc",
-    "test": "vitest run"
+    "test": "vitest run",
+    "generate": "node scripts/generate.ts",
+    "export-abi": "node scripts/export-abi.ts"
   },
   "devDependencies": {
     "typescript": "6.0.3",
-    "vitest": "5.0.5"
+    "vitest": "5.0.5",
+    "@types/node": "26.6.5"
+  },
+  "dependencies": {
+    "viem": "2.57.12"
   }
 }
