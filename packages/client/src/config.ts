@@ -3,8 +3,7 @@
 export interface ClientConfig {
   rpcUrl: string;
   chainId: number;
-  mapServerUrl: string;
-  landId: number;
+  hubUrl: string;
 }
 
 type Env = Record<string, unknown>;
@@ -45,11 +44,10 @@ export function parseConfig(env: Env): ClientConfig {
       "https:",
     ]),
     chainId: positiveInt(env, "VITE_CHAIN_ID", 31337),
-    mapServerUrl: url(env, "VITE_MAP_SERVER_URL", "ws://127.0.0.1:2567", [
-      "ws:",
-      "wss:",
+    hubUrl: url(env, "VITE_HUB_URL", "http://127.0.0.1:8787", [
+      "http:",
+      "https:",
     ]),
-    landId: positiveInt(env, "VITE_LAND_ID", 1),
   };
 }
 

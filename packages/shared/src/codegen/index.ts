@@ -86,7 +86,7 @@ export function renderEmptyLand(): string {
     tilewidth: TILE_SIZE_PX,
     tileheight: TILE_SIZE_PX,
     nextlayerid: 3,
-    nextobjectid: 2,
+    nextobjectid: 6,
     tilesets: [{ firstgid: 1, name: "terrain" }],
     layers: [
       {
@@ -122,6 +122,23 @@ export function renderEmptyLand(): string {
             rotation: 0,
             visible: true,
           },
+          ...rules.DIRECTIONS.map((direction, i) => {
+            const g = rules.gateRect(direction);
+            return {
+              id: i + 2,
+              name: `gate-${direction}`,
+              type: "gate",
+              x: g.tileX * TILE_SIZE_PX,
+              y: g.tileY * TILE_SIZE_PX,
+              width: g.width * TILE_SIZE_PX,
+              height: g.height * TILE_SIZE_PX,
+              rotation: 0,
+              visible: true,
+              properties: [
+                { name: "direction", type: "string", value: direction },
+              ],
+            };
+          }),
         ],
       },
     ],

@@ -21,6 +21,15 @@ describe("parseLandMap", () => {
     expect(map.mine).toEqual({ tileX: 31, tileY: 31, width: 2, height: 2 });
   });
 
+  it("reads the four Gates", () => {
+    expect(Object.keys(parseLandMap(emptyLand).gates).sort()).toEqual([
+      "east",
+      "north",
+      "south",
+      "west",
+    ]);
+  });
+
   it("keeps only the fields the game uses", () => {
     const raw = clone();
     raw.tilesets[0].image = "https://evil.example/x.png";
@@ -46,6 +55,30 @@ describe("parseLandMap", () => {
         m
       ),
     ],
+    [
+      "a missing Gate",
+      (m) => ((m.layers[1].objects = m.layers[1].objects.slice(0, -1)), m),
+    ],
+    [
+      "a duplicate Gate",
+      (m) => (
+        m.layers[1].objects.push({ ...m.layers[1].objects[1], id: 9 }),
+        m
+      ),
+    ],
+    ["a Gate off its edge", (m) => ((m.layers[1].objects[1].y = 32), m)],
+    [
+      "a Gate outside the map",
+      (m) => ((m.layers[1].objects[4].x = 64 * 32), m),
+    ],
+    [
+      "a Gate direction that is not a direction",
+      (m) => ((m.layers[1].objects[1].properties[0].value = "up"), m),
+    ],
+    [
+      "a Gate without a direction",
+      (m) => (delete m.layers[1].objects[1].properties, m),
+    ],
     ["a Mine off centre", (m) => ((m.layers[1].objects[0].x = 0), m)],
     ["too many layers", (m) => ((m.layers = Array(9).fill(m.layers[0])), m)],
     ["a non-object", () => 42],
@@ -65,5 +98,10 @@ describe("isBlockedTile", () => {
     expect(isBlockedTile(map, 30, 31)).toBe(false);
     expect(isBlockedTile(map, -1, 0)).toBe(true);
     expect(isBlockedTile(map, 64, 0)).toBe(true);
+  });
+
+  it("leaves Gate tiles walkable", () => {
+    expect(isBlockedTile(map, 31, 0)).toBe(false);
+    expect(isBlockedTile(map, 63, 32)).toBe(false);
   });
 });
