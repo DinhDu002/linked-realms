@@ -8,5 +8,8 @@
   },
   "devDependencies": {
     "forge-std": "github:foundry-rs/forge-std#v1.17.0"
+  },
+  "scripts": {
+    "deploy:local": "forge script script/Deploy.s.sol --rpc-url ${RPC_URL:-http://127.0.0.1:8545} --broadcast --unlocked --sender 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266"
   }
 }

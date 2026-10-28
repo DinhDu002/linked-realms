@@ -3,7 +3,7 @@ import {
   HALVING_INTERVAL_ROUNDS,
   INITIAL_ROUND_REWARD,
   MAX_SUPPLY,
-} from "./index.ts";
+} from "./mining.ts";
 
 describe("issuance schedule", () => {
   it("never mints more than the supply cap across every halving", () => {
