@@ -3,6 +3,7 @@ pragma solidity ^0.8.24;
 
 import {Test} from "forge-std/Test.sol";
 import {ERC1967Proxy} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Proxy.sol";
+import {ERC1967Utils} from "@openzeppelin/contracts/proxy/ERC1967/ERC1967Utils.sol";
 import {OwnableUpgradeable} from "@openzeppelin/contracts-upgradeable/access/OwnableUpgradeable.sol";
 import {UUPSUpgradeable} from "@openzeppelin/contracts-upgradeable/proxy/utils/UUPSUpgradeable.sol";
 
@@ -44,6 +45,7 @@ contract ToolchainTest is Test {
         address next = address(new ExampleV1());
         vm.prank(owner);
         example.upgradeToAndCall(next, "");
+        assertEq(address(uint160(uint256(vm.load(address(example), ERC1967Utils.IMPLEMENTATION_SLOT)))), next);
         assertEq(example.owner(), owner);
     }
 }

@@ -32,4 +32,4 @@ Also decided:
 - Solidity dependencies come from npm through pnpm (`@openzeppelin/contracts` and `@openzeppelin/contracts-upgradeable` 5.6.1, `forge-std` from its v1.17.0 GitHub tag) instead of git submodules: one install command, versions pinned in the lockfile.
 - `evm_version = "cancun"`, which Base Sepolia supports; raise it only when a newer opcode is needed.
 - Foundry 1.8.6, pinned in CI and in the `anvil` image.
-- Slither compiles tests too (`foundry_compile_all`) and filters results from `test/` and `node_modules/`, so it already runs while `src/` is empty.
+- Slither compiles tests too (`foundry_compile_all`) and filters results from `contracts/test/` and `node_modules/`, so it already runs while `src/` is empty. The filter regex is anchored to whole path segments, so a source file such as `Contest.sol` is still analysed.

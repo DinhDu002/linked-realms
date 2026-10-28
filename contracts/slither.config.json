@@ -1,4 +1,4 @@
 {
   "foundry_compile_all": true,
-  "filter_paths": "node_modules|test"
+  "filter_paths": "(^|/)node_modules(/)|(^|/)contracts/test(/)"
 }
