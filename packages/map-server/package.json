@@ -8,12 +8,14 @@
     "start": "node src/main.ts",
     "typecheck": "tsc",
     "e2e": "node scripts/e2e.ts",
+    "e2e:mining": "node scripts/mining-e2e.ts",
     "test": "vitest run"
   },
   "dependencies": {
     "@colyseus/core": "0.18.23",
     "@colyseus/schema": "5.0.42",
     "@colyseus/ws-transport": "0.18.4",
+    "@linked-realms/miner": "workspace:*",
     "@linked-realms/shared": "workspace:*",
     "viem": "2.57.12"
   },

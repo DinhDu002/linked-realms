@@ -185,12 +185,12 @@ Split into three steps, done in order.
 
 #### 1B – Mine
 
-- [ ] `GoldToken` contract (ERC-20 `GOLD`): 21 million cap, only `GoldMine` can mint.
-- [ ] `GoldMine` contract: rounds, challenges, solution checks, checking that the reward wallet owns a land, rewards, halving, retargeting as in section 5.2.
-- [ ] `packages/miner`: worker thread that tries nonces, CPU limit, watches events to stop when the round changes, submits solutions with the mining key.
-- [ ] `map-server`: mining on/off switch for the land owner, showing hash rate and the current round.
-- [ ] `client`: shows the mine on the land, the `GOLD` balance, and the history of rounds won.
-- [ ] Simulation script: raise and lower the total hash rate, and check that round time converges to the intended value.
+- [x] `GoldToken` contract (ERC-20 `GOLD`): 21 million cap, only `GoldMine` can mint.
+- [x] `GoldMine` contract: rounds, challenges, solution checks, checking that the reward wallet owns a land, rewards, halving, retargeting as in section 5.2.
+- [x] `packages/miner`: worker thread that tries nonces, CPU limit, watches events to stop when the round changes, submits solutions with the mining key.
+- [x] `map-server`: mining on/off switch for the land owner, showing hash rate and the current round.
+- [x] `client`: shows the mine on the land, the `GOLD` balance, and the history of rounds won.
+- [x] Simulation script: raise and lower the total hash rate, and check that round time converges to the intended value.
 
 **Done when:** two map servers mine together on anvil; after a few retargets, round time converges to about 60 seconds; rewards go to the correct land owner wallet; every mine test in section 8 is green.
 
@@ -298,7 +298,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 - [x] Phase 0 – Foundations
 - [ ] Phase 1 – Stage 1
   - [x] 1A – Land and characters
-  - [ ] 1B – Mine
+  - [x] 1B – Mine
   - [ ] 1C – Connectivity and travel between lands
 - [ ] Phase 2 – Open source and testing
 - [ ] Phase 3 – Mainnet preparation
@@ -307,6 +307,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
 
+- 2026-10-29: Phase 1B built on branch `phase-1b/mine` (plan: `docs/plans/phase-1b-mine.md`, decisions: ADR 0003). Contracts `GoldToken` (capped at 21 million, only `GoldMine` mints) and `GoldMine` (Rounds, Solution check, Land check, halving, Retarget). `packages/miner` (worker threads, `hash-wasm` keccak256, 1 thread by default, polls the Round each second, submits with the Mining key); the Map server's owner-only mining switch with status shown to everyone on the Land; the client's `GOLD` balance, Rounds won and mining controls; the indexer's `round_won` and `retarget` tables. Initial Target calibrated at 3.2 million hashes per second per thread on the reference machine. The simulation test (`GoldMine.simulation.t.sol`) shows Round time returning to 60 s after hash rate rises 4× and falls to half. Verified: `forge test` (41), Slither 0 findings, `pnpm test` (176). On anvil with 5-second Rounds and a Retarget every 10 Rounds, `e2e:mining` ran two Map servers for two Lands mining together: 50 of 50 Rounds were won, each reward went to the owner of the Land whose Map server submitted it, both `GOLD` balances equal their summed rewards, and mean Round time per Retarget window went 1.0 → 2.3 → 6.6 → 6.4 s against the intended 5 s. The run found and fixed a miner defect: right after a win, a pre-flight `eth_call` sees `RoundAlreadyWonInThisBlock` and the miner dropped good Solutions (on an automining anvil the Mine stalled). In the browser, the Land owner switched mining on, won Rounds and saw `GOLD` and the Rounds won; a visitor saw the mining status without the controls.
 - 2026-10-29: Phase 1A built on branch `phase-1a/land-and-characters` (plan: `docs/plans/phase-1a-land-and-characters.md`, decisions: ADR 0002). Contracts `PlayerRegistry` and soulbound `Land` (owner's decision) with spiral coordinates; rules reach the contracts through generated `Rules.sol` and cross-check vectors (P9). `indexer` (Ponder 0.18), `map-server` (Colyseus 0.18, authoritative 20 Hz movement, signed join message checked against the chain) and `client` (Phaser 4, dev wallet on anvil, Land map validated per P6). Verified: `forge test` (19), Slither 0 findings, `pnpm test` (101); on anvil two browser Players each created a Character with 4 stats equal to 1, received Lands 11 and 12, entered Land 1, saw each other and walked; the Mine blocks movement.
 - 2026-10-29: Phase 0 built on branch `phase-0/foundations`: monorepo (Node.js 26, pnpm 11.3, Turborepo, TypeScript 6.0, ESLint, Prettier, Vitest), `contracts/` (Foundry 1.8.6, OpenZeppelin 5.6.1), `compose.yaml` (PostgreSQL 18.6, anvil), `packages/shared` rules, CI, ADR 0001. Verified locally: `pnpm test`, `forge test`, Slither and `docker compose up -d` are green. CI (`typescript`, `contracts`) is green on GitHub; secret scanning, push protection and `main` branch protection (PR required, both checks required, no force-push) are on. Phase 0 is done once the project owner merges PR #1.
 - 2026-10-29: Section 10 confirmed (D1–D4, D6–D10; D5 before Phase 2); connection scaling rules added as section 3.5. PLAN.md and CLAUDE.md translated to English; `CONTEXT.md` glossary added.

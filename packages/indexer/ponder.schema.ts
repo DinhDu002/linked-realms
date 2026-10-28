@@ -27,3 +27,23 @@ export const land = onchainTable("land", (t) => ({
   mintedAtBlock: t.bigint().notNull(),
   mintedAtTimestamp: t.bigint().notNull(),
 }));
+
+export const roundWon = onchainTable("round_won", (t) => ({
+  round: t.bigint().primaryKey(),
+  rewardWallet: t.hex().notNull(),
+  submitter: t.hex().notNull(),
+  nonce: t.bigint().notNull(),
+  reward: t.bigint().notNull(),
+  blockNumber: t.bigint().notNull(),
+  timestamp: t.bigint().notNull(),
+  transactionHash: t.hex().notNull(),
+}));
+
+export const retarget = onchainTable("retarget", (t) => ({
+  round: t.bigint().primaryKey(),
+  oldTarget: t.bigint().notNull(),
+  newTarget: t.bigint().notNull(),
+  actualSeconds: t.bigint().notNull(),
+  blockNumber: t.bigint().notNull(),
+  timestamp: t.bigint().notNull(),
+}));

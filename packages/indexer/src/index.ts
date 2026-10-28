@@ -1,6 +1,18 @@
 import { ponder } from "ponder:registry";
-import { character, characterStat, land } from "ponder:schema";
-import { characterRow, landRow, statRow } from "./rows.ts";
+import {
+  character,
+  characterStat,
+  land,
+  retarget,
+  roundWon,
+} from "ponder:schema";
+import {
+  characterRow,
+  landRow,
+  retargetRow,
+  roundWonRow,
+  statRow,
+} from "./rows.ts";
 
 ponder.on("PlayerRegistry:CharacterCreated", async ({ event, context }) => {
   await context.db
@@ -28,4 +40,16 @@ ponder.on("Land:DesignHashSet", async ({ event, context }) => {
   await context.db
     .update(land, { id: event.args.landId })
     .set({ designHash: event.args.designHash });
+});
+
+ponder.on("GoldMine:RoundWon", async ({ event, context }) => {
+  await context.db
+    .insert(roundWon)
+    .values(roundWonRow(event.args, event.block, event.transaction.hash));
+});
+
+ponder.on("GoldMine:Retargeted", async ({ event, context }) => {
+  await context.db
+    .insert(retarget)
+    .values(retargetRow(event.args, event.block));
 });

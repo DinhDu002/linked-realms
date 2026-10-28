@@ -36,3 +36,34 @@ export function landRow(
     mintedAtTimestamp: block.timestamp,
   };
 }
+
+export function roundWonRow(
+  args: {
+    round: bigint;
+    rewardWallet: Address;
+    submitter: Address;
+    nonce: bigint;
+    reward: bigint;
+  },
+  block: BlockRef,
+  transactionHash: Hex,
+) {
+  return {
+    ...args,
+    blockNumber: block.number,
+    timestamp: block.timestamp,
+    transactionHash,
+  };
+}
+
+export function retargetRow(
+  args: {
+    round: bigint;
+    oldTarget: bigint;
+    newTarget: bigint;
+    actualSeconds: bigint;
+  },
+  block: BlockRef,
+) {
+  return { ...args, blockNumber: block.number, timestamp: block.timestamp };
+}

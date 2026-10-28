@@ -34,6 +34,13 @@ pnpm --filter @linked-realms/indexer dev               # optional: GraphQL on ht
 
 In the game, choose "Use dev wallet" (anvil only), create a Character, then enter Land 1. Open a second browser profile to see two Players on the same Land.
 
+Mining is off until the Land owner switches it on in the game (1 CPU thread by default). To watch Retargets within minutes instead of hours, deploy to a fresh anvil with shorter Rounds, then run the two-Map-server mining check:
+
+```bash
+DEV_ROUND_SECONDS=5 DEV_RETARGET_INTERVAL_ROUNDS=10 pnpm --filter @linked-realms/contracts deploy:local
+pnpm --filter @linked-realms/map-server e2e:mining
+```
+
 After changing a rule in `packages/shared/src/rules`, run `pnpm --filter @linked-realms/shared generate`; after changing a contract, run `forge build` in `contracts/` and `pnpm --filter @linked-realms/shared export-abi`.
 
 ## Documents

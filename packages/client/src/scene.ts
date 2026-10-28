@@ -6,12 +6,14 @@ import {
   parseLandMap,
   type LandMap,
   type LandMessage,
+  type MiningStateShape,
   type PlayerStateShape,
 } from "@linked-realms/shared";
 import type { Room } from "@colyseus/sdk";
 import { shortAddress } from "./format.ts";
 import { createInputDiffer } from "./input.ts";
 import { approach } from "./interpolate.ts";
+import { readMining } from "./mining.ts";
 import { readPlayer } from "./players.ts";
 import { paintGround } from "./tiles.ts";
 
@@ -34,15 +36,22 @@ export class LandScene extends Phaser.Scene {
   private readonly onMapError: (message: string) => void;
   private following = false;
   private hudText = "";
+  private miningKey = "";
+  private readonly onMining: (
+    mining: MiningStateShape | undefined,
+    isOwner: boolean,
+  ) => void;
 
   constructor(
     room: Room,
     hud: (text: string) => void,
+    onMining: (mining: MiningStateShape | undefined, isOwner: boolean) => void,
     onMapError: (message: string) => void,
   ) {
     super("land");
     this.room = room;
     this.hud = hud;
+    this.onMining = onMining;
     this.onMapError = onMapError;
   }
 
@@ -126,12 +135,14 @@ export class LandScene extends Phaser.Scene {
   /** Mirrors room.state.players into game objects (polled; the state is tiny). */
   private syncPlayers(): void {
     const state = this.room.state as
-      { players?: Map<string, unknown> } | undefined;
+      { players?: Map<string, unknown>; mining?: unknown } | undefined;
     const seen = new Set<string>();
+    let isOwner = false;
     state?.players?.forEach((raw, id) => {
       const p = readPlayer(raw);
       if (!p) return;
       seen.add(id);
+      if (id === this.room.sessionId) isOwner = p.isOwner;
       const view = this.players.get(id);
       if (view) {
         view.target = { x: p.x, y: p.y };
@@ -144,6 +155,18 @@ export class LandScene extends Phaser.Scene {
       view.body.destroy();
       this.players.delete(id);
     }
+    this.syncMining(state, isOwner);
+  }
+
+  /** Polled like players; the UI is told only when something changed. */
+  private syncMining(state: object | undefined, isOwner: boolean): void {
+    const mining = readMining(
+      (state as { mining?: unknown } | undefined)?.mining,
+    );
+    const key = JSON.stringify([mining, isOwner]);
+    if (key === this.miningKey) return;
+    this.miningKey = key;
+    this.onMining(mining, isOwner);
   }
 
   private createPlayer(id: string, p: PlayerStateShape): PlayerView {
