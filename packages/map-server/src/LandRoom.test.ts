@@ -46,7 +46,6 @@ const hub = privateKeyToAccount(generatePrivateKey());
 const forger = privateKeyToAccount(generatePrivateKey());
 const CHAIN_ID = 31337;
 const land = { owner: owner.address, x: 1, y: 0 };
-const miningKey = privateKeyToAccount(generatePrivateKey()).address;
 
 const fakeStatus: MinerStatus = {
   on: false,
@@ -103,7 +102,6 @@ describe("LandRoom", () => {
       map,
       mapText,
       land,
-      miningKey,
       hubSigner: hub.address,
       chainId: CHAIN_ID,
       mining,
@@ -160,7 +158,6 @@ describe("LandRoom", () => {
       owner: owner.address,
       x: 1,
       y: 0,
-      miningKey,
     });
   });
 

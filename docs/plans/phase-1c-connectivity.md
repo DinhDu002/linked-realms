@@ -70,7 +70,6 @@ Config: `PORT` (8080), `HUB_URL` (to read Delegations), `MAX_CLIENTS_PER_LAND` (
 
 - `RELAY_URL` (optional; without it the server is reachable only directly, for development), `HUB_TICKET_SIGNER` (the address whose tickets it accepts), `HOST` (default `127.0.0.1`: the relay agent connects locally).
 - Join: `verifyTravelTicket` replaces the EIP-191 message; ticket nonces are remembered until they expire (single use); the spawn point is `gateSpawn` for the ticket's Gate, or the map's spawn for `GATE_NONE`.
-- The `land` message adds `miningKey` so the Land owner's client can offer to register it.
 - Starts the relay agent when `RELAY_URL` is set.
 
 ### `packages/client`
@@ -78,7 +77,7 @@ Config: `PORT` (8080), `HUB_URL` (to read Delegations), `MAX_CLIENTS_PER_LAND` (
 - Config: `VITE_HUB_URL` replaces `VITE_MAP_SERVER_URL` and `VITE_LAND_ID`.
 - Sign in with SIWE after connecting the wallet. A Directory panel lists Lands with online status; "Enter" asks for a ticket and joins through the relay.
 - Gates: when the Character stands on a Gate, the client looks up the neighbouring Land in the Directory; if it is online it gets a ticket (`from` = current Land), leaves, and joins the neighbour; otherwise it shows "No Land to the east" or "Land 7 is offline" once until the Character steps off the Gate.
-- Land owner on their own Land: "Register this Map server with the Hub" signs the Delegation for the `miningKey` from the `land` message and posts it.
+- Land owner: under "Your Land", "Register Map server" takes the Mining key address the Map server prints at start-up, signs the Delegation and posts it. It does not need the Land to be entered: the relay refuses a Map server until it is registered, so the first registration cannot happen from inside the Land (found in the browser check; the first build had the button inside the Land).
 - "Report this Land" with a reason.
 
 ### Containers and end-to-end (`compose.yaml`, `Dockerfile`)

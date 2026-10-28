@@ -60,7 +60,6 @@ async function main(): Promise<void> {
     map,
     mapText,
     land,
-    miningKey: key.address,
     hubSigner: config.hubTicketSigner,
     chainId: config.chainId,
     mining,

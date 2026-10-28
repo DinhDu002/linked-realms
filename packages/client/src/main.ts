@@ -11,18 +11,13 @@ import {
   type MiningMessage,
 } from "@linked-realms/shared";
 import type { Game } from "phaser";
-import { getAddress } from "viem";
+import { getAddress, isAddress } from "viem";
 import { createCharacter, hasCharacter, loadCharacter } from "./character.ts";
 import { DEV_CHAIN_ID, parseConfig } from "./config.ts";
 import { formatGold, statRows } from "./format.ts";
 import { createGateEdge, decideGate } from "./gate.ts";
 import { goldBalance, roundsWon } from "./gold.ts";
-import {
-  createHub,
-  ownerMayRegister,
-  REPORT_REASON_MAX,
-  signDelegation,
-} from "./hub.ts";
+import { createHub, REPORT_REASON_MAX, signDelegation } from "./hub.ts";
 import { miningLabel } from "./mining.ts";
 import { LandScene, startGame } from "./scene.ts";
 import {
@@ -60,8 +55,6 @@ const mineControlsEl = el("mine-controls");
 const mineToggleEl = el("mine-toggle") as HTMLButtonElement;
 const mineThreadsEl = el("mine-threads") as HTMLInputElement;
 const noticeEl = el("hud-notice");
-const registerEl = el("register") as HTMLButtonElement;
-const registerResultEl = el("register-result");
 const reportReasonEl = el("report-reason") as HTMLInputElement;
 const reportEl = el("report") as HTMLButtonElement;
 const reportResultEl = el("report-result");
@@ -174,7 +167,7 @@ async function refresh() {
   const land = document.createElement("p");
   land.textContent = `Your Land: ${view.landId} at (${view.x}, ${view.y})`;
   goldEl = document.createElement("div");
-  characterEl.append(table, land, goldEl);
+  characterEl.append(table, land, registerForm(ownLandId), goldEl);
   // a failing log query must not hide the Enter button
   await refreshGold().catch(showError);
   if (!hub.signedIn()) actionsEl.append(button("Sign in to the Hub", signIn));
@@ -343,7 +336,6 @@ function startScene(joined: Room, landId: number) {
   joined.onMessage(Messages.map, (m: MapMessage) => scene.setMap(m.tiled));
   joined.onMessage(Messages.land, (m: LandMessage) => {
     scene.setLand(m);
-    showOwnerTools(m, landId);
   });
   joined.onLeave(() => {
     if (room !== joined) return; // replaced by a newer room or torn down on purpose
@@ -353,30 +345,36 @@ function startScene(joined: Room, landId: number) {
   });
   room = joined;
   currentLandId = landId;
-  registerEl.hidden = true;
-  registerResultEl.textContent = "";
   reportResultEl.textContent = "";
   hudEl.hidden = false;
   game = startGame(el("game"), scene);
   actionsEl.replaceChildren();
 }
 
-/** Land owner on their own Land: offer to register the Map server's Mining key with the Hub. */
-function showOwnerTools(message: LandMessage, landId: number) {
-  registerEl.hidden =
-    !wallet ||
-    !ownerMayRegister({
-      message,
-      joinedLandId: landId,
-      ownLandId,
-      wallet: wallet.address,
-    });
-  registerEl.onclick = () =>
-    void run(registerEl, async () => {
-      if (!wallet || currentLandId !== landId) return;
+/**
+ * The Land owner registers their Map server with the Hub by signing a Delegation for the Mining
+ * key address it prints at start-up. Done from here, not from inside the Land: the relay refuses
+ * a Map server until it is registered, so the Land cannot be entered before that.
+ */
+function registerForm(landId: number): HTMLElement {
+  const form = document.createElement("div");
+  const input = document.createElement("input");
+  input.placeholder = "Mining key address from your Map server";
+  input.style.width = "22em";
+  const result = document.createElement("div");
+  form.append(
+    input,
+    button("Register Map server", async () => {
+      if (!wallet) return;
+      result.textContent = "";
+      const text = input.value.trim();
+      if (!isAddress(text, { strict: false }))
+        throw new Error(
+          "Enter the 0x… Mining key address your Map server printed.",
+        );
+      const miningKey = getAddress(text);
       // issuedAt: the newest Delegation wins
       const issuedAt = Math.floor(Date.now() / 1000);
-      const miningKey = getAddress(message.miningKey);
       statusEl.textContent = "Sign the Delegation in your wallet…";
       const signature = await signDelegation(
         wallet,
@@ -385,13 +383,12 @@ function showOwnerTools(message: LandMessage, landId: number) {
         miningKey,
         issuedAt,
       );
-      try {
-        await hub.delegate(landId, { miningKey, issuedAt, signature });
-        registerResultEl.textContent = `Registered ${miningKey} for Land ${landId}.`;
-      } catch (error) {
-        registerResultEl.textContent = `Registration failed: ${error instanceof Error ? error.message : String(error)}`;
-      }
-    });
+      await hub.delegate(landId, { miningKey, issuedAt, signature });
+      result.textContent = `Registered ${miningKey} for Land ${landId}. Your Map server comes online within 30 seconds.`;
+    }),
+    result,
+  );
+  return form;
 }
 
 reportReasonEl.maxLength = REPORT_REASON_MAX;

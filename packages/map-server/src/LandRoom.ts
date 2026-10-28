@@ -63,8 +63,6 @@ export interface LandRoomOptions {
   mapText: string;
   /** Read once at start-up: a Land is soulbound, so its owner never changes. */
   land: LandInfo;
-  /** The Mining key address, sent to clients so the Land owner can register it with the Hub. */
-  miningKey: Address;
   /** Travel tickets must be signed by this Hub address (verified offline). */
   hubSigner: Address;
   chainId: number;
@@ -170,7 +168,7 @@ export class LandRoom extends Room<{ state: LandState }> {
     // Re-checked here because two onAuth calls for one address can interleave.
     if (this.#playerOf(signer))
       throw new ServerError(4401, "already in this Land");
-    const { map, mapText, land, landId, miningKey } = this.#options;
+    const { map, mapText, land, landId } = this.#options;
     const direction = gateDirection(gate);
     const spawn = direction ? gateSpawn(map, direction) : spawnPosition(map);
     const player = new PlayerState();
@@ -190,7 +188,6 @@ export class LandRoom extends Room<{ state: LandState }> {
       owner: land.owner,
       x: land.x,
       y: land.y,
-      miningKey,
     } satisfies LandMessage);
   }
 
