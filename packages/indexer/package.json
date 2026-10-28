@@ -1,0 +1,24 @@
+{
+  "name": "@linked-realms/indexer",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "scripts": {
+    "dev": "ponder dev",
+    "start": "ponder start",
+    "codegen": "ponder codegen",
+    "typecheck": "tsc",
+    "test": "vitest run"
+  },
+  "dependencies": {
+    "@linked-realms/shared": "workspace:*",
+    "hono": "4.13.14",
+    "ponder": "0.18.2",
+    "viem": "2.57.12"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  }
+}
