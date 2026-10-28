@@ -157,14 +157,14 @@ The values below are defaults. They live in `packages/shared/src/rules`, and the
 
 **Goal:** the repo, tooling and dev environment run with a single command.
 
-- [ ] Initialise the pnpm + Turborepo monorepo, TypeScript strict, ESLint, Prettier, Vitest.
-- [ ] Initialise `contracts/` with Foundry; install OpenZeppelin Contracts (regular and upgradeable).
-- [ ] Create `compose.yaml` for development with PostgreSQL (`-alpine`) and `anvil`, versions pinned.
-- [ ] Create `packages/shared` with the `rules` skeleton and a sample test.
+- [x] Initialise the pnpm + Turborepo monorepo, TypeScript strict, ESLint, Prettier, Vitest.
+- [x] Initialise `contracts/` with Foundry; install OpenZeppelin Contracts (regular and upgradeable).
+- [x] Create `compose.yaml` for development with PostgreSQL (`-alpine`) and `anvil`, versions pinned.
+- [x] Create `packages/shared` with the `rules` skeleton and a sample test.
 - [ ] CI (GitHub Actions): lint, test, `forge test`, Slither.
-- [ ] Record the choices from section 10 in `docs/decisions/0001-initial-decisions.md`.
-- [ ] `README.md`, `.env.example`, `LICENSE` (per D6).
-- [ ] `CONTRIBUTING.md` stating that every PR is reviewed and merged by the project owner (moved from Phase 2: the repo is public from day one).
+- [x] Record the choices from section 10 in `docs/decisions/0001-initial-decisions.md`.
+- [x] `README.md`, `.env.example`, `LICENSE` (per D6).
+- [x] `CONTRIBUTING.md` stating that every PR is reviewed and merged by the project owner (moved from Phase 2: the repo is public from day one).
 - [ ] GitHub settings: secret scanning and push protection on; `main` protected (PR required, no force-push).
 
 **Done when:** `pnpm install && pnpm test` and `forge test` are green; `docker compose up -d` runs Postgres and anvil; CI is green.
@@ -307,4 +307,5 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
 
+- 2026-10-29: Phase 0 built on branch `phase-0/foundations`: monorepo (Node.js 26, pnpm 11.3, Turborepo, TypeScript 6.0, ESLint, Prettier, Vitest), `contracts/` (Foundry 1.8.6, OpenZeppelin 5.6.1), `compose.yaml` (PostgreSQL 18.6, anvil), `packages/shared` rules, CI, ADR 0001. Verified locally: `pnpm test`, `forge test`, Slither and `docker compose up -d` are green. Waiting on: CI green on GitHub, GitHub settings.
 - 2026-10-29: Section 10 confirmed (D1–D4, D6–D10; D5 before Phase 2); connection scaling rules added as section 3.5. PLAN.md and CLAUDE.md translated to English; `CONTEXT.md` glossary added.
