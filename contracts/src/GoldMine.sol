@@ -72,6 +72,9 @@ contract GoldMine is OwnableUpgradeable, UUPSUpgradeable {
         return (round, challenge, target, roundStartedAt);
     }
 
+    // Slither: Rounds are timed with block.timestamp by design (D9, as in Bitcoin). A sequencer can shift a
+    // timestamp by seconds, against one-hour Retarget windows. The strict equalities are exact on purpose.
+    // slither-disable-start timestamp,incorrect-equality
     /// @param round_ The Round the Solution was found for; a Solution for an old Round reverts with StaleRound.
     function submit(uint256 round_, uint256 nonce, address rewardWallet) external {
         uint256 current = round;
@@ -127,4 +130,5 @@ contract GoldMine is OwnableUpgradeable, UUPSUpgradeable {
     function _previousBlockHash() private view returns (bytes32) {
         return block.number == 0 ? bytes32(0) : blockhash(block.number - 1);
     }
+    // slither-disable-end timestamp,incorrect-equality
 }

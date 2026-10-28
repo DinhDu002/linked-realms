@@ -11,7 +11,7 @@ library Rules {
     uint256 internal constant INITIAL_ROUND_REWARD = 5e19;
     uint256 internal constant HALVING_INTERVAL_ROUNDS = 210000;
     uint256 internal constant MAX_SUPPLY = 21e24;
-    uint256 internal constant INITIAL_TARGET = 1929868153955269923726183083478131797554499744427342733990959733465218;
+    uint256 internal constant INITIAL_TARGET = 603083798111021851164432213586916186735781170133544604372174916707880;
 
     function characterStatKeys() internal pure returns (bytes32[] memory keys) {
         keys = new bytes32[](4);

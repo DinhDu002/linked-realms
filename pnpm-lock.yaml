@@ -101,6 +101,9 @@ importers:
       '@colyseus/ws-transport':
         specifier: 0.18.4
         version: 0.18.4(@colyseus/core@0.18.23)(express@5.3.0)
+      '@linked-realms/miner':
+        specifier: workspace:*
+        version: link:../miner
       '@linked-realms/shared':
         specifier: workspace:*
         version: link:../shared
