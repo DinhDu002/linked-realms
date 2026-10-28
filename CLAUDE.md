@@ -35,11 +35,12 @@ Summary; details in `PLAN.md` section 2.
 
 ## Common commands
 
-Update after Phase 0.
+Node.js 26 (`.nvmrc`), pnpm 11.3, Foundry 1.8.6.
 
 ```bash
 pnpm install
-pnpm test
-cd contracts && forge test
+pnpm format:check && pnpm lint && pnpm typecheck && pnpm test
+cd contracts && forge fmt --check && forge test
+cd contracts && uvx --from slither-analyzer==0.11.6 slither .
 docker compose up -d
 ```
