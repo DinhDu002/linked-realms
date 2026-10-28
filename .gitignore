@@ -9,3 +9,4 @@ contracts/out/
 contracts/cache/
 contracts/broadcast/
 .DS_Store
+.playwright-mcp/
