@@ -1,6 +1,6 @@
 # 0002 — Land and characters
 
-Status: accepted, 2026-10-29
+Status: accepted, 2026-10-29. Superseded by ADR 0007 on 2026-10-29: Characters and Lands are no longer on a chain.
 
 ## Context
 

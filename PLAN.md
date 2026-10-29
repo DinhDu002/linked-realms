@@ -6,48 +6,52 @@
 ## 0. How to use this document
 
 1. Put `PLAN.md` and `CLAUDE.md` at the root of an empty repo.
-2. Read and settle section 10 (Decisions to confirm), especially D8–D10 about the mine. If you choose something other than the default, edit this file directly.
+2. Read and settle section 10 (Decisions to confirm). If you choose something other than the default, edit this file directly.
 3. Open Claude Code in the repo folder and ask: "Read PLAN.md, present a detailed plan for Phase 0, and wait for my approval before doing anything."
 4. Work on one phase at a time. Move to the next phase only when the current one meets every "Done when" criterion.
 
 ## 1. Product vision
 
-- Each player hosts their own server, and each server is one land. Lands join into one shared world through a network operated by the company (called the **Hub**).
-- Each player controls **one main character**.
-- **Stage 1** contains only: one land, one character (every stat equals 1) and one gold mine. Once servers are connected to each other, a character can walk into another player's land.
-- The **gold mine** works by Proof of Work like Bitcoin: the player's machine computes hashes, and whoever finds a valid solution first is rewarded with gold.
+- Each player hosts their own server, and each server is one Land. Lands join into one shared world through a service the company operates, the **Hub**. The Hub only connects Lands and lets Characters and NPCs travel between them.
+- Each Player plays **one main Character**, whose key stays in the Player's **Shell**. A Character can create NPCs, driven by AI models, to work for it.
+- Each Land makes its own rules and its own interface, and its owner is responsible for it.
+- **Gold** is the game's money. It is mined by Proof of Work on the game's own chain, like Bitcoin. Every Land runs a Node, and the Mines that Land owners switch on compete to seal each Block.
+- **Stage 1** has Lands that anyone can host for free, Characters that walk between them, and Gold that is mined on the chain and sent between Characters.
 - Open source. **The project owner decides** which changes are merged into the main version.
 - Ideas beyond stage 1 are in section 7.
 
 ## 2. Invariant principles
 
-Every design and every line of code must follow the principles below. If a request conflicts with them, **stop and ask**. Only the project owner may edit this section.
+Every design and every line of code must follow the principles below. If a request conflicts with them, **stop and ask**. Only the project owner may edit this section. The project owner approved this version on 2026-10-29 (ADR 0006–0008).
 
-- **P1 – Do not trust map servers.** Servers are hosted by players and their code can be modified. Every piece of state that affects other players (characters, land, gold, wins and losses) must be decided by smart contracts.
-- **P2 – No server holds a player's main key.** Players sign their own transactions with their own wallets. A map server uses only a separate **mining key**, which holds no assets, to submit solutions; rewards always go to the land owner's wallet.
-- **P3 – Pay rewards only after the contract checks the solution itself.** The contract recomputes the hash and compares it with the target; it never pays a reward based on a server's report.
-- **P4 – Gold is issued on a fixed schedule.** A reward per round, halved periodically, self-adjusting difficulty, capped total supply. There is no other way to create gold.
-- **P5 – Mining is voluntary.** The mining process runs only when the machine's owner actively turns it on, has a CPU limit, and clearly shows that it is mining. Never mine covertly.
-- **P6 – Maps are data, not code.** The client never runs arbitrary code received from another player's server. Tilemaps must be validated for format and size.
-- **P7 – Testnet only.** Do not deploy to mainnet; gold has no real value until Phase 3 and a written decision.
-- **P8 – Heavy data stays off-chain.** Detailed land designs and images are stored off-chain (their hash may be stored on-chain).
-- **P9 – Rules have a single source.** The puzzle format, the difficulty formula and the issuance schedule are defined once in `packages/shared/src/rules`, are tested, and the contracts must produce identical results.
-- **P10 – Design for extension.** Character stats and object types are stored as key–value pairs, so new ones can be added later without migrating data.
+- **P1 – Do not trust Map servers.** Gold is decided only by chain rules that every Node checks. What happens inside a Land is that Land's business; a Land cannot change another Land or the chain.
+- **P2 – No server holds a Player's key.** Players' keys stay in the Shell. A server holds only its Map server key and the keys of its owner's NPCs.
+- **P3 – Every Node checks every Block itself:** Proof of Work, signatures and rules. Nothing is accepted on anyone's word.
+- **P4 – Gold is issued on a fixed schedule:** a Block reward halved every 2,100,000 Blocks, then 0.3125 GOLD per Block forever. No premine, no other way to create Gold.
+- **P5 – Mining is voluntary.** A Mine runs only when its owner turns it on, has a CPU limit, and shows clearly that it is mining.
+- **P6 – A Land's code runs only in an isolated frame.** The Shell never runs Land code in its own page and shows every signing request outside the frame.
+- **P7 – Test network only.** It may be reset with notice; Gold has no value until Phase 3 and a written decision.
+- **P8 – The chain holds only money.** Lands, names, items, stats and heavy data live with the Hub or the Lands.
+- **P9 – Chain rules have one source:** `crates/core`, tested against fixed vectors and used by the Node, the Mine and the Shell.
+- **P10 – Design for extension.** Transactions and addresses carry a version and a scheme id, so rules and signature schemes can change through network upgrades.
 
 ## 3. Architecture
+
+The target architecture follows ADR 0006 (own chain), ADR 0007 (the world off the chain) and ADR 0008 (Shell, open Lands, NPCs). Until step 2B is done, the repo still holds the EVM design: `contracts/`, `packages/indexer` and `packages/miner`.
 
 ### 3.1 Components
 
 | Component | Operated by | Role |
 |---|---|---|
-| `contracts/` | Blockchain | Characters, land, mine (checks solutions, pays rewards), `GOLD` token |
-| `packages/map-server` | Player | Real-time simulation of the land, controls the mining process |
-| `packages/miner` | Player | Mining process: tries nonces, finds solutions, submits them on-chain |
-| `packages/client` | Player | Plays the game, shows the mine and balances, signs transactions |
-| `packages/hub-api` | Company | Server directory, authentication, abuse reports |
-| `packages/relay` | Company | Forwards real-time connections to map servers |
-| `packages/indexer` | Company (anyone can run it) | Reads on-chain events into Postgres: list of lands, mining history |
-| `packages/shared` | — | Data types, rules, ABIs, contract addresses |
+| `crates/core` | — | Chain rules, transaction encoding, hashing, ML-DSA signing, addresses; built natively and to WASM |
+| `crates/node` | Player (and the company) | Node: checks, stores and relays Blocks and transactions, JSON-RPC; runs the Mines |
+| `packages/shell` | Static page, anyone can host it | Holds the Player's key, signs, shows each Land's UI in an isolated frame |
+| `packages/map-server` | Player | Reference Land kit: real-time simulation of a Land |
+| `packages/client` | Player's browser, inside the Shell's frame | Reference Land kit: the Land's UI |
+| `packages/hub-api` | Company | Land registration and cells, Directory, names, Travel tickets, abuse reports and removal |
+| `packages/relay` | Company | Serves each Land on its own subdomain and forwards its connections |
+| `packages/shared` | — | TypeScript types shared by the reference kit and the Hub |
+| Checkpoint signer, seed nodes, Public node, archive | Company | Separate services built on `crates/node` (ADR 0006) |
 
 ### 3.2 Repo structure
 
@@ -56,17 +60,20 @@ linked-realms/
 ├── CLAUDE.md
 ├── CONTEXT.md            # domain glossary
 ├── PLAN.md
+├── Cargo.toml            # Cargo workspace for crates/
+├── rust-toolchain.toml
 ├── compose.yaml          # local dev environment
 ├── .github/workflows/    # CI
-├── contracts/            # Solidity + Foundry
+├── crates/
+│   ├── core/
+│   └── node/
 ├── packages/
 │   ├── shared/
+│   ├── shell/
 │   ├── hub-api/
 │   ├── map-server/
-│   ├── miner/
 │   ├── client/
-│   ├── relay/
-│   └── indexer/
+│   └── relay/
 ├── maps/                 # sample lands (Tiled JSON)
 └── docs/
     └── decisions/        # ADRs: one file per architecture decision
@@ -76,80 +83,95 @@ linked-realms/
 
 | Data | Stored in | Why |
 |---|---|---|
-| Main character and stats | Chain | Shared across lands |
-| Land, coordinates, the mine attached to the land | Chain | Ownership, position in the world |
-| Gold (`GOLD`), mining rounds, target, winners | Chain | Anti-cheat (P1, P3, P4) |
-| Detailed land design | Map server (hash stored on-chain) | Heavy data (P8) |
-| Position, transient animation | Map server | Real-time, does not affect others |
-| Mining key | Machine running the map server | Only pays fees for submitting solutions, holds no assets |
-| Server directory, online status | Hub (Postgres) | Changes constantly |
+| Gold balances, nonces, public keys | Chain | Money (P1, P8) |
+| Lands, cells, owners, Delegations, online status | Hub (PostgreSQL) | The map of the world (ADR 0007) |
+| Character names | Hub | Free, not unique |
+| Land items, Quests, Character stats, positions, the Land's design | The Land's own server | Up to the Land (P1, P8) |
+| A Player's key | The Shell, encrypted in the browser | P2 |
+| Map server key, NPC keys | The Land owner's server | P2 |
+| AI API key | The NPC owner's server | ADR 0008 |
 
 ### 3.4 Main flows
 
-- **Registering a land:** the land owner signs a message delegating authority to the map server's key → `hub-api` checks the signature against the on-chain owner of the `Land` → the map server appears in the directory. The map server connects outward to `relay` on its own, so players do not need to open any port.
-- **Travelling to another land:** the client leaves land A → the Hub issues a signed, short-lived travel ticket → the client enters land B. The character and stats are read from the chain; only position is off-chain.
-- **Mining gold:**
-  1. The `GoldMine` contract publishes the current round's challenge and target.
-  2. `miner` tries `nonce` values one after another, computing `hash(challenge, land owner wallet, nonce)`.
-  3. When it finds a hash below the target, `miner` sends the transaction `submit(nonce, land owner wallet)` using the mining key.
-  4. The contract recomputes the hash itself, checks it against the target and checks that the receiving wallet owns a land, then mints gold to that wallet and opens a new round with a new challenge. Every other solution for the old round becomes invalid automatically.
-  5. After every fixed number of rounds, the contract retargets to keep the average pace at the intended round time.
+- **Creating a Character:** the Shell generates 24 words, derives an ML-DSA-44 key and its address, and stores the key encrypted with the Player's password. Nothing reaches the chain until the address's first transaction.
+- **Registering a Land:** the Land owner runs the Docker stack, which creates a Map server key. The owner signs a Delegation naming that key in the Shell. The Map server connects outward to `relay`, so the owner opens no port. `hub-api` checks that the Map server is running and that the rules in section 5.1 hold, then gives the Land the next spiral cell in the Directory.
+- **Travelling to another Land:** the Shell asks the Hub for a Travel ticket with a signed challenge. The Hub signs a short-lived ticket for the adjacent Land. Land B checks the ticket and the challenge at arrival, then the Shell loads Land B's UI in a frame on B's subdomain.
+- **Mining Gold:**
+  1. A Mine that its owner switched on takes a Block template from its local Node.
+  2. It tries nonces, hashing the Block header with RandomX, until a hash falls below the Target.
+  3. The Node broadcasts the sealed Block. Every Node checks the Proof of Work, the signatures and the rules (P3) before passing it on.
+  4. The Block reward and the fees go to the address the Mine mines for.
+  5. The Target is retargeted after every Block, and the Checkpoint signer signs a Checkpoint every 10 Blocks.
+- **Paying inside a Land:** the Land's UI asks the Shell to sign a payment (amount, recipient, memo). The Player approves it in the Shell, and the transaction goes to a Node. Once it is in a Block, the Land sees it through its Node and delivers the item.
+- **An NPC doing a Quest:** the NPC runner on the owner's server gets a Travel ticket and arrives declaring that an AI drives it. The model reads the actions the Land publishes and proposes one; the runner checks it against the owner's limits and signs. The Land pays the reward to the payout address the NPC names, which is its owner's by default.
 
 ### 3.5 Connection scaling rules (D4)
 
 Target: about 1,000 concurrent players for testnet and Phase 2, with a protocol that reaches 100,000+ without a rewrite. Long-lived connections land on `relay`, not on `hub-api`. Evidence and sources: `docs/research/2026-10-29-connection-scaling.md`.
 
-1. Every map server link and every client connection carries the land id in its URL, so relay nodes can later be routed by land id.
-2. The relay forwards both the Colyseus HTTP matchmaking request and the WebSocket upgrade.
-3. Entering a land requires a travel ticket: the map server verifies it offline and only then reserves a seat.
-4. Online status comes from the map server's live connection to the relay, not from HTTP heartbeats to `hub-api`.
+1. Every Map server link and every client connection names its Land (its subdomain), so relay nodes can later be routed per Land.
+2. The relay forwards each Land's HTTP and WebSocket traffic, whatever protocol the Land speaks (ADR 0008).
+3. Entering a Land requires a Travel ticket: the Map server verifies it offline and only then reserves a seat.
+4. Online status comes from the Map server's live connection to the relay, not from HTTP heartbeats to `hub-api`.
 5. Directory responses are cacheable (`s-maxage` + `stale-while-revalidate`).
 6. The relay counts bytes and messages per session, so any decision to move traffic off the relay (for example WebRTC) is based on measured data.
-7. WebSocket compression is off; frame size is limited (at least Colyseus's default `maxPayload` of 4,096 bytes); slow clients get bounded buffering.
+7. WebSocket compression is off, frame size is limited, and slow clients get bounded buffering.
 8. A load-test harness with a non-JavaScript client exists from the first relay version.
 
-Tiers: up to ~1,000 players → one Node.js `ws` relay process; ~10,000 → several relay nodes routed by land id, on uWebSockets.js; 100,000+ → a sharded relay fleet whose engine is chosen by load test (Go if Node.js falls short).
+Tiers: up to ~1,000 players → one Node.js `ws` relay process; ~10,000 → several relay nodes routed per Land, on uWebSockets.js; 100,000+ → a sharded relay fleet whose engine is chosen by load test (Go if Node.js falls short).
 
 ## 4. Default technology stack
 
 Items marked (*) need confirmation in section 10.
 
-- **Monorepo:** pnpm workspaces + Turborepo, TypeScript (strict), Node.js 26 (current LTS).
-- **Testing:** Vitest (TypeScript); Foundry `forge test` (Solidity, including fuzz and invariant tests); Slither for static analysis of the contracts.
-- **Contracts:** Solidity + Foundry + OpenZeppelin Contracts; core contracts are upgradeable via UUPS, with upgrade rights held by the project owner's multisig wallet. Local chain: `anvil`. Testnet: Base Sepolia (*).
-- **Chain access:** viem.
-- **Map server:** Node.js + Colyseus 0.18 (*). Each room is one land; the server is authoritative.
-- **Miner:** TypeScript in a worker thread, with the hash function in WASM (for example `hash-wasm`) so it is fast enough, and a limit on CPU threads.
-- **Client:** Phaser 4, top-down 2D, runs in the browser (*).
+- **Monorepo:** pnpm workspaces + Turborepo, TypeScript (strict), Node.js 26 (current LTS) for the TypeScript packages; a Cargo workspace in `crates/`, with the Rust version pinned in `rust-toolchain.toml`.
+- **Testing:** Vitest (TypeScript); `cargo test`, `cargo clippy` and `cargo fmt --check` (Rust), with fixed test vectors: NIST vectors for ML-DSA and the official RandomX vectors.
+- **Chain (ADR 0006):** Rust. `sha3` (keccak256); `fips204` for ML-DSA-44, cross-checked against RustCrypto `ml-dsa`; RandomX v2.0.1 through a small FFI binding of our own (CMake and a C++ compiler at build time); `redb` storage; `jsonrpsee` JSON-RPC; a hand-written Bitcoin-like TCP P2P protocol behind an interface. `crates/core` is built to WASM with `wasm-bindgen`.
+- **Shell:** a static TypeScript page using the WASM build of `crates/core`.
+- **Reference Land kit:** Map server on Node.js with WebSocket + Protocol Buffers (D2; Colyseus 0.18 until step 2B); client in Phaser 4, top-down 2D, in the browser (D1).
 - **Maps:** made with the Tiled Map Editor, exported as JSON.
-- **Hub API:** TypeScript on Node.js (Hono or Fastify) + viem (D4). **Relay:** Node.js + `ws`, moving to uWebSockets.js and then a sharded fleet as load grows (section 3.5).
-- **Indexer:** Ponder + PostgreSQL.
-- **Sign-in:** Sign-In with Ethereum (EIP-4361). **Wallets:** anvil wallets for development, browser wallets for internal testing, and an embedded wallet + ERC-4337 paymaster before opening to outsiders (*).
+- **Hub API:** TypeScript on Node.js (Hono) + PostgreSQL (D4). **Relay:** Node.js + `ws`, moving to uWebSockets.js and then a sharded fleet as load grows (section 3.5).
+- **NPCs:** a Claude API adapter first, then an OpenAI-compatible adapter (D15).
 - **Infrastructure:** Docker, `compose.yaml` (`docker compose` v2 command, no `version` key), PostgreSQL `-alpine` images, every image pinned to a version (no `:latest`).
 
 ## 5. Rules for stage 1
 
-The values below are defaults. They live in `packages/shared/src/rules`, and the contracts are configurable so they can be tuned later.
+The values below are defaults. Chain rules live in `crates/core` (P9) and change only through network upgrades decided by the project owner. Hub rules live in `hub-api` and can be tuned.
 
-### 5.1 Land and characters
+### 5.1 World
 
-- Each wallet can create exactly 1 character and 1 land. Every land comes with 1 mine.
-- All mines take part in one shared mining competition: each round has one winner across the whole world, not one per land.
-- A character has 4 stats, all equal to 1: strength, agility, intelligence, stamina. Stage 1 has no way to raise stats.
-- A land is empty and flat, 64×64 tiles, and receives its coordinates automatically along a spiral from the centre of the world. The mine sits in the middle of the land.
-- A character walks around its own land and into adjacent lands through gates on the four edges. Visitors can only walk and look; they cannot interact with the land owner's mine.
+- A Character is an ML-DSA-44 key and its address, created in the Shell from 24 words. Its name is kept by the Hub: free, at most 32 characters, not unique.
+- A Character registers at most one Land with the Hub, for free. A Land is never transferred.
+- Lands receive cells along a spiral from the centre of the world. A Land gets its cell only once its Map server is running (reachable, with a valid Delegation). At most 3 new Lands per network address per day. A Land offline for 30 days in a row loses its cell and gets a new one at the edge of the spiral when it returns.
+- Each Land has Gates on its four edges that lead to the adjacent cells. How large a Land is inside, and what it holds, is up to its owner; the reference kit's Land is empty and flat, 64×64 tiles.
+- Characters have no shared stats; each Land sets its own (ADR 0007).
+- In the reference kit, visitors walk and look. Other Lands set their own rules.
 
-### 5.2 Mine
+### 5.2 Chain
 
-- **Puzzle (D8):** find a `nonce` such that `keccak256(abi.encode(challenge, reward wallet, nonce)) < target`.
-- **Reward recipient:** must be a wallet that currently owns a land. Because the reward wallet is part of the hash, changing the recipient makes the solution invalid, so copying someone else's solution does not work.
-- **One winner per round:** the first valid solution is recorded. The new round's challenge is derived from the old challenge, the winner, the winning nonce and data from the current block.
-- **Intended round time (D9):** 60 seconds per round.
-- **Retarget (D9):** every 60 rounds, multiply the target by `actual time / intended time`, changing it by at most 4× in either direction each time (as in Bitcoin).
-- **Reward (D9):** 50 `GOLD` per round, halved every 210,000 rounds. Maximum total supply is 21 million `GOLD`; only `GoldMine` can mint. At 60 seconds per round, 210,000 rounds take about 146 days, so 93.75% of the supply is mined within about 19 months (4 halvings).
-- **Initial target (D9):** measured in step 1B — set so that one `miner` thread on the reference machine finds a solution in about 60 seconds. Record the value in `rules` and in an ADR.
-- **Voluntary mining (P5):** off by default. When on, it uses at most 1 CPU thread, and the player can adjust this. `miner` stops immediately when the round changes so no work is wasted.
-- **Mining key:** the map server creates its own wallet just to pay fees for submitting solutions. On testnet, use a faucet or a paymaster.
+- **Proof of Work (D8):** RandomX v2 over the Block header. keccak256 for transaction ids, Merkle roots and addresses.
+- **Block time (D9):** 60 seconds. **Retarget:** LWMA after every Block. **Initial Target:** measured in step 2C so that one Mine thread on the reference machine seals a Block in about 60 seconds; record the value in an ADR.
+- **Reward (D9):** 5 `GOLD` per Block, halved every 2,100,000 Blocks (about 4 years). After four halvings (about 16 years, 19,687,500 `GOLD`), 0.3125 `GOLD` per Block forever. 8 decimals. No premine, no developer fund.
+- **Fees:** a per-size fee auction with a minimum relay fee; fees go with the Block reward to the address the sealing Mine names. A Block holds at most 1 MB. A transfer may carry a memo of up to 80 bytes.
+- **Signatures (D12):** ML-DSA-44 with a scheme id in addresses and transactions. A key-rotation transaction. The public key travels in an address's first transaction and is then kept on chain.
+- **Checkpoints:** every 10 Blocks, signed by the Checkpoint signer. No Node accepts a history that changes anything before a Checkpoint.
+- **Nodes:** pruned by default, starting from a Checkpoint snapshot; Block headers carry a state root.
+
+### 5.3 Mine
+
+- A Mine runs beside a Node on the Player's own server and mines for an address the Player chooses. A Player may run any number of Mines there, even before they have a Land.
+- **Voluntary mining (P5):** off at every start. When on, it uses 1 CPU thread unless the owner picks more, and it shows clearly that it is mining.
+- Fast mode when the machine has the memory (about 2 GB), light mode otherwise.
+
+### 5.4 Shell
+
+- The key comes from 24 words, asked for only on the Shell's own setup page. It is stored encrypted with a password the Player sets, and the Shell locks itself after a period of inactivity.
+- Each Land's UI runs in a cross-origin iframe on the Land's subdomain. Every signing request is shown in the Shell, outside the frame, with the amount, the recipient and the memo in plain words.
+
+### 5.5 NPCs
+
+- An NPC's key stays on its owner's server. The AI never sees it: the NPC runner checks each proposed action against the owner's limits, such as Gold per day and allowed Lands, and only then signs.
+- An NPC declares at arrival that an AI drives it. It names its payout address, which is its owner's by default.
 
 ## 6. Roadmap
 
@@ -169,9 +191,9 @@ The values below are defaults. They live in `packages/shared/src/rules`, and the
 
 **Done when:** `pnpm install && pnpm test` and `forge test` are green; `docker compose up -d` runs Postgres and anvil; CI is green.
 
-### Phase 1 – Stage 1: land, characters, mine and connectivity
+### Phase 1 – Stage 1 on the EVM design (superseded)
 
-Split into three steps, done in order.
+Built on Solidity contracts; superseded on 2026-10-29 by ADR 0006–0008. Step 2B deletes the contracts and the indexer. Stage 1's Done-when criterion moves to step 2C.
 
 #### 1A – Land and characters
 
@@ -186,13 +208,13 @@ Split into three steps, done in order.
 #### 1B – Mine
 
 - [x] `GoldToken` contract (ERC-20 `GOLD`): 21 million cap, only `GoldMine` can mint.
-- [x] `GoldMine` contract: rounds, challenges, solution checks, checking that the reward wallet owns a land, rewards, halving, retargeting as in section 5.2.
+- [x] `GoldMine` contract: rounds, challenges, solution checks, checking that the reward wallet owns a land, rewards, halving, retargeting (ADR 0003).
 - [x] `packages/miner`: worker thread that tries nonces, CPU limit, watches events to stop when the round changes, submits solutions with the mining key.
 - [x] `map-server`: mining on/off switch for the land owner, showing hash rate and the current round.
 - [x] `client`: shows the mine on the land, the `GOLD` balance, and the history of rounds won.
 - [x] Simulation script: raise and lower the total hash rate, and check that round time converges to the intended value.
 
-**Done when:** two map servers mine together on anvil; after a few retargets, round time converges to about 60 seconds; rewards go to the correct land owner wallet; every mine test in section 8 is green.
+**Done when:** two map servers mine together on anvil; after a few retargets, round time converges to about 60 seconds; rewards go to the correct land owner wallet; every mine test passes.
 
 #### 1C – Connectivity and travel between lands
 
@@ -202,25 +224,72 @@ Split into three steps, done in order.
 
 **Done when:** three map servers run in three separate containers; a player walks through a gate from land A to land B; shutting down A makes the directory show it as offline.
 
-**Stage 1 is done when:** on testnet, at least 3 players on 3 different machines each have a character, a land and a mine that is mining; they can walk into each other's lands; gold is paid according to the rules.
+### Phase 2 – Own chain, open source and testing (test network)
 
-### Phase 2 – Open source and testing (testnet)
+**Goal:** people outside the team host their own Land, mine Gold on the game's own chain and play reliably.
 
-**Goal:** people outside the team can host their own land and play reliably.
+#### 2A – Self-hosting, wallet and dashboard (EVM design)
 
 - [x] Docker image that runs the map server and miner with one command; self-hosting guide.
 - Moved to Phase 0 because the repo is public from day one: settling the licence (D6), making the repo public, `CONTRIBUTING.md` stating that the project owner reviews every PR.
-- [x] Embedded wallet + paymaster (D5) so new players do not need to install a wallet or pay gas. The paymaster only sponsors game transactions, with rate limits. Passkey wallet + CDP Paymaster behind `hub-api` (ADR 0005, `docs/plans/phase-2-d5-embedded-wallet.md`); the spike against CDP on Base Sepolia is the owner's (`docs/runbooks/base-sepolia.md` section 7).
-- [x] Dashboard: number of lands online, number of mines mining, estimated hash rate, round time, winner distribution.
+- [x] Embedded wallet + paymaster (D5): Passkey wallet + CDP Paymaster behind `hub-api` (ADR 0005). Superseded by the Shell (ADR 0008) and removed in 2B; the CDP spike and the Base Sepolia deployment are no longer needed.
+- [x] Dashboard: number of lands online, number of mines mining, estimated hash rate, round time, winner distribution. Reads the contracts; rebuilt in 2C.
 
-**Done when:** at least 10 lands hosted by people outside the team stay connected reliably for one week.
+#### 2B – World without the chain (ADR 0007, 0008)
+
+- [ ] Cargo workspace `crates/` with `rust-toolchain.toml`; CI runs `cargo fmt --check`, `cargo clippy` and `cargo test`.
+- [ ] `crates/core`, first part: 24-word seed phrase, ML-DSA-44 keys and signatures (`fips204`, cross-checked with `ml-dsa` against NIST vectors), addresses with a scheme id; WASM build with `wasm-bindgen`.
+- [ ] `packages/shell`: create and restore a key, password encryption, auto-lock, sign in to the Hub, show a Land's UI in a cross-origin iframe, signing prompts outside the frame.
+- [ ] `hub-api`: Land registration signed with the Character key, spiral cells and the rules in section 5.1, names, Travel tickets and arrival handoff for ML-DSA identities (with the "driven by AI" field); SIWE, EIP-712 and `POST /aa` removed.
+- [ ] `relay`: protocol-neutral, each Land on its own subdomain; Land owners may use their own domain.
+- [ ] Reference Land kit: `map-server` and `client` use the Shell and the Hub; the game protocol moves from Colyseus to WebSocket + Protocol Buffers (D2); mining is hidden until 2C.
+- [ ] Specify the mandatory protocols in `docs/`: Shell ↔ Land UI API, arrival handoff, Map server ↔ Hub and relay, the Gate travel message (Map server ↔ Node follows in 2C).
+- [ ] Delete `contracts/`, `packages/indexer`, `packages/miner`, the Passkey wallet and the CDP proxy; remove Foundry and Slither from CI.
+- [ ] `packages/shared/src/rules`: delete the mining and sponsorship rules and the generated contract cross-checks; chain rules are rewritten in `crates/core` in 2C (P9). The spiral and the other Hub and kit rules stay in TypeScript.
+
+**Done when:** two people on two machines run their own Lands, register them with the Hub without any Gold and walk through a Gate into each other's Land; a test shows that a Land's UI cannot read the Shell's keys or sign without the Player's approval.
+
+#### 2C – The chain (ADR 0006)
+
+- [ ] `crates/core`: transfers with a memo, key rotation, the Block format with a state root, issuance with halvings and the tail reward, LWMA Retarget, fee and size rules, the RandomX v2 binding (v2.0.1 pinned) with the official vectors on x86 and ARM.
+- [ ] `crates/node`: Block and transaction checks, a mempool with the fee auction and minimum relay fee, `redb` storage, pruning from Checkpoint snapshots, TCP P2P behind an interface, JSON-RPC (`jsonrpsee`), Checkpoint checks.
+- [ ] The Mine: on/off switch, CPU limit, fast or light mode by available memory, any number per server, reward address chosen by the Player.
+- [ ] Company services: Checkpoint signer, seed nodes, Public node, archive.
+- [ ] Shell: balance, send Gold with a memo, key rotation, prompts for payments a Land asks for.
+- [ ] Docker stack: Map server, Node (on by default, can be turned off) and Mine (off); self-hosting guide updated; Map server ↔ Node protocol specified.
+- [ ] Dashboard rebuilt on the Public node and the Hub.
+- [ ] Simulation: hash rate rises and falls and Block time returns to about 60 seconds; Checkpoints stop deeper rewrites.
+
+**Done when (Stage 1):** on the test network, at least 3 Players on 3 different machines each host a Land, run a Mine that wins Blocks, send Gold to each other through the Shell, and walk into each other's Lands.
+
+#### 2D – Economy in the reference Land kit
+
+- [ ] A Land item shop: buying is a Gold payment with a memo; the Land keeps the item for the buyer.
+- [ ] Quests whose rewards a treasurer on the Land owner's server pays in Gold: a minimal payout component that holds an NPC key and pays within limits the owner sets, with no AI (2E grows it into the NPC runner).
+
+**Done when:** a visitor buys a Land item in another Land and still has it on the next visit; a finished Quest pays its reward to the visitor's address.
+
+#### 2E – NPCs (ADR 0008)
+
+- [ ] NPC runner on the owner's server, built on 2D's payout component: holds the NPC key, takes work from its owner, checks the owner's limits before signing, pays earnings to the owner.
+- [ ] Reference NPC action standard for Lands that welcome NPCs; Claude API adapter, then an OpenAI-compatible adapter.
+- [ ] Arrival with the "driven by AI" field; the reference kit shows it.
+
+**Done when:** an NPC created by one Player travels to another Player's Land, finishes a Quest there, and the reward reaches its owner; a test Land that tells the NPC to send its Gold away does not get past the owner's limits.
+
+#### 2F – Audit before Phase 3
+
+- [ ] Independent security audit of `crates/core` and `crates/node`: consensus, ML-DSA, the RandomX binding, P2P.
+
+**Done when:** the audit report is published and every finding is fixed or accepted by the project owner in writing.
+
+**Phase 2 is done when:** at least 10 Lands hosted by people outside the team stay connected reliably for one week.
 
 ### Phase 3 – Mainnet preparation (only with a written decision)
 
-- [ ] Security audit of every contract, especially `GoldMine` and `GoldToken`.
-- [ ] Legal review before gold has real value (token, mining activity, player-hosted content).
-- [ ] Choose Base mainnet or a dedicated chain (OP Stack or Arbitrum Orbit).
-- [ ] Revisit the issuance parameters using testnet data.
+- [ ] Legal review before Gold has real value: a currency, mining, player-hosted content, AI-driven NPCs (EU AI Act).
+- [ ] Launch plan for the main network: genesis without premine, handling of the Checkpoint signer's key, seed nodes.
+- [ ] Revisit the issuance parameters using test network data.
 
 ## 7. Ideas beyond stage 1
 
@@ -228,59 +297,72 @@ Not part of stage 1. The project owner will decide the order.
 
 | Idea | Design notes |
 |---|---|
-| Spend gold to build and upgrade | Every spend and every structure that has an effect must be on-chain (P1) |
-| Raise character stats | Stats rise through activity recorded on-chain, not through server reports |
+| Spend gold to build and upgrade | Inside a Land, the Land's own business; payments are Gold transfers on chain |
+| Shared character stats | Only with a rule the chain can check, for example burning Gold, added by a network upgrade (ADR 0007) |
 | Upgrade the mine | If upgrades multiply the reward, mining is no longer pure Proof of Work; the issuance schedule must be redesigned (P4) |
-| AI-driven NPCs | The LLM only chooses actions within a schema that is validated again; in-game content is never an instruction to the AI |
-| Renting out NPCs | Prepaid escrow, the owner withdraws gradually over time, ending early refunds the remainder |
-| Troops and conquering land | Resolved on-chain with a fixed formula; protective shields and protection for new players |
+| Escrow for Quests and NPC rentals | Needs a new transaction type: Gold locked until both sides agree or a deadline passes |
+| Owner statement for NPCs | A statement the owner signs and the NPC carries, so Lands can show whose NPC it is (ADR 0007) |
+| Name moderation | Deferred by the project owner; add later if needed |
+| Passkey unlock for the Shell | Next to the password, not instead of it |
+| Troops and conquering land | Needs a new design: Lands live with the Hub and the chain holds only money (P8) |
+| libp2p | Can replace the hand-written P2P layer behind its interface |
 
 ## 8. Testing and quality
 
-- Every package has tests. CI runs lint, tests, `forge test` and Slither on every PR.
-- **Land and characters:** one character per wallet, one land per wallet; stats all initialised to 1; no duplicate coordinates.
-- **Mine (unit, fuzz, invariant):**
-  - Wrong solutions are rejected.
-  - Solutions for an old round are rejected.
-  - Changing the reward wallet invalidates the solution.
-  - A wallet that owns no land receives no reward.
-  - Retargeting follows the formula and never exceeds the 4× limit.
-  - Halving happens at the right round; total supply never exceeds 21 million.
-  - No address other than `GoldMine` can mint gold.
-- **Cross-check tests:** for the same input, `miner` (TypeScript) and the contract compute the same hash; `rules` and the contract produce the same target.
-- **"Cheating server" tests:** a map server with modified code cannot get gold without a valid solution.
-- **End-to-end:** compose brings up anvil, Hub, relay and 2 map servers; scenario: create a character → turn mining on → receive gold → walk through a gate into the other land.
+- Every package and crate has tests. CI runs lint, `pnpm test`, `cargo fmt --check`, `cargo clippy` and `cargo test` on every PR (and `forge test` and Slither until step 2B deletes `contracts/`).
+- **Fixed vectors (P9):** NIST vectors for ML-DSA-44, with `fips204` and `ml-dsa` agreeing; the official RandomX v2 vectors on x86 and ARM; transaction and address encodings shared by the Node, the Mine and the Shell's WASM build.
+- **Chain rules (unit, property):**
+  - Invalid Proof of Work, a bad signature, a wrong nonce or a spent balance are rejected.
+  - A transaction signed for another scheme id or another network is rejected.
+  - Retarget follows the LWMA formula; a simulation brings Block time back to about 60 seconds after the hash rate rises and falls.
+  - Halvings happen at the right heights, the tail reward starts after the fourth, and issuance matches the schedule exactly.
+  - A Block over 1 MB or a memo over 80 bytes is rejected; fees go to the sealing Mine's reward address.
+  - A rewrite that changes anything before a Checkpoint is rejected.
+- **Hub:** one Land per Character; no duplicate cells; a cell only for a running Map server; at most 3 new Lands per network address per day; a Land offline 30 days loses its cell.
+- **Shell:** a Land's frame cannot read the key; nothing is signed without the Player's approval; the prompt shows the amount, the recipient and the memo.
+- **"Cheating server" tests:** a modified Map server or Node cannot create Gold or spend someone else's.
+- **End-to-end:** compose brings up three Nodes, the Hub, the relay and two Lands; scenario: create a Character in the Shell → register a Land → turn a Mine on → win a Block → send Gold → walk through a Gate into the other Land.
 
 ## 9. Security and risks
 
 | Risk | Mitigation |
 |---|---|
-| Players with powerful machines or GPUs win almost every round | Accepted, as in Bitcoin; track the winner distribution on the dashboard |
-| Players write their own optimised mining tools outside the game | Cannot be prevented with open source; rewards still depend only on hash rate |
-| Copying another player's solution | The reward wallet is part of the hash; changing the recipient invalidates the solution |
-| Solutions submitted late, after the round already has a winner | `miner` watches events and stops immediately; a failed transaction only costs a small fee |
-| Players' machines run hot and use power; the software is flagged as coin-mining malware | P5: voluntary mining, off by default, CPU limit, clearly shown |
-| Paymaster abused for spam | Only sponsor game transactions (`SPONSORED_CALLS`), 20 per Player per day plus a world-wide daily cap, enforced by `hub-api` and mirrored in the CDP configuration (ADR 0005) |
-| Map server code modified to cheat | P1, P3 |
-| Malicious server attacks clients | P6; data size limits |
-| Leaked private keys or secrets | P2; the mining key holds no assets; `.env.example`; secret scanning in CI |
-| Rule-breaking content on player-hosted lands | Report and remove from the Hub directory; terms of use |
-| Legal exposure once gold has real value | P7; legal review before mainnet |
+| Rented hash power takes over a small chain (51% attack) | Checkpoints every 10 Blocks limit rewrites; RandomX v2 favours CPUs; the test network has no value (P7) |
+| The Checkpoint signer's key leaks | A separate company service with its own key; the key changes only by network upgrade; key handling is a Phase 3 item |
+| Bugs in new consensus code, ML-DSA crates or the RandomX binding | Pinned versions; NIST and RandomX vectors on x86 and ARM; two ML-DSA crates cross-checked; independent audit before Phase 3 |
+| Players with powerful machines win most Blocks | Accepted, as in Bitcoin; track the winner distribution on the dashboard |
+| Players write their own mining tools or mine elsewhere | Cannot be prevented with open source; rewards still depend only on hash rate |
+| Players' machines run hot; the software is flagged as coin-mining malware | P5: voluntary mining, off by default, CPU limit, clearly shown |
+| Land spam on the map | Hub rules in section 5.1: a cell only for a running Map server, 3 new Lands per network address per day, cells freed after 30 days offline |
+| A malicious Land's UI tricks visitors | P6: isolated frame; the Shell's own prompt is the only place to approve a signature |
+| A lost seed phrase and password | No recovery; the Shell says so at setup |
+| Prompt injection against AI-driven NPCs | The AI never sees the key; the NPC runner enforces the owner's limits; earnings go straight to the owner (ADR 0008) |
+| A Land does not pay a Quest or loses bought items | Land owners are responsible for their Lands; the chain proves the payment; escrow is a later idea |
+| The Hub is a central point | It holds no Players' keys and signs no Checkpoints; if it is down, travel stops but the chain and the Lands keep running |
+| Leaked private keys or secrets | P2; `.env.example`; secret scanning in CI |
+| Rule-breaking content on player-hosted Lands | Report and remove from the Hub's Directory; terms of use |
+| NPCs not disclosed as AI (EU AI Act Article 50) | The "driven by AI" field at arrival; legal review in Phase 3 |
+| Legal exposure once Gold has real value | P7; legal review before the main network |
 
 ## 10. Decisions to confirm
 
 | # | Decision | Choice | Alternatives | Status |
 |---|---|---|---|---|
 | D1 | Client | Phaser 4 in the browser | Godot 4, Unity | Confirmed 2026-10-29. The original default was Phaser 3; Phaser 4 is the current major version. |
-| D2 | Map server networking | Colyseus 0.18 | Hand-written WebSocket | Confirmed 2026-10-29 |
-| D3 | Testnet | Base Sepolia | A testnet of another Layer 2 | Confirmed 2026-10-29 |
-| D4 | Hub API and relay | `hub-api`: TypeScript (Hono or Fastify) + viem, in `packages/hub-api`. `relay`: Node.js + `ws`, scaled per section 3.5 | Symfony following the company backend standard; Cloudflare Tunnel, libp2p or WebRTC instead of a relay | Confirmed 2026-10-29. ERC-4337 smart wallets (D5) need ERC-1271/6492 signature checks, which viem documents and no maintained PHP library offers; one language across relay, map servers, indexer and Hub. Alternatives rejected for cost, terms of service or missing Colyseus support (see `docs/research/2026-10-29-connection-scaling.md`). |
-| D5 | Embedded wallet | Passkey wallet: a Coinbase Smart Wallet v1.1 account through viem with a passkey owner on the client's domain; the CDP Paymaster called only from `hub-api`, which sponsors only `SPONSORED_CALLS`, 20 per Player per day plus a world-wide cap; no recovery beyond a Backup passkey (`docs/decisions/0005-embedded-wallet.md`) | thirdweb in-app wallets (runner-up), Privy, Dynamic, Web3Auth | Confirmed 2026-10-29 (option F). Spike against CDP on Base Sepolia pending (owner) |
-| D6 | Licence | MIT | AGPL-3.0, Apache-2.0 | Confirmed 2026-10-29. The original default was AGPL-3.0. P1 and P3 already stop cheating at the contract layer, so forcing modified servers to publish their code adds no protection, and MIT is easier for contributors. |
+| D2 | Map server networking | Reference Land kit: WebSocket + Protocol Buffers, not mandatory for other Lands (ADR 0008) | Colyseus 0.18 (used until step 2B) | Replaced 2026-10-29. Colyseus's wire format is undocumented and its server is TypeScript-only, so Lands in other languages could not speak it. |
+| D3 | Test network | The game's own chain, reset with notice (ADR 0006) | Base Sepolia | Replaced 2026-10-29 |
+| D4 | Hub API and relay | `hub-api`: TypeScript (Hono) in `packages/hub-api`. `relay`: Node.js + `ws`, scaled per section 3.5 | Symfony following the company backend standard; Cloudflare Tunnel, libp2p or WebRTC instead of a relay | Confirmed 2026-10-29. One language across relay, reference Map server and Hub. viem and the ERC-1271/6492 checks go away with the contracts (ADR 0007). Alternatives rejected for cost or terms of service (see `docs/research/2026-10-29-connection-scaling.md`). |
+| D5 | Players' keys | The Shell: keys from 24 words, encrypted with a password, Land UIs in isolated frames (ADR 0008) | Passkey wallet + CDP Paymaster (ADR 0005, built in 2A) | Replaced 2026-10-29 |
+| D6 | Licence | MIT | AGPL-3.0, Apache-2.0 | Confirmed 2026-10-29. The original default was AGPL-3.0. Chain rules checked by every Node already stop cheating, so forcing modified servers to publish their code adds no protection, and MIT is easier for contributors. |
 | D7 | Project name | `linked-realms` | — | Confirmed 2026-10-29 |
-| D8 | Mine hash function | `keccak256` (cheapest to check on-chain) | SHA-256 like Bitcoin | Confirmed 2026-10-29 |
-| D9 | Issuance parameters | 60 seconds per round, 50 `GOLD` per round, halved every 210,000 rounds, 21 million maximum; initial target calibrated in step 1B | Custom | Confirmed 2026-10-29 |
-| D10 | Where mining runs | Inside the map server on the player's machine | Also a browser version (much slower) | Confirmed 2026-10-29 |
+| D8 | Proof-of-Work hash | RandomX v2 (v2.0.1, `RANDOMX_FLAG_V2`) from the first Block (ADR 0006) | `keccak256`; RandomX v1 through `randomx-rs` | Replaced 2026-10-29 |
+| D9 | Issuance parameters | 60-second Blocks, LWMA after every Block, 5 `GOLD` per Block halved every 2,100,000 Blocks, then 0.3125 `GOLD` per Block forever; 8 decimals; no premine (ADR 0006) | 50 `GOLD` halved every 210,000 Rounds, 21 million cap | Replaced 2026-10-29 |
+| D10 | Where mining runs | Mines beside a Node on the Player's own server, any number (ADR 0006) | Inside the Map server; a browser version | Replaced 2026-10-29 |
+| D11 | Chain implementation | Written from scratch in Rust, `crates/` in this repo (ADR 0006) | Fork btcd or Bitcoin Core; TypeScript; Substrate | Confirmed 2026-10-29 |
+| D12 | Signatures | ML-DSA-44 (FIPS 204) with a scheme id and key rotation (ADR 0006) | secp256k1 ECDSA | Confirmed 2026-10-29 |
+| D13 | Where the world lives | Lands and names with the Hub; items, Quests and stats with each Land; NPCs unrecorded (ADR 0007) | Lands on chain | Confirmed 2026-10-29 |
+| D14 | Land freedom | Own rules and UI per Land; a few mandatory protocols, the rest reference (ADR 0008) | One shared game server for every Land | Confirmed 2026-10-29 |
+| D15 | NPC AI | Owner's own model and API key; Claude API adapter first, then OpenAI-compatible (ADR 0008) | A company-provided AI | Confirmed 2026-10-29 |
 
 Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all repository content is in English.
 
@@ -296,17 +378,24 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 ## 12. Progress
 
 - [x] Phase 0 – Foundations
-- [ ] Phase 1 – Stage 1
+- [ ] Phase 1 – Stage 1 on the EVM design (superseded by ADR 0006–0008; its Done-when moves to 2C)
   - [x] 1A – Land and characters
   - [x] 1B – Mine
   - [x] 1C – Connectivity and travel between lands
-- [ ] Phase 2 – Open source and testing
+- [ ] Phase 2 – Own chain, open source and testing
+  - [x] 2A – Self-hosting, wallet and dashboard (EVM design)
+  - [ ] 2B – World without the chain
+  - [ ] 2C – The chain
+  - [ ] 2D – Economy in the reference Land kit
+  - [ ] 2E – NPCs
+  - [ ] 2F – Audit before Phase 3
 - [ ] Phase 3 – Mainnet preparation
 
 ### Log
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
 
+- 2026-10-29: Design review with the project owner on branch `design/own-chain` (docs only, no code changed). linked-realms moves to its own Proof-of-Work chain, written from scratch in Rust in `crates/`, with RandomX v2, ML-DSA-44 keys, 60-second Blocks, an LWMA Retarget after every Block, 5 `GOLD` per Block halved every 2,100,000 Blocks and then 0.3125 `GOLD` per Block forever, and Checkpoints every 10 Blocks (ADR 0006). The chain holds only money: Lands and names move to the Hub (free; anti-spam rules in section 5.1), items, Quests and stats belong to each Land, and NPCs are recorded nowhere (ADR 0007). Players' keys move to the Shell; each Land's UI runs in an isolated frame with its own rules; a few protocols are mandatory and the rest, including WebSocket + Protocol Buffers in place of Colyseus, are reference; NPCs are driven by the owner's own AI model and declare it at arrival (ADR 0008). The project owner approved the new principles P1–P10 (section 2). ADRs 0001–0005 are marked superseded where they relied on contracts; section 10 replaces D2, D3, D5, D8, D9 and D10, drops viem from D4 and adds D11–D15; Phase 2 gains steps 2B–2F in the order the owner chose (world first, then the chain, then the economy, then NPCs, then the audit before Phase 3). `CONTEXT.md` gains Land item, NPC, Shell, Quest, Node, Public node, Checkpoint, Checkpoint signer, Block and Map server key, and drops Passkey wallet, Backup passkey, Sponsored transaction, Round, Challenge and Mining key. The Base Sepolia deployment and the CDP spike are no longer needed.
 - 2026-10-29: D5 built on branch `phase-2/d5-embedded-wallet` (plan: `docs/plans/phase-2-d5-embedded-wallet.md`). The project owner chose option F, no recovery, and 1 Character plus 20 game transactions per day per identity; ADR 0005 accepted. `packages/shared` holds the sponsorship rule (`SPONSORED_CALLS`, 20 per Player and 10,000 for the world per UTC day). `hub-api` gains `POST /aa`, a JSON-RPC proxy to `HUB_BUNDLER_URL` (the CDP endpoint, server only) that forwards only a signed-in Player's own user operations with sponsored calls, refuses a second Character, and counts Sponsored transactions in PostgreSQL. The client offers a Passkey wallet on every chain except anvil: create, sign in (a new device recovers the passkey's public key from two signatures, so no server stores passkeys), sponsored `createCharacter()` through the Hub, and "Add backup passkey" while the wallet has one owner; every wallet now sends through `Wallet.send`, and a Sponsored transaction signs in to the Hub again when the session is missing or within a minute of expiry. `CONTEXT.md` gains Passkey wallet, Backup passkey and Sponsored transaction. Verified: `pnpm test` (354), `forge test` (41, contracts unchanged); on an anvil fork of Base Sepolia (real factory and EntryPoint, game contracts deployed to the fork, a stand-in bundler, Chromium's virtual authenticator) a Passkey wallet signed in to the Hub before deployment, created its Character in its first user operation (which deployed it), signed a Delegation the Hub accepted, added a Backup passkey (2 owners on chain, 2 Sponsored transactions counted), and with storage cleared each passkey alone found the same wallet and signed in; the dev wallet still creates a Character on anvil. Not done here: the spike against the real CDP Paymaster (needs the owner's CDP account and the Base Sepolia deployment, runbook section 7) and the bot check on `createCharacter()` (needs the owner's choice of service).
 - 2026-10-29: Phase 2 work on branch `phase-2/open-testing` (plan: `docs/plans/phase-2-open-testing.md`). The image's default command is now a self-hosted Map server with its Mining key in the `/data` volume; `docs/self-hosting.md` covers building it from the repository, `land.env`, the one `docker run` command, registering the Mining key under "Your Land", mining, updates, moving machines and troubleshooting by log line; CI builds the image on every pull request (publishing it is the owner's step). The indexer serves `GET /dashboard` (server-rendered, no script): Lands online from the Hub's Directory, mines mining (reward wallets that won a Round in the last 24 hours), mean Round time over the last 100 won Rounds, estimated hash rate from `GoldMine.target()`, and Rounds won per Land over the last 1,000. `formatHashRate` moved to `packages/shared` so the client and the dashboard share it. D5: research brief and ADR 0005 (proposed: Coinbase Smart Wallet account with a passkey through viem, CDP Paymaster gated by `hub-api`); waiting for the project owner. `docs/runbooks/base-sepolia.md` and `pnpm --filter @linked-realms/contracts deploy:base-sepolia` (Foundry keystore account) for the owner to open the testnet world, ending with the Stage 1 three-machine checklist. Verified: `pnpm test` (341), `forge test` (41), Slither 0 findings; the deploy script on an anvil with chain id 84532 used the real mining rules and handed ownership to `OWNER`; the `world` profile now runs the Map servers on the image's defaults and `pnpm e2e:world` passed; the guide's `docker run --env-file` command hosted Land 5 in the local world, loaded its Mining key from the volume and showed it online; the dashboard ran against the local chain with 54 won Rounds and the world Hub (4 Lands online), and was checked in the browser in light and dark mode. Not done here (needs people or the owner): the Base Sepolia deployment, a public Hub and relay, publishing the image, the D5 choice, and the Done-when criterion of 10 outside Lands connected for a week.
 - 2026-10-29: Phase 1C built on branch `phase-1c/connectivity` (plan: `docs/plans/phase-1c-connectivity.md`, decisions: ADR 0004; the project owner waived the per-step approval gate for this run). `packages/hub-api` (Hono, PostgreSQL via `pg`, PGlite in tests): SIWE sign-in, Delegations signed by the Land owner (EIP-712, checked against `Land.ownerOf`), the Directory with online status read from the relay, Travel tickets (EIP-712, 60 s, adjacency checked from on-chain coordinates), abuse reports and admin hiding. `packages/relay` (Node.js + `ws`): one outbound link per Map server proven with the Mining key, Player HTTP and WebSockets multiplexed over it, per-Land and per-session counters, bounded buffers, and a k6 load test (200 Players, about 2,900 messages/s in and 5,800/s out, p95 202 ms on one laptop). Map servers verify tickets offline and spawn Characters at the arrival Gate; Gates are 2 tiles in the middle of each edge, stored in the map. The client signs in, lists the Directory, enters Lands through the relay, travels through Gates and draws them. One `Dockerfile` and a `world` compose profile run anvil, `hub-api`, the relay and three Map servers in three containers. Verified: `pnpm test` (332), `forge test` (41), Slither 0 findings; `pnpm e2e:world` passed (a Player walks from Land 1 through the east Gate into Land 2 and arrives one tile inside its west Gate; stopping `map-1` shows Land 1 offline after 1.5 s and online again 1.8 s after restart); in the browser a Player signed in, entered Land 1 through the relay, walked to Land 2 and back, and saw "No Land to the north" at an edge with no neighbour. The browser check found that the first build offered "Register" only inside the Land, which the relay refuses until the Land is registered; registration moved to the Land owner's panel (paste the Mining key address the Map server prints), and a fresh Map server container for Land 5 was registered that way, came online, and its owner switched mining on and off through the relay.
