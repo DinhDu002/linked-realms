@@ -1,0 +1,22 @@
+{
+  "name": "@linked-realms/core",
+  "version": "0.0.0",
+  "private": true,
+  "type": "module",
+  "exports": {
+    ".": {
+      "browser": "./src/browser.ts",
+      "default": "./src/node.ts"
+    }
+  },
+  "scripts": {
+    "build": "cargo build -p linked-realms-core --features wasm --target wasm32-unknown-unknown --profile wasm && wasm-bindgen --target web --out-dir pkg ../../target/wasm32-unknown-unknown/wasm/linked_realms_core.wasm",
+    "typecheck": "tsc",
+    "test": "vitest run"
+  },
+  "devDependencies": {
+    "@types/node": "26.6.5",
+    "typescript": "6.0.3",
+    "vitest": "5.0.5"
+  }
+}

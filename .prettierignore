@@ -1,5 +1,8 @@
 *.md
 pnpm-lock.yaml
+target/
+packages/core/pkg/
+crates/**/test-vectors/
 # Generated files (packages/shared/scripts).
 packages/shared/src/abi/
 packages/shared/test-vectors/

@@ -1,0 +1,16 @@
+[workspace]
+resolver = "3"
+members = ["crates/core"]
+
+[workspace.package]
+edition = "2024"
+license = "MIT"
+repository = "https://github.com/DinhDu002/linked-realms"
+publish = false
+
+# The WASM build of crates/core (packages/core): small rather than fast.
+[profile.wasm]
+inherits = "release"
+opt-level = "s"
+lto = true
+codegen-units = 1

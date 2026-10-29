@@ -29,7 +29,7 @@ An address is Bech32m (BIP-350) with the human-readable part `tlr` (the test net
 | 2–33 | `keccak256(scheme id ‖ public key)` |
 
 - keccak256 is the original Keccak with 256-bit output, the variant Ethereum uses, not SHA3-256.
-- An address is always written in lowercase and is about 65 characters long, starting with `tlr1`. Readers reject uppercase, mixed case, another prefix, a bad checksum, a payload of another length, an unknown version or an unknown scheme.
+- An address is always written in lowercase and is about 65 characters long, starting with `tlr1`. Readers reject uppercase, mixed case, another prefix, a Bech32 (not Bech32m) checksum, a bad checksum, a payload of another length, an unknown version, an unknown scheme, or non-zero padding bits in the last 5-bit group. The simplest correct check is to decode, encode again and compare the strings.
 - Two addresses are equal exactly when their strings are equal.
 - When space is short, show `tlr1`, then the first six characters after `tlr1`, `…`, and the last six characters. The first characters after `tlr1` are the same for every scheme-1 address, so they are not enough on their own.
 
@@ -95,5 +95,5 @@ A verifier:
 
 ## Test vectors
 
-- `crates/core/test-vectors/identity.json`: words, the seed, `xi`, the public key and the address for several entropies and indexes, plus one signed statement per context.
+- `crates/core/test-vectors/identity.json`: words, the seed, `xi`, the public key and the address for several entropies and indexes, one signed statement per context, and one invalid address for each rule above.
 - `packages/shared/test-vectors/statements.json`: statements that must parse and statements that must be refused. Refused cases include a repeated key, a missing key, an extra line, a carriage return, U+2028 in a name, a bidi control in a name, a trailing space and an uppercase address.
