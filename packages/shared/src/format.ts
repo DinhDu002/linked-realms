@@ -1,4 +1,4 @@
-// Display formats shared by the client and the indexer's dashboard.
+// Display formats for the client.
 
 const RATE_UNITS = ["H/s", "kH/s", "MH/s", "GH/s", "TH/s"];
 
