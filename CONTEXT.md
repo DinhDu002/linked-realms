@@ -10,6 +10,10 @@ A shared game world stitched together from Lands that players host themselves, j
 One cell of the shared world's grid, which the Hub assigns to a Character that hosts the Land on its own server. What lies inside a Land, and how large it is, is up to its owner. A Character creates at most one Land, and a Land is never transferred. A Land that stays offline too long loses its cell and gets a new one when it returns.
 _Avoid_: realm, map, room, plot
 
+**Cell**:
+One square of the world's grid, numbered along a spiral from the centre. The Hub gives a Land a cell once its Map server is online and takes it back after the Land has been offline too long.
+_Avoid_: tile, slot, plot
+
 **Land owner**:
 The Character that created a Land; it never changes.
 _Avoid_: host, landlord
@@ -31,8 +35,12 @@ A Character that another Character creates to work for it, driven by a program s
 _Avoid_: AI bot, bot, agent
 
 **Shell**:
-The open-source page that holds a Player's keys and shows each Land's own interface in an isolated frame. A Land can only ask the Shell to sign; the Player approves each request in the Shell.
+The open-source page that holds a Player's keys and shows each Land UI in an isolated frame. A Land can only ask the Shell to sign; the Player approves each request in the Shell.
 _Avoid_: wallet (on its own), launcher, portal
+
+**Land UI**:
+A Land's own interface, served by its Map server and shown by the Shell in an isolated frame. It can ask the Shell to sign, but it never holds a key.
+_Avoid_: frontend, Land page
 
 **Quest**:
 A job a Land offers to visiting Characters and NPCs, under that Land's own rules, rewarded in Gold that the Land owner pays.
