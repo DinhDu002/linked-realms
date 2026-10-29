@@ -96,6 +96,7 @@ The Land UI sends `handoff` to its Map server as its first message. How it does 
   - One request may be open at a time.
   - After a refusal, the Shell answers `busy` for 10 seconds.
   - After 3 refusals since the frame loaded, it answers `blocked`.
+  - A cancelled unlock counts as a refusal, whether a `signMessage` or a `travel` asked for it. While those limits hold, the Shell does not ask for the password on this Land's behalf: a `travel` that needs it gets `locked` at once.
 
 **`pay`** is reserved for payments in step 2C. Until then the Shell answers `unsupported`:
 
