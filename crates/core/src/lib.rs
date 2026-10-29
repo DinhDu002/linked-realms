@@ -1,5 +1,5 @@
-//! Keys, signatures and addresses (docs/protocols/identity.md, ADR 0009). The chain rules join
-//! this crate in step 2C; the Node, the Mine and the Shell all use it (P9).
+//! Keys, signatures and addresses (docs/protocols/identity.md, ADR 0009), and the chain rules
+//! (ADR 0011), which the Node, the Mine and the Shell all use (P9).
 
 use core::fmt;
 use core::str::FromStr;
@@ -14,6 +14,10 @@ use sha2::Sha512;
 use sha3::{Digest, Keccak256};
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod codec;
+pub mod issuance;
+pub mod merkle;
+pub mod params;
 #[cfg(feature = "wasm")]
 mod wasm;
 
@@ -23,6 +27,8 @@ pub const SCHEME_ML_DSA_44: u8 = 1;
 pub const ADDRESS_VERSION: u8 = 0;
 /// Human-readable part of addresses on the test network.
 pub const ADDRESS_HRP: &str = "tlr";
+/// An address's bytes: `version ‖ scheme ‖ hash`.
+pub const ADDRESS_LEN: usize = 34;
 pub const PUBLIC_KEY_LEN: usize = ml_dsa_44::PK_LEN;
 pub const SIGNATURE_LEN: usize = ml_dsa_44::SIG_LEN;
 /// Entropy behind a Character's 24 words.
@@ -41,6 +47,10 @@ pub enum Error {
     BadLength,
     /// Contexts are at most 255 bytes (FIPS 204).
     ContextTooLong,
+    /// Bytes ended before the last field.
+    Truncated,
+    /// Bytes left over after the last field.
+    TrailingBytes,
 }
 
 impl fmt::Display for Error {
@@ -51,6 +61,8 @@ impl fmt::Display for Error {
             Error::UnknownScheme => "unknown signature scheme",
             Error::BadLength => "wrong length",
             Error::ContextTooLong => "context longer than 255 bytes",
+            Error::Truncated => "bytes end too early",
+            Error::TrailingBytes => "bytes left over",
         })
     }
 }
@@ -189,19 +201,36 @@ impl Address {
         &self.hash
     }
 
-    fn payload(&self) -> [u8; 34] {
-        let mut payload = [0u8; 34];
-        payload[0] = ADDRESS_VERSION;
-        payload[1] = self.scheme;
-        payload[2..].copy_from_slice(&self.hash);
-        payload
+    /// The bytes on the chain, which are also the Bech32m payload.
+    pub fn to_bytes(&self) -> [u8; ADDRESS_LEN] {
+        let mut bytes = [0u8; ADDRESS_LEN];
+        bytes[0] = ADDRESS_VERSION;
+        bytes[1] = self.scheme;
+        bytes[2..].copy_from_slice(&self.hash);
+        bytes
+    }
+
+    /// Refuses an unknown version or scheme, like the text form.
+    pub fn from_bytes(bytes: &[u8; ADDRESS_LEN]) -> Result<Self, Error> {
+        if bytes[0] != ADDRESS_VERSION {
+            return Err(Error::BadAddress);
+        }
+        if bytes[1] != SCHEME_ML_DSA_44 {
+            return Err(Error::UnknownScheme);
+        }
+        let mut hash = [0u8; 32];
+        hash.copy_from_slice(&bytes[2..]);
+        Ok(Address {
+            scheme: bytes[1],
+            hash,
+        })
     }
 }
 
 impl fmt::Display for Address {
     fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
         let hrp = Hrp::parse_unchecked(ADDRESS_HRP);
-        bech32::encode_lower_to_fmt::<Bech32m, _>(f, hrp, &self.payload()).map_err(|_| fmt::Error)
+        bech32::encode_lower_to_fmt::<Bech32m, _>(f, hrp, &self.to_bytes()).map_err(|_| fmt::Error)
     }
 }
 
@@ -216,23 +245,25 @@ impl FromStr for Address {
             return Err(Error::BadAddress);
         }
         let payload: Vec<u8> = checked.byte_iter().collect();
-        if payload.len() != 34 || payload[0] != ADDRESS_VERSION {
-            return Err(Error::BadAddress);
-        }
-        if payload[1] != SCHEME_ML_DSA_44 {
-            return Err(Error::UnknownScheme);
-        }
-        let mut hash = [0u8; 32];
-        hash.copy_from_slice(&payload[2..]);
-        let address = Address {
-            scheme: payload[1],
-            hash,
-        };
+        let bytes = payload
+            .as_slice()
+            .try_into()
+            .map_err(|_| Error::BadAddress)?;
+        let address = Address::from_bytes(bytes)?;
         if address.to_string() != s {
             return Err(Error::BadAddress);
         }
         Ok(address)
     }
+}
+
+/// keccak256 of `parts` written one after another.
+pub(crate) fn keccak256(parts: &[&[u8]]) -> [u8; 32] {
+    let mut hasher = Keccak256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    hasher.finalize().into()
 }
 
 #[cfg(test)]
@@ -310,6 +341,21 @@ mod tests {
     }
 
     #[test]
+    fn address_bytes_round_trip() {
+        let address = key().address();
+        let bytes = address.to_bytes();
+        assert_eq!(bytes[..2], [ADDRESS_VERSION, SCHEME_ML_DSA_44]);
+        assert_eq!(&bytes[2..], address.hash());
+        assert_eq!(Address::from_bytes(&bytes), Ok(address));
+        let mut version = bytes;
+        version[0] = 1;
+        assert_eq!(Address::from_bytes(&version), Err(Error::BadAddress));
+        let mut scheme = bytes;
+        scheme[1] = 2;
+        assert_eq!(Address::from_bytes(&scheme), Err(Error::UnknownScheme));
+    }
+
+    #[test]
     fn address_rejects_variants() {
         let text = key().address().to_string();
         assert_eq!(
@@ -322,15 +368,15 @@ mod tests {
         assert_eq!(bad_checksum.parse::<Address>(), Err(Error::BadAddress));
         let hrp = Hrp::parse_unchecked("tlx");
         let other_prefix =
-            bech32::encode_lower::<Bech32m>(hrp, &key().address().payload()).unwrap();
+            bech32::encode_lower::<Bech32m>(hrp, &key().address().to_bytes()).unwrap();
         assert_eq!(other_prefix.parse::<Address>(), Err(Error::BadAddress));
         let bech32 = bech32::encode_lower::<bech32::Bech32>(
             Hrp::parse_unchecked(ADDRESS_HRP),
-            &key().address().payload(),
+            &key().address().to_bytes(),
         )
         .unwrap();
         assert_eq!(bech32.parse::<Address>(), Err(Error::BadAddress));
-        let mut payload = key().address().payload();
+        let mut payload = key().address().to_bytes();
         payload[1] = 2;
         let unknown =
             bech32::encode_lower::<Bech32m>(Hrp::parse_unchecked(ADDRESS_HRP), &payload).unwrap();
