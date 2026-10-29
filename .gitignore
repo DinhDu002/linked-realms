@@ -15,3 +15,5 @@ contracts/broadcast/
 
 # Map server Mining keys
 .data/
+packages/shell/test-results/
+packages/shell/playwright-report/

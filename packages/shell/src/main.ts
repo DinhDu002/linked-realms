@@ -1,0 +1,417 @@
+import { ready } from "@linked-realms/core";
+import { shortAddress, type LandInfo } from "@linked-realms/shared";
+import { isName, signStatement } from "@linked-realms/shared/identity";
+import { createAccount } from "./account.ts";
+import { hubHost, hubUrl } from "./config.ts";
+import { el, make } from "./dom.ts";
+import { createFrameHost, type FrameHost } from "./frame.ts";
+import { prepareHandoff } from "./handoff.ts";
+import { createHubClient } from "./hub.ts";
+import { loadRecord, WrongPasswordError } from "./keystore.ts";
+import { errorText, registerErrorText } from "./messages.ts";
+import { createModals } from "./modals.ts";
+import { createPortHandler, type TravelOutcome } from "./portHandler.ts";
+import { planTravel, ticketRefusal } from "./travel.ts";
+import { createVault, LockedError } from "./vault.ts";
+
+const POLL_MS = 10_000;
+
+async function main() {
+  const viewNochar = el("view-nochar");
+  const viewLocked = el("view-locked");
+  const viewHome = el("view-home");
+  const frameArea = el("frame-area");
+  const statusEl = el("status");
+  const retryButton = el<HTMLButtonElement>("retry");
+
+  const record = await loadRecord();
+  if (!record) {
+    viewNochar.hidden = false;
+    return;
+  }
+  await ready;
+
+  const hub = createHubClient(hubUrl);
+  // The frame host needs the modals (to freeze) and the modals need it: tie them lazily.
+  // eslint-disable-next-line prefer-const
+  let frameHost: FrameHost;
+  const modals = createModals((frozen) => frameHost.setFrozen(frozen));
+  const vault = createVault(record, { isBusy: () => modals.isOpen });
+  const account = createAccount({ vault, hub, hubHost });
+
+  // --- Unlocking: the password is asked only here, in the Shell's own modal ---
+
+  const unlockDialog = el<HTMLDialogElement>("unlock");
+  const passwordInput = el<HTMLInputElement>("password");
+  const unlockError = el("unlock-error");
+  const unlockSubmit = el<HTMLButtonElement>("unlock-submit");
+  let unlocking: Promise<boolean> | undefined;
+
+  el("unlock-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    unlockSubmit.disabled = true;
+    unlockError.textContent = "Unlocking…";
+    try {
+      // The page may pause for about a second: Argon2id runs on this thread.
+      await new Promise((r) => setTimeout(r, 0));
+      await vault.unlock(passwordInput.value);
+      passwordInput.value = "";
+      unlockDialog.close("unlocked");
+    } catch (e) {
+      unlockError.textContent =
+        e instanceof WrongPasswordError ? "Wrong password." : errorText(e);
+    } finally {
+      unlockSubmit.disabled = false;
+    }
+  });
+  el("unlock-cancel").addEventListener("click", () =>
+    unlockDialog.close("cancel"),
+  );
+
+  /** True once the Shell is unlocked, asking for the password if needed; false when cancelled. */
+  function ensureUnlocked(): Promise<boolean> {
+    if (vault.unlocked) return Promise.resolve(true);
+    unlocking ??= (async () => {
+      unlockError.textContent = "";
+      passwordInput.value = "";
+      const result = await modals.show(unlockDialog);
+      passwordInput.value = "";
+      return result === "unlocked";
+    })().finally(() => (unlocking = undefined));
+    return unlocking;
+  }
+
+  // --- The Land's frame ---
+
+  function notice(text: string | undefined, retry?: () => void) {
+    statusEl.textContent = text ?? "";
+    retryButton.hidden = !retry;
+    retryButton.onclick = retry ? () => retry() : null;
+    render();
+  }
+
+  async function travelFrom(
+    from: LandInfo,
+    direction: Parameters<typeof planTravel>[2],
+    unlock: () => Promise<boolean>,
+    isCurrent: () => boolean,
+  ): Promise<TravelOutcome> {
+    let plan;
+    try {
+      plan = planTravel(await hub.directory(), from.landId, direction);
+    } catch {
+      return { ok: false, reason: "error" };
+    }
+    if (plan.kind === "no-land") return { ok: false, reason: "no-land" };
+    if (plan.kind === "offline")
+      return { ok: false, reason: "offline", landId: plan.landId };
+    if (plan.kind === "error") return { ok: false, reason: "error" };
+    if (!(await unlock())) return { ok: false, reason: "locked" };
+    try {
+      // Asking first means a refusal leaves the Character where it is.
+      const handoff = await prepareHandoff(
+        { account, hub, vault },
+        plan.land.landId,
+        from.landId,
+      );
+      // The Player left, or the Land reloaded, while the ticket was on its way: stay put.
+      if (!isCurrent()) return { ok: false, reason: "error" };
+      frameHost.open(plan.land, {
+        from: from.landId,
+        prepared: { handoff, at: Date.now() },
+      });
+      render();
+      return { ok: true };
+    } catch (e) {
+      return ticketRefusal(e, plan.land.landId);
+    }
+  }
+
+  frameHost = createFrameHost({
+    area: frameArea,
+    notice,
+    character: () => ({ address: vault.address, name: account.name }),
+    onPortClosed: () => modals.cancelSign(),
+    async prepare(land, from) {
+      if (!(await ensureUnlocked())) throw new LockedError();
+      return prepareHandoff({ account, hub, vault }, land.landId, from);
+    },
+    makeHandler: (land, send, isCurrent) =>
+      createPortHandler({
+        now: Date.now,
+        land: { landId: land.landId, origin: new URL(land.url).origin },
+        character: () => ({ address: vault.address, name: account.name }),
+        send,
+        travel: (direction, unlock) =>
+          travelFrom(land, direction, unlock, isCurrent),
+        isUnlocked: () => vault.unlocked,
+        ensureUnlocked,
+        confirm: (request) => modals.confirmSign(request),
+        sign: (fields) =>
+          vault.withKey((key) => signStatement("land-message", fields, key)),
+      }),
+  });
+
+  async function enter(land: LandInfo) {
+    const directoryStatus = el("directory-status");
+    directoryStatus.textContent = "";
+    try {
+      if (!(await ensureUnlocked())) return;
+      const handoff = await prepareHandoff(
+        { account, hub, vault },
+        land.landId,
+      );
+      frameHost.open(land, { prepared: { handoff, at: Date.now() } });
+      render();
+    } catch (e) {
+      directoryStatus.textContent = `Cannot enter Land ${land.landId}: ${errorText(e)}`;
+    }
+  }
+
+  function leave() {
+    frameHost.close();
+    notice(undefined);
+    void refreshHome();
+  }
+
+  // --- The bar and the views ---
+
+  function render() {
+    const land = frameHost.land;
+    const locked = !vault.unlocked;
+    viewLocked.hidden = !(locked && !land);
+    viewHome.hidden = locked || land !== undefined;
+    frameArea.hidden = land === undefined;
+    el("land-info").hidden = land === undefined;
+    el("report").hidden = el("leave").hidden = land === undefined;
+    el("lock").hidden = locked;
+    el("unlock-button").hidden = !locked;
+    if (land) {
+      el("land-name").textContent =
+        `Land ${land.landId}` +
+        (land.ownerName ? ` · ${land.ownerName}'s Land` : "");
+      el("land-origin").textContent = new URL(land.url).origin;
+    }
+  }
+
+  el("lock").addEventListener("click", () => vault.lock());
+  el("unlock-button").addEventListener("click", () => void ensureUnlocked());
+  el("leave").addEventListener("click", leave);
+  vault.onChange(() => {
+    render();
+    if (vault.unlocked) {
+      // Sign in to the Hub again right away, without asking (flow 2).
+      account
+        .call(async () => undefined)
+        .catch((e) => notice(errorText(e)))
+        .then(refreshHome);
+    } else nameLoaded = false;
+  });
+  for (const type of [
+    "pointerdown",
+    "pointermove",
+    "keydown",
+    "wheel",
+    "touchstart",
+  ])
+    document.addEventListener(type, () => vault.touch(), {
+      capture: true,
+      passive: true,
+    });
+
+  // --- Report (from the Shell's own controls, not from inside the frame) ---
+
+  const reportDialog = el<HTMLDialogElement>("report-dialog");
+  const reportReason = el<HTMLTextAreaElement>("report-reason");
+  const reportError = el("report-error");
+  let reporting: LandInfo | undefined;
+
+  el("report").addEventListener("click", async () => {
+    reporting = frameHost.land;
+    if (!reporting || !(await ensureUnlocked())) return;
+    reportError.textContent = "";
+    reportReason.value = "";
+    await modals.show(reportDialog);
+  });
+  el("report-cancel").addEventListener("click", () =>
+    reportDialog.close("cancel"),
+  );
+  el("report-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    if (!reporting) return;
+    const landId = reporting.landId;
+    const reason = reportReason.value.trim();
+    try {
+      await account.call((token) => hub.report(token, landId, reason));
+      reportDialog.close("sent");
+      notice(`Report on Land ${landId} sent.`);
+    } catch (e) {
+      reportError.textContent = errorText(e);
+    }
+  });
+
+  // --- Home: Character, Directory, Your Land ---
+
+  let nameLoaded = false;
+  const nameInput = el<HTMLInputElement>("name");
+  const nameStatus = el("name-status");
+  const address = record.address;
+  el("character-address").textContent = address;
+  el("character-short").textContent = shortAddress(address);
+  el("owner-address").textContent = address;
+
+  function copyButton(id: string) {
+    const button = el(id);
+    const label = button.textContent;
+    button.addEventListener("click", async () => {
+      await navigator.clipboard.writeText(address);
+      button.textContent = "Copied";
+      setTimeout(() => (button.textContent = label), 1500);
+    });
+  }
+  copyButton("copy-address");
+  copyButton("copy-owner-address");
+
+  el("name-form").addEventListener("submit", async (event) => {
+    event.preventDefault();
+    const name = nameInput.value.trim();
+    if (name === "" || !isName(name)) {
+      nameStatus.textContent =
+        "A name has 1 to 32 characters, without control characters.";
+      return;
+    }
+    try {
+      const saved = await account.call((token) => hub.setName(token, name));
+      account.setName(saved.name);
+      nameInput.value = saved.name;
+      nameStatus.textContent = "Saved.";
+    } catch (e) {
+      nameStatus.textContent = errorText(e);
+    }
+  });
+
+  function renderDirectory(lands: LandInfo[]) {
+    const list = el("directory");
+    list.replaceChildren();
+    if (lands.length === 0) list.append(make("li", "No Land has a cell yet."));
+    for (const land of lands) {
+      const row = make("li");
+      row.append(
+        make("strong", `Land ${land.landId}`),
+        ` · ${land.ownerName || "unnamed"} · cell (${land.x}, ${land.y}) · `,
+        make(
+          "span",
+          land.online ? "online" : "offline",
+          land.online ? "online" : "offline",
+        ),
+        " · ",
+        make("code", new URL(land.url).origin),
+        " ",
+      );
+      const button = make("button", "Enter");
+      button.type = "button";
+      button.setAttribute("aria-label", `Enter Land ${land.landId}`);
+      button.addEventListener("click", () => void enter(land));
+      row.append(button);
+      list.append(row);
+    }
+  }
+
+  async function refreshDirectory() {
+    const status = el("directory-status");
+    try {
+      renderDirectory((await hub.directory()).lands);
+      if (status.textContent === "Cannot reach the Hub.")
+        status.textContent = "";
+    } catch {
+      status.textContent = "Cannot reach the Hub.";
+    }
+  }
+
+  async function register(mapServerKey: string) {
+    const status = el("register-status");
+    status.textContent = "Registering…";
+    try {
+      const delegation = vault.withKey((key) =>
+        signStatement(
+          "delegation",
+          {
+            hub: hubHost,
+            owner: address,
+            mapServerKey,
+            issued: Math.floor(Date.now() / 1000),
+          },
+          key,
+        ),
+      );
+      await hub.createLand(delegation);
+      status.textContent = "";
+    } catch (e) {
+      status.textContent = registerErrorText(e);
+    }
+    await refreshYourLand();
+  }
+
+  async function refreshYourLand() {
+    const landStatus = el("land-status");
+    const list = el("map-servers");
+    try {
+      const [land, offers] = await Promise.all([
+        hub.landOf(address),
+        account.call((token) => hub.mapServers(token, address)),
+      ]);
+      landStatus.textContent = !land
+        ? "You have no Land yet."
+        : `Your Land is Land ${land.landId} at ${land.url}. ` +
+          (land.x === null
+            ? "It has no cell yet: it gets one once its Map server is online. "
+            : `Its cell is (${land.x}, ${land.y}). `) +
+          (land.online ? "It is online." : "It is offline.");
+      list.replaceChildren();
+      if (offers.mapServers.length === 0)
+        list.append(
+          make(
+            "li",
+            "No Map server is waiting. Start one with LAND_OWNER set to your address.",
+          ),
+        );
+      for (const offer of offers.mapServers) {
+        const row = make("li");
+        row.append(make("code", offer.mapServerKey), " ");
+        const button = make("button", land ? "Use this one" : "Register");
+        button.type = "button";
+        button.setAttribute(
+          "aria-label",
+          `${land ? "Use" : "Register"} Map server ${shortAddress(offer.mapServerKey)}`,
+        );
+        button.addEventListener(
+          "click",
+          () => void register(offer.mapServerKey),
+        );
+        row.append(button);
+        list.append(row);
+      }
+    } catch (e) {
+      if (!(e instanceof LockedError)) landStatus.textContent = errorText(e);
+    }
+  }
+
+  async function refreshHome() {
+    if (!vault.unlocked || frameHost.land) return;
+    void refreshDirectory();
+    await refreshYourLand();
+    if (!nameLoaded && vault.token) {
+      nameLoaded = true;
+      nameInput.value = account.name;
+    }
+  }
+  el("refresh-directory").addEventListener("click", () => void refreshHome());
+  setInterval(() => void refreshHome(), POLL_MS);
+
+  render();
+  void ensureUnlocked();
+}
+
+main().catch((e) => {
+  el("status").textContent = errorText(e);
+});

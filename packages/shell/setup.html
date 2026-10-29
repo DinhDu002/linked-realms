@@ -1,0 +1,120 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>linked-realms Shell setup</title>
+    <link rel="stylesheet" href="/src/shell.css" />
+  </head>
+  <body>
+    <header id="bar">
+      <strong>Shell setup</strong>
+      <span class="spacer"></span>
+      <a href="/">Back to the Shell</a>
+      <p id="warning">
+        Setup is the only page that asks for your 24 words. It never shows a
+        Land.
+      </p>
+    </header>
+
+    <main>
+      <section id="existing" hidden>
+        <h2>A Character is already stored in this browser</h2>
+        <p>Its address is <code id="existing-address"></code>.</p>
+        <p>
+          Creating or restoring a Character here replaces it. Without its 24
+          words it is lost.
+        </p>
+        <label>
+          <input id="replace" type="checkbox" />
+          Replace the stored Character
+        </label>
+      </section>
+
+      <section id="choose">
+        <h1>Set up your Character</h1>
+        <p>
+          Your Character is a key that stays in this browser, locked with a
+          password. The 24 words are its only backup.
+        </p>
+        <button id="choose-create" type="button">Create a new Character</button>
+        <button id="choose-restore" type="button">Restore from 24 words</button>
+      </section>
+
+      <section id="step-words" hidden>
+        <h2>Write down your 24 words</h2>
+        <p>
+          Anyone with these words controls your Character. Keep them on paper,
+          in order, and show them to nobody.
+        </p>
+        <ol id="words" aria-label="Words to write down"></ol>
+        <button id="words-next" type="button">I wrote them down</button>
+        <button id="words-cancel" type="button">Cancel</button>
+      </section>
+
+      <section id="step-confirm" hidden>
+        <h2>Confirm your words</h2>
+        <form id="create-form">
+          <div id="confirm-fields"></div>
+          <label for="create-password">Password</label>
+          <input
+            id="create-password"
+            type="password"
+            autocomplete="new-password"
+            required
+          />
+          <label for="create-password2">Repeat the password</label>
+          <input
+            id="create-password2"
+            type="password"
+            autocomplete="new-password"
+            required
+          />
+          <p id="create-error" role="alert"></p>
+          <button id="confirm-back" type="button">Show the words again</button>
+          <button id="create-submit" type="submit">Create Character</button>
+        </form>
+      </section>
+
+      <section id="step-restore" hidden>
+        <h2>Restore a Character</h2>
+        <form id="restore-form">
+          <label for="restore-words">Your 24 words</label>
+          <textarea
+            id="restore-words"
+            rows="4"
+            autocomplete="off"
+            autocapitalize="none"
+            spellcheck="false"
+            required
+          ></textarea>
+          <label for="restore-password">Password</label>
+          <input
+            id="restore-password"
+            type="password"
+            autocomplete="new-password"
+            required
+          />
+          <label for="restore-password2">Repeat the password</label>
+          <input
+            id="restore-password2"
+            type="password"
+            autocomplete="new-password"
+            required
+          />
+          <p id="restore-error" role="alert"></p>
+          <button id="restore-cancel" type="button">Cancel</button>
+          <button id="restore-submit" type="submit">Restore Character</button>
+        </form>
+      </section>
+
+      <section id="done" hidden>
+        <h2>Your Character is ready</h2>
+        <p>Its address is <code id="done-address"></code>.</p>
+        <p><a href="/">Open the Shell</a></p>
+      </section>
+    </main>
+
+    <script type="module" src="/src/setup.ts"></script>
+  </body>
+</html>
