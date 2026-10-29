@@ -21,6 +21,7 @@ const db = createPool(config.databaseUrl, log);
 await migrate(db);
 
 const client = createPublicClient({ transport: http(config.rpcUrl) });
+const bundlerUrl = config.bundlerUrl;
 const deployment = deploymentFor(config.chainId);
 
 /** A reverted call means "no such Land"; any other failure (RPC down) is rethrown. */
@@ -85,6 +86,21 @@ const app = createApp({
     return body.lands as number[];
   },
   ticketSigner: privateKeyToAccount(config.ticketKey),
+  bundler: bundlerUrl
+    ? async (request) => {
+        const res = await fetch(bundlerUrl, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(request),
+          signal: AbortSignal.timeout(15_000),
+        });
+        if (!res.ok) throw new Error(`bundler answered ${res.status}`);
+        const body: unknown = await res.json();
+        if (typeof body !== "object" || body === null)
+          throw new Error("bundler returned an unexpected body");
+        return body;
+      }
+    : undefined,
   now: Date.now,
   log,
 });

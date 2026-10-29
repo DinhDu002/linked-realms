@@ -13,6 +13,8 @@ export interface Config {
   siweDomain: string;
   admins: Address[];
   allowedOrigins: string[];
+  /** ERC-4337 bundler + ERC-7677 paymaster endpoint (CDP); its URL holds an API key. Unset: no sponsorship. */
+  bundlerUrl?: string;
 }
 
 function integer(
@@ -84,5 +86,8 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     siweDomain: env.HUB_SIWE_DOMAIN || "localhost:5173",
     admins,
     allowedOrigins: list(env, "HUB_ALLOWED_ORIGINS"),
+    bundlerUrl: env.HUB_BUNDLER_URL
+      ? url(env, "HUB_BUNDLER_URL", "")
+      : undefined,
   };
 }

@@ -145,6 +145,10 @@ export function createHub(options: HubOptions) {
   const base = options.baseUrl.replace(/\/+$/, "");
   const doFetch = options.fetch ?? fetch;
   let token: string | undefined;
+  let expiresAt = 0;
+  // a minute's margin: a sponsored transaction makes several calls with one session
+  const signedIn = () =>
+    token !== undefined && Date.now() < (expiresAt - 60) * 1000;
 
   async function request(
     method: "GET" | "POST",
@@ -188,7 +192,13 @@ export function createHub(options: HubOptions) {
   }
 
   return {
-    signedIn: () => token !== undefined,
+    signedIn,
+
+    /** The session header for calls the Hub forwards (sponsored user operations). */
+    authorization(): string {
+      if (!signedIn()) throw new HubError("sign in to the Hub first");
+      return `Bearer ${token}`;
+    },
 
     /** SIWE: the wallet signs a message that names this site; the token stays in memory. */
     async signIn(
@@ -210,6 +220,7 @@ export function createHub(options: HubOptions) {
         await request("POST", "/auth/verify", { message, signature }),
       );
       token = session.token;
+      expiresAt = session.expiresAt;
       return session;
     },
 

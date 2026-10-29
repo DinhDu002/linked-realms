@@ -1,13 +1,23 @@
 import { PGlite } from "@electric-sql/pglite";
 import { sign } from "hono/jwt";
 import {
+  createPublicClient,
+  custom,
+  encodeFunctionData,
+  parseAbi,
   recoverTypedDataAddress,
+  toHex,
   verifyMessage,
   verifyTypedData,
   type Address,
   type Hex,
 } from "viem";
 import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
+import {
+  entryPoint06Address,
+  toCoinbaseSmartAccount,
+} from "viem/account-abstraction";
+import { foundry } from "viem/chains";
 import {
   createSiweMessage,
   parseSiweMessage,
@@ -18,7 +28,13 @@ import {
   DelegationTypes,
   type DirectoryLand,
   HUB_EIP712_DOMAIN,
+  SPONSORED_TRANSACTIONS_PER_DAY,
+  SPONSORED_TRANSACTIONS_PER_PLAYER_PER_DAY,
   TravelTicketTypes,
+  deploymentFor,
+  goldTokenAbi,
+  landAbi,
+  playerRegistryAbi,
   parseWireTicket,
   verifyTravelTicket,
 } from "@linked-realms/shared";
@@ -55,6 +71,9 @@ let relayDown: boolean;
 let chainDown: boolean;
 let logs: string[];
 let onlineCalls: number;
+let bundled: { method: string; params: unknown[] }[];
+let bundlerResult: (method: string) => unknown;
+let deps: Deps;
 let app: ReturnType<typeof createApp>;
 
 function pglite(): Db {
@@ -75,7 +94,9 @@ beforeEach(async () => {
   chainDown = false;
   logs = [];
   onlineCalls = 0;
-  const deps: Deps = {
+  bundled = [];
+  bundlerResult = () => "0x01";
+  deps = {
     config: {
       chainId: CHAIN_ID,
       siweDomain: DOMAIN,
@@ -114,6 +135,10 @@ beforeEach(async () => {
       return online;
     },
     ticketSigner: hubKey,
+    async bundler({ id, method, params }) {
+      bundled.push({ method, params });
+      return { jsonrpc: "2.0", id, result: bundlerResult(method) };
+    },
     now: () => nowMs,
     log: (m) => logs.push(m),
   };
@@ -200,7 +225,7 @@ describe("migrations", () => {
     await migrate(db);
     await migrate(db);
     const { rows } = await db.query("SELECT id FROM migration");
-    expect(rows).toHaveLength(1);
+    expect(rows).toHaveLength(2);
   });
 });
 
@@ -230,6 +255,9 @@ describe("config", () => {
       /HUB_ADMINS/,
     );
     expect(() => loadConfig({ ...good, PORT: "99999" })).toThrow(/PORT/);
+    expect(() =>
+      loadConfig({ ...good, HUB_BUNDLER_URL: "SECRETKEY not a url" }),
+    ).toThrow(/^HUB_BUNDLER_URL is not a valid URL$/);
   });
 });
 
@@ -822,5 +850,267 @@ describe("hardening", () => {
       headers: { Origin: "https://game.test" },
     });
     expect(r.headers.get("vary")).toContain("Origin");
+  });
+});
+
+describe("sponsored user operations", () => {
+  const { PlayerRegistry, Land, GoldToken } = deploymentFor(CHAIN_ID);
+  const PER_PLAYER = SPONSORED_TRANSACTIONS_PER_PLAYER_PER_DAY;
+  // every account below is given its address; eth_getCode answers "not deployed yet"
+  const reader = createPublicClient({
+    chain: foundry,
+    transport: custom({ request: async () => "0x" }),
+  });
+  const createCall = {
+    to: PlayerRegistry.address,
+    data: encodeFunctionData({
+      abi: playerRegistryAbi,
+      functionName: "createCharacter",
+    }),
+  };
+  const designCall = {
+    to: Land.address,
+    data: encodeFunctionData({
+      abi: landAbi,
+      functionName: "setDesignHash",
+      args: [1n, toHex(1, { size: 32 })],
+    }),
+  };
+  const transferCall = {
+    to: GoldToken.address,
+    data: encodeFunctionData({
+      abi: goldTokenAbi,
+      functionName: "transfer",
+      args: [stranger.address, 1n],
+    }),
+  };
+  const addOwnerData = encodeFunctionData({
+    abi: parseAbi(["function addOwnerPublicKey(bytes32 x, bytes32 y)"]),
+    functionName: "addOwnerPublicKey",
+    args: [toHex(1, { size: 32 }), toHex(2, { size: 32 })],
+  });
+
+  /** A v0.6 user operation as viem's bundler client sends it, from a Coinbase account at `sender`'s address (the session's). */
+  async function userOp(
+    sender: Account,
+    calls: { to: Address; data: Hex; value?: bigint }[],
+    deployed = true,
+  ) {
+    const account = await toCoinbaseSmartAccount({
+      client: reader,
+      owners: [sender],
+      version: "1.1",
+      address: sender.address,
+    });
+    const { factory, factoryData } = await account.getFactoryArgs();
+    return {
+      sender: sender.address,
+      nonce: "0x0",
+      initCode: deployed ? "0x" : `${factory}${factoryData?.slice(2)}`,
+      callData: await account.encodeCalls(calls),
+      callGasLimit: "0x1",
+      verificationGasLimit: "0x1",
+      preVerificationGas: "0x1",
+      maxFeePerGas: "0x1",
+      maxPriorityFeePerGas: "0x1",
+      paymasterAndData: "0x",
+      signature: "0x",
+    };
+  }
+
+  function rpc(token: string, method: string, params: unknown) {
+    return req("POST", "/aa", {
+      token,
+      body: { jsonrpc: "2.0", id: 7, method, params },
+    });
+  }
+  const pmData = (token: string, op: unknown) =>
+    rpc(token, "pm_getPaymasterData", [
+      op,
+      entryPoint06Address,
+      toHex(CHAIN_ID),
+      {},
+    ]);
+  async function counts() {
+    return (
+      await db.query<{ identity: string; count: number }>(
+        "SELECT identity, count FROM sponsorship ORDER BY identity",
+      )
+    ).rows;
+  }
+
+  it("forwards a new Player's createCharacter() through every step and counts one sponsorship", async () => {
+    const token = await signIn(noCharacter);
+    const op = await userOp(noCharacter, [createCall], false);
+    const steps: [string, unknown[]][] = [
+      ["pm_getPaymasterStubData", [op, entryPoint06Address, toHex(CHAIN_ID)]],
+      ["eth_estimateUserOperationGas", [op, entryPoint06Address]],
+      ["pm_getPaymasterData", [op, entryPoint06Address, toHex(CHAIN_ID)]],
+      ["eth_sendUserOperation", [op, entryPoint06Address]],
+      ["eth_getUserOperationReceipt", [toHex(1, { size: 32 })]],
+    ];
+    for (const [method, params] of steps) {
+      const res = await rpc(token, method, params);
+      expect(res.status).toBe(200);
+      expect(res.json).toEqual({ jsonrpc: "2.0", id: 7, result: "0x01" });
+    }
+    expect(bundled).toEqual(
+      steps.map(([method, params]) => ({ method, params })),
+    );
+    expect(await counts()).toEqual([
+      { identity: "*", count: 1 },
+      { identity: noCharacter.address.toLowerCase(), count: 1 },
+    ]);
+  });
+
+  it("sponsors Land.setDesignHash and a backup passkey on the Player's own account, batched", async () => {
+    const token = await signIn(player);
+    const op = await userOp(player, [
+      designCall,
+      { to: player.address, data: addOwnerData },
+    ]);
+    expect((await pmData(token, op)).status).toBe(200);
+  });
+
+  it("refuses calls that are not sponsored, before reaching the bundler", async () => {
+    const token = await signIn(player);
+    const refused = [
+      [transferCall],
+      [designCall, transferCall],
+      [{ ...designCall, value: 1n }],
+      [],
+      // a backup owner for someone else's account
+      [{ to: stranger.address, data: addOwnerData }],
+      [{ to: Land.address, data: "0x" as Hex }],
+    ];
+    for (const calls of refused) {
+      const res = await pmData(token, await userOp(player, calls));
+      expect(res.status).toBe(403);
+      expect(res.json.error).toBe("only game calls are sponsored");
+    }
+    const op = await userOp(player, [designCall]);
+    expect(
+      (await pmData(token, { ...op, callData: "0xdeadbeef" })).status,
+    ).toBe(403);
+    expect(bundled).toEqual([]);
+  });
+
+  it("refuses another sender, factory, EntryPoint or chain, other methods and malformed params", async () => {
+    const token = await signIn(player);
+    const op = await userOp(player, [designCall]);
+    const statuses = [
+      await pmData(token, { ...op, sender: stranger.address }),
+      await pmData(token, { ...op, initCode: `0x${"ab".repeat(20)}00` }),
+      await rpc(token, "pm_getPaymasterData", [
+        op,
+        stranger.address,
+        toHex(CHAIN_ID),
+      ]),
+      await rpc(token, "pm_getPaymasterData", [
+        op,
+        entryPoint06Address,
+        toHex(1),
+      ]),
+      await rpc(token, "eth_sendRawTransaction", ["0x00"]),
+      await rpc(token, "eth_getUserOperationReceipt", "0x00"),
+      await pmData(token, "not an object"),
+    ].map((r) => r.status);
+    expect(statuses).toEqual([403, 403, 400, 400, 400, 400, 400]);
+    expect(bundled).toEqual([]);
+  });
+
+  it("refuses a second Character, so a reverting operation is never paid for", async () => {
+    const token = await signIn(player);
+    const res = await pmData(token, await userOp(player, [createCall]));
+    expect(res.status).toBe(409);
+    expect(bundled).toEqual([]);
+  });
+
+  it("requires a session and a configured bundler", async () => {
+    expect((await req("POST", "/aa", { body: {} })).status).toBe(401);
+    app = createApp({ ...deps, bundler: undefined });
+    const res = await rpc(await signIn(player), "eth_getUserOperationReceipt", [
+      toHex(1, { size: 32 }),
+    ]);
+    expect(res.status).toBe(503);
+  });
+
+  it(`allows ${PER_PLAYER} sponsored operations per Player per UTC day`, async () => {
+    const op = await userOp(player, [designCall]);
+    const token = await signIn(player);
+    for (let i = 0; i < PER_PLAYER; i++)
+      expect((await pmData(token, op)).status).toBe(200);
+    const refused = await pmData(token, op);
+    expect(refused.status).toBe(429);
+    expect(refused.json.error).toMatch(/limit reached/);
+    // another Player is not affected
+    const other = await signIn(owner1);
+    expect(
+      (await pmData(other, await userOp(owner1, [designCall]))).status,
+    ).toBe(200);
+    // the next UTC day (the session token is checked against the real clock, so it stays valid)
+    nowMs += 86_400_000;
+    expect((await pmData(token, op)).status).toBe(200);
+  });
+
+  it("stops at the world's daily budget, gives the Player's count back and logs once", async () => {
+    const day = Math.floor(nowMs / 86_400_000);
+    await db.query(
+      "INSERT INTO sponsorship (identity, day, count) VALUES ('*', $1, $2)",
+      [day, SPONSORED_TRANSACTIONS_PER_DAY],
+    );
+    const token = await signIn(player);
+    const op = await userOp(player, [designCall]);
+    for (let i = 0; i < 2; i++) {
+      const res = await pmData(token, op);
+      expect(res.status).toBe(429);
+      expect(res.json.error).toMatch(/budget/);
+    }
+    expect(await counts()).toContainEqual({
+      identity: player.address.toLowerCase(),
+      count: 0,
+    });
+    expect(logs.filter((l) => l.includes("budget"))).toHaveLength(1);
+    expect(bundled).toEqual([]);
+  });
+
+  it("counts a paymaster stub only when it is marked final (ERC-7677)", async () => {
+    const token = await signIn(player);
+    const op = await userOp(player, [designCall]);
+    const stub = () =>
+      rpc(token, "pm_getPaymasterStubData", [
+        op,
+        entryPoint06Address,
+        toHex(CHAIN_ID),
+      ]);
+    bundlerResult = () => ({ paymasterAndData: "0x01" });
+    await stub();
+    expect(await counts()).toEqual([]);
+    bundlerResult = () => ({ paymasterAndData: "0x01", isFinal: true });
+    await stub();
+    expect(await counts()).toContainEqual({
+      identity: player.address.toLowerCase(),
+      count: 1,
+    });
+  });
+
+  it("passes bundler errors through and hides transport failures", async () => {
+    const token = await signIn(player);
+    const receipt = () =>
+      rpc(token, "eth_getUserOperationReceipt", [toHex(1, { size: 32 })]);
+    deps.bundler = async ({ id }) => ({
+      jsonrpc: "2.0",
+      id,
+      error: { code: -32500, message: "AA21 didn't pay prefund" },
+    });
+    expect((await receipt()).json.error.message).toBe(
+      "AA21 didn't pay prefund",
+    );
+    deps.bundler = async () => {
+      throw new Error("fetch https://api.test/rpc/v1/base-sepolia/SECRETKEY");
+    };
+    const res = await receipt();
+    expect(res.status).toBe(502);
+    expect(logs.join("\n")).not.toContain("SECRETKEY");
   });
 });
