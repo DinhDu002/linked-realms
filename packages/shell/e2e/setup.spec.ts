@@ -60,6 +60,23 @@ test.describe("Setup", () => {
     ).toBe(0);
   });
 
+  test("shows its choices only once they work, even on a slow network", async ({
+    page,
+  }) => {
+    let release!: () => void;
+    const loaded = new Promise<void>((resolve) => (release = resolve));
+    await page.route("**/*.wasm", async (route) => {
+      await loaded;
+      await route.continue();
+    });
+    await page.goto("/setup.html");
+    const create = page.getByRole("button", { name: "Create a new Character" });
+    await expect(page.locator("#choose")).toBeHidden();
+    release();
+    await create.click();
+    await expect(page.locator("#words li")).toHaveCount(24);
+  });
+
   test("refuses a wrong confirmation word and a weak password", async ({
     page,
   }) => {

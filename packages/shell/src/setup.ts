@@ -197,6 +197,9 @@ async function main() {
       restored?.fill(0);
     }
   }
+
+  // Hidden until now: a click before the listeners exist would do nothing.
+  show("choose");
 }
 
 main().catch((e) => {
