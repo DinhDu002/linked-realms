@@ -394,7 +394,8 @@ export const NoticeSchema: GenMessage<Notice> = /*@__PURE__*/
  */
 export type Error = Message<"linked_realms.land.v1.Error"> & {
   /**
-   * An arrival.md code, or "full", "duplicate", "rate-limited" or "bad-message".
+   * An arrival.md code, or "full", "duplicate", "rate-limited", "bad-message", or
+   * "unavailable" while the Map server does not yet know its Land.
    *
    * @generated from field: string code = 1;
    */

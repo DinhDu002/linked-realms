@@ -15,8 +15,8 @@
     "load-host": "node scripts/load-host.ts"
   },
   "dependencies": {
+    "@linked-realms/core": "workspace:*",
     "@linked-realms/shared": "workspace:*",
-    "viem": "2.57.12",
     "ws": "8.22.0"
   },
   "devDependencies": {

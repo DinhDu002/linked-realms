@@ -1,94 +1,98 @@
-import { readFileSync } from "node:fs";
-import {
-  Miner,
-  createMinerChain,
-  loadOrCreateMiningKey,
-} from "@linked-realms/miner";
+import { existsSync, readFileSync } from "node:fs";
 import { connectHost } from "@linked-realms/relay/agent";
 import { parseLandMap } from "@linked-realms/shared";
-import { createPublicClient, http, numberToHex } from "viem";
-import { createChain } from "./chain.ts";
 import { loadConfig } from "./config.ts";
-import { reportMiningKey } from "./miningKey.ts";
-import { createServer } from "./server.ts";
+import {
+  awaitLand,
+  findLand,
+  postStatement,
+  registerMapServer,
+} from "./hub.ts";
+import { createLandServer } from "./land.ts";
+import { loadOrCreateMapServerKey } from "./mapServerKey.ts";
 
 async function main(): Promise<void> {
   const config = loadConfig();
   const mapText = readFileSync(config.mapFile, "utf8");
   const map = parseLandMap(mapText); // P6: validate even our own file
-  const chain = createChain(config.rpcUrl, config.chainId);
-  const land = await chain.landInfo(config.landId).catch((cause: unknown) => {
-    throw new Error(
-      `Land ${config.landId} not found on chain ${config.chainId}`,
-      {
-        cause,
-      },
+  const { key, created } = loadOrCreateMapServerKey(config.mapServerKeyFile);
+  if (!existsSync(config.landUiDir))
+    console.warn(
+      `WARNING: LAND_UI_DIR ${config.landUiDir} does not exist: the Land UI will answer 503 (build it with "pnpm --filter @linked-realms/client build")`,
     );
-  });
 
-  // P2: the Mining key only pays fees; rewards go to the Land owner.
-  const key = loadOrCreateMiningKey(config.miningKeyFile);
-  const mining = new Miner({
-    chain: createMinerChain({
-      rpcUrl: config.rpcUrl,
-      chainId: config.chainId,
-      privateKey: key.privateKey,
-    }),
-    rewardWallet: land.owner,
-    maxThreads: config.miningMaxThreads,
-    log: console.log,
-  });
-  const rpc = createPublicClient({ transport: http(config.rpcUrl) });
-  await reportMiningKey(
-    {
-      getChainId: () => rpc.getChainId(),
-      getBalance: (args) => rpc.getBalance(args),
-      setBalance: async (address, wei) => {
-        await rpc.request({
-          method: "anvil_setBalance" as never,
-          params: [address, numberToHex(wei)] as never,
-        });
-      },
-    },
-    config.chainId,
-    key.address,
-    key.created,
-  );
-
-  const server = createServer({
-    landId: config.landId,
+  const server = createLandServer({
     map,
     mapText,
-    land,
-    hubSigner: config.hubTicketSigner,
-    chainId: config.chainId,
-    mining,
+    hubTicketSigner: config.hubTicketSigner,
+    landUiDir: config.landUiDir,
   });
-  // Workers must not outlive the server, even if the process is slow to exit.
-  server.onShutdown(() => mining.stop());
+  const stop = new AbortController();
+  let host: { close(): Promise<void> } | undefined;
+  let stopping: Promise<void> | undefined;
+  const shutdown = () => {
+    stopping ??= (async () => {
+      stop.abort();
+      await host?.close();
+      await server.close();
+    })();
+    return stopping;
+  };
+  for (const signal of ["SIGINT", "SIGTERM"] as const)
+    process.once(signal, () => {
+      console.log(`${signal}: shutting down`);
+      shutdown().then(
+        () => process.exit(0),
+        (error: unknown) => {
+          console.error(error);
+          process.exit(1);
+        },
+      );
+    });
+
   await server.listen(config.port, config.host);
-  console.log(
-    `Map server for Land ${config.landId} (owner ${land.owner}) at ws://${config.host}:${config.port}`,
-  );
+  console.log(`Map server listening on http://${config.host}:${config.port}`);
   console.log(`Accepting Travel tickets signed by ${config.hubTicketSigner}`);
+
+  const repost = () => postStatement(config, key, console.log);
+  await registerMapServer(repost, console.log, stop.signal);
+  console.log(
+    [
+      "",
+      `Map server key ${created ? "created" : "loaded"}: ${key.address}`,
+      `Next, the Land owner (${config.landOwner}) signs a Delegation for this Map server key under "Your Land" in the Shell.`,
+      "Waiting for the Hub to create the Land...",
+      "",
+    ].join("\n"),
+  );
+
+  const land = await awaitLand({
+    find: () => findLand(config, key.address),
+    repost,
+    owner: config.landOwner,
+    log: console.log,
+    signal: stop.signal,
+  });
+  if (!land) return; // shutting down
+  server.setLand(land);
+  console.log(`Serving Land ${land.landId} (owner ${land.owner})`);
+
   if (config.relayUrl) {
-    const host = connectHost({
+    host = connectHost({
       relayUrl: config.relayUrl,
-      landId: config.landId,
-      privateKey: key.privateKey,
+      landId: land.landId,
+      mapServerKey: key,
       localPort: config.port,
       log: console.log,
     });
-    server.onShutdown(() => host.close());
     console.log(
-      `Reachable through the relay at ${config.relayUrl} (once the Land owner registers the Mining key with the Hub), and directly on ${config.host}:${config.port}`,
+      `Reachable through the relay at ${config.relayUrl} at ${land.url}, and directly on ${config.host}:${config.port}`,
     );
   } else {
     console.log(
       "RELAY_URL is not set: reachable only directly, not through the relay",
     );
   }
-  // Colyseus handles SIGINT/SIGTERM itself (gracefullyShutdown defaults to true).
 }
 
 main().catch((error: unknown) => {

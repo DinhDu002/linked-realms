@@ -9,23 +9,22 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { Duplex } from "node:stream";
-import {
-  isAddress,
-  isAddressEqual,
-  recoverMessageAddress,
-  type Address,
-} from "viem";
+import { isAddress } from "@linked-realms/core";
+import { verifyStatement } from "@linked-realms/shared/identity";
+import type { LandInfo } from "@linked-realms/shared";
 import { WebSocket, WebSocketServer } from "ws";
 import {
   HOST_MAX_PAYLOAD,
+  HTTP_RESPONSE_LIMIT,
   KIND_BINARY,
   MAX_HEADER_VALUE,
+  MAX_UNAUTHENTICATED_FRAME,
   KIND_TEXT,
   decodeFrame,
   encodeFrame,
-  hostHelloMessage,
   isForwardMethod,
   isForwardPath,
+  isRelayedResponseHeader,
   parseControl,
   rawToBuffer,
   sendableCloseCode,
@@ -34,8 +33,16 @@ import {
 } from "./protocol.ts";
 
 export interface RelayOptions {
-  /** hub-api base URL; the relay reads Delegations from `<hubUrl>/directory/<landId>`. */
+  /** hub-api base URL; the relay reads Lands from `<hubUrl>/lands/<landId>`. */
   hubUrl: string;
+  /** This relay's host as Map servers dial it; default "localhost:8080". */
+  relayHost?: string;
+  /** Lands are served at `<landId>.<landBaseDomain>`; default "localhost:8080". */
+  landBaseDomain?: string;
+  /** Origins that may frame a Land. */
+  shellOrigins?: string[];
+  /** Largest frame a Player may send; default 16 KiB. */
+  playerMaxFrame?: number;
   maxClientsPerLand?: number;
   maxHosts?: number;
   /** Timings, overridable for tests. */
@@ -44,9 +51,9 @@ export interface RelayOptions {
   httpTimeoutMs?: number;
 }
 
-// Frames from a Player are capped above Colyseus's 4,096-byte maxPayload (PLAN.md 3.5 rule 7).
-const PLAYER_MAX_PAYLOAD = 16 * 1024;
 const CLIENT_BUFFER_LIMIT = 1024 * 1024;
+/** A browser this far behind on a response loses it. */
+const RESPONSE_BACKLOG_LIMIT = 4 * 1024 * 1024;
 const HOST_BUFFER_LIMIT = 4 * 1024 * 1024;
 const HTTP_BODY_LIMIT = 64 * 1024;
 const HELLO_TIMEOUT_MS = 10_000;
@@ -54,11 +61,6 @@ const HUB_TIMEOUT_MS = 5_000;
 /** Host links that have connected but not yet authenticated. */
 const MAX_UNAUTHENTICATED_HOSTS = 100;
 const MAX_PENDING_REQUESTS = 256;
-
-// Only these Map server response headers are relayed. A Map server is not trusted: no cookies,
-// redirects or framing headers. Colyseus needs the content type and its CORS headers.
-const RELAYED_RESPONSE_HEADERS =
-  /^(?:content-type|cache-control|vary|retry-after|access-control-[a-z-]+)$/;
 
 interface Counters {
   bytesIn: number; // Player -> Land
@@ -81,27 +83,32 @@ interface Session extends Counters {
   unanswered: number;
 }
 
-type HttpOutcome =
-  Extract<ControlMessage, { t: "http-response" }> | "timeout" | "dropped";
+/** A Player HTTP request waiting for, or receiving, its response from the Map server. */
+interface Exchange {
+  res: ServerResponse;
+  /** The 504 timer until the response starts, then an idle timer between body chunks. */
+  timer: NodeJS.Timeout;
+  received: number;
+  responding: boolean;
+}
 
 interface Host {
   landId: number;
-  miningKey: Address;
+  mapServerKey: string;
   ws: WebSocket;
   counters: Counters;
   streams: Map<number, Session>;
-  requests: Map<number, (outcome: HttpOutcome) => void>;
-  nextStream: number;
-  nextRequest: number;
+  requests: Map<number, Exchange>;
+  /** One counter for HTTP ids and stream ids, so they never collide. */
+  nextId: number;
   unanswered: number;
 }
 
 type Auth =
-  | { ok: true; miningKey: Address }
+  | { ok: true; mapServerKey: string }
   | { ok: false; code: number; reason: string };
 
-const LAND_ID = /^(?:0|[1-9]\d{0,14})$/;
-const ROOM_SEGMENT = /^[A-Za-z0-9_-]{1,64}$/;
+const LAND_ID = /^[1-9]\d{0,14}$/;
 
 function splitTarget(url: string): { pathname: string; search: string } {
   const q = url.indexOf("?");
@@ -110,9 +117,14 @@ function splitTarget(url: string): { pathname: string; search: string } {
     : { pathname: url.slice(0, q), search: url.slice(q) };
 }
 
-function rejectUpgrade(socket: Duplex, status: number, message: string): void {
+function rejectUpgrade(
+  socket: Duplex,
+  status: number,
+  message: string,
+  extraHeaders = "",
+): void {
   socket.end(
-    `HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nConnection: close\r\n` +
+    `HTTP/1.1 ${status} ${STATUS_CODES[status]}\r\nConnection: close\r\n${extraHeaders}` +
       `Content-Type: text/plain\r\nContent-Length: ${Buffer.byteLength(message)}\r\n\r\n${message}`,
   );
 }
@@ -149,7 +161,7 @@ function readBody(
   });
 }
 
-/** The request headers a Map server may see; undefined when one is too large for the host link. Authorization is never forwarded: it would hand a Hub session to a Map server. */
+/** The request headers a Map server may see; undefined when one is too large for the host link. Authorization and cookies are never forwarded: they would hand a Hub session to a Map server. */
 function forwardedHeaders(req: IncomingMessage): HttpHeaders | undefined {
   const out: HttpHeaders = {};
   for (const [name, value] of Object.entries(req.headers)) {
@@ -157,7 +169,10 @@ function forwardedHeaders(req: IncomingMessage): HttpHeaders | undefined {
     if (
       name === "content-type" ||
       name === "accept" ||
+      name === "accept-encoding" ||
       name === "origin" ||
+      name === "if-none-match" ||
+      name === "if-modified-since" ||
       name.startsWith("access-control-request-")
     ) {
       const values = Array.isArray(value) ? value : [value];
@@ -170,9 +185,14 @@ function forwardedHeaders(req: IncomingMessage): HttpHeaders | undefined {
 
 export function createRelay(options: RelayOptions): Server {
   const hubUrl = options.hubUrl.replace(/\/+$/, "");
+  const relayHost = options.relayHost ?? "localhost:8080";
+  const landSuffix = `.${options.landBaseDomain ?? "localhost:8080"}`;
   const maxClientsPerLand = options.maxClientsPerLand ?? 64;
   const maxHosts = options.maxHosts ?? 1000;
   const httpTimeoutMs = options.httpTimeoutMs ?? 30_000;
+  // Sent with every response on a Land host: Lands load only inside the operator's Shells.
+  const frameAncestors = `frame-ancestors ${options.shellOrigins?.length ? options.shellOrigins.join(" ") : "'none'"}`;
+  const landHeaders = `Content-Security-Policy: ${frameAncestors}\r\nX-Content-Type-Options: nosniff\r\n`;
 
   const hosts = new Map<number, Host>();
   const landCounters = new Map<number, Counters>();
@@ -186,30 +206,45 @@ export function createRelay(options: RelayOptions): Server {
   const playerWss = new WebSocketServer({
     noServer: true,
     perMessageDeflate: false,
-    maxPayload: PLAYER_MAX_PAYLOAD,
+    maxPayload: options.playerMaxFrame ?? 16 * 1024,
   });
 
-  /** The Delegation's Mining key; null when the Land is not in the Directory (unknown or hidden); undefined when the Hub cannot be reached. */
-  async function lookupMiningKey(
+  /** The Land the request's Host names: `<landId>.<landBaseDomain>`, decimal without leading zeros. */
+  function landOf(req: IncomingMessage): number | undefined {
+    const host = req.headers.host?.toLowerCase();
+    if (!host?.endsWith(landSuffix)) return undefined;
+    const label = host.slice(0, -landSuffix.length);
+    if (!LAND_ID.test(label)) return undefined;
+    const id = Number(label);
+    return Number.isSafeInteger(id) ? id : undefined;
+  }
+
+  /** A short page for the relay's own answers on a Land host; it names nothing about the Land. */
+  function landPage(res: ServerResponse, status: number, message: string) {
+    const body = `<!doctype html><meta charset="utf-8"><title>${status}</title><h1>${status} ${STATUS_CODES[status]}</h1><p>${message}</p>`;
+    res.writeHead(status, {
+      "content-security-policy": frameAncestors,
+      "x-content-type-options": "nosniff",
+      "content-type": "text/html; charset=utf-8",
+      "content-length": Buffer.byteLength(body),
+    });
+    res.end(body);
+  }
+
+  /** The Land from the Hub; null when unknown or hidden; undefined when the Hub cannot be reached. */
+  async function lookupLand(
     landId: number,
-  ): Promise<Address | null | undefined> {
+  ): Promise<LandInfo | null | undefined> {
     try {
-      const res = await fetch(`${hubUrl}/directory/${landId}`, {
+      const res = await fetch(`${hubUrl}/lands/${landId}`, {
         signal: AbortSignal.timeout(HUB_TIMEOUT_MS),
       });
       if (res.status === 404) return null;
       if (!res.ok) return undefined;
-      const body = (await res.json()) as {
-        landId?: unknown;
-        miningKey?: unknown;
-      };
-      if (
-        body.landId !== landId ||
-        typeof body.miningKey !== "string" ||
-        !isAddress(body.miningKey, { strict: false })
-      )
+      const body = (await res.json()) as Partial<LandInfo>;
+      if (body.landId !== landId || !isAddress(String(body.mapServerKey)))
         return undefined;
-      return body.miningKey;
+      return body as LandInfo;
     } catch {
       return undefined;
     }
@@ -234,12 +269,28 @@ export function createRelay(options: RelayOptions): Server {
     else session.client.close(sendableCloseCode(code));
   }
 
+  /** Ends a Player HTTP request early: an error page before the response starts, a cut connection after. */
+  function failExchange(
+    host: Host,
+    id: number,
+    exchange: Exchange,
+    status: number,
+    message: string,
+  ): void {
+    if (host.requests.get(id) !== exchange) return;
+    host.requests.delete(id);
+    clearTimeout(exchange.timer);
+    if (exchange.responding) exchange.res.destroy();
+    else landPage(exchange.res, status, message);
+  }
+
   /** Forgets a host link and closes everything riding on it. Safe to call twice. */
   function dropHost(host: Host): void {
     if (hosts.get(host.landId) === host) hosts.delete(host.landId);
     for (const session of [...host.streams.values()])
       closeSession(host, session, 1001, false);
-    for (const settle of [...host.requests.values()]) settle("dropped");
+    for (const [id, exchange] of [...host.requests])
+      failExchange(host, id, exchange, 502, "The Land went offline.");
   }
 
   function closeHost(host: Host, code: number, reason: string): void {
@@ -247,36 +298,35 @@ export function createRelay(options: RelayOptions): Server {
     host.ws.close(code, reason);
   }
 
+  /** Checks a hello (docs/protocols/map-server-hub-relay.md): the statement, then the Land's key at the Hub. */
   async function authenticate(
     landId: number,
     nonce: string,
-    signature: `0x${string}`,
+    hello: unknown,
   ): Promise<Auth> {
-    let signer: Address;
+    const refused = (reason: string): Auth => ({
+      ok: false,
+      code: 4401,
+      reason,
+    });
+    let verified;
     try {
-      signer = await recoverMessageAddress({
-        message: hostHelloMessage(landId, nonce),
-        signature,
-      });
+      verified = verifyStatement(hello, "relay-host");
     } catch {
-      return { ok: false, code: 4401, reason: "bad signature" };
+      return refused("bad hello statement");
     }
-    const key = await lookupMiningKey(landId);
-    if (key === undefined)
+    const { fields, address } = verified;
+    if (fields.relay !== relayHost) return refused("hello names another relay");
+    if (fields.land !== landId) return refused("hello names another Land");
+    if (fields.nonce !== nonce)
+      return refused("hello does not answer the challenge");
+    const land = await lookupLand(landId);
+    if (land === undefined)
       return { ok: false, code: 1013, reason: "Hub unavailable, retry later" };
-    if (key === null)
-      return {
-        ok: false,
-        code: 4404,
-        reason: "Land is not in the Directory (unknown or hidden)",
-      };
-    if (!isAddressEqual(signer, key))
-      return {
-        ok: false,
-        code: 4403,
-        reason: "signer is not the Land's delegated Mining key",
-      };
-    return { ok: true, miningKey: key };
+    if (land === null) return refused("unknown or hidden Land");
+    if (address !== land.mapServerKey)
+      return refused("signer is not the Land's Map server key");
+    return { ok: true, mapServerKey: land.mapServerKey };
   }
 
   function acceptHost(
@@ -327,46 +377,51 @@ export function createRelay(options: RelayOptions): Server {
       if (host) dropHost(host);
     });
     ws.on("message", (data, isBinary) => {
-      try {
-        if (state === "hello") {
-          const hello = isBinary
-            ? undefined
-            : parseControl(rawToBuffer(data).toString("utf8"));
-          if (hello?.t !== "hello") throw new Error("expected hello");
-          state = "verifying";
-          clearTimeout(helloTimer);
-          void authenticate(
+      const frame = rawToBuffer(data);
+      if (state !== "ready") {
+        // Before ready: one hello, at most 16 KiB, nothing else.
+        let hello: ControlMessage | undefined;
+        try {
+          if (
+            state === "hello" &&
+            !isBinary &&
+            frame.length <= MAX_UNAUTHENTICATED_FRAME
+          )
+            hello = parseControl(frame.toString("utf8"));
+        } catch {
+          // refused below
+        }
+        if (hello?.t !== "hello") return refuse(4401, "expected a hello");
+        state = "verifying";
+        clearTimeout(helloTimer);
+        void authenticate(landId, nonce, hello).then((auth) => {
+          if (ws.readyState !== WebSocket.OPEN) return;
+          if (!auth.ok) return refuse(auth.code, auth.reason);
+          const old = hosts.get(landId);
+          if (!old && hosts.size >= maxHosts)
+            return refuse(1013, "relay is full");
+          if (old) closeHost(old, 4409, "replaced by a newer link");
+          let counters = landCounters.get(landId);
+          if (!counters) landCounters.set(landId, (counters = newCounters()));
+          host = {
             landId,
-            nonce,
-            hello.signature as `0x${string}`,
-          ).then((auth) => {
-            if (ws.readyState !== WebSocket.OPEN) return;
-            if (!auth.ok) return refuse(auth.code, auth.reason);
-            const old = hosts.get(landId);
-            if (!old && hosts.size >= maxHosts)
-              return refuse(1013, "relay is full");
-            if (old) closeHost(old, 4409, "replaced by a newer link");
-            let counters = landCounters.get(landId);
-            if (!counters) landCounters.set(landId, (counters = newCounters()));
-            host = {
-              landId,
-              miningKey: auth.miningKey,
-              ws,
-              counters,
-              streams: new Map(),
-              requests: new Map(),
-              nextStream: 1,
-              nextRequest: 1,
-              unanswered: 0,
-            };
-            hosts.set(landId, host);
-            release();
-            state = "ready";
-            sendControl(host, { t: "ready" });
-          });
-        } else if (host) {
-          onHostMessage(host, rawToBuffer(data), isBinary);
-        } else throw new Error("not authenticated yet");
+            mapServerKey: auth.mapServerKey,
+            ws,
+            counters,
+            streams: new Map(),
+            requests: new Map(),
+            nextId: 1,
+            unanswered: 0,
+          };
+          hosts.set(landId, host);
+          release();
+          state = "ready";
+          sendControl(host, { t: "ready" });
+        });
+        return;
+      }
+      try {
+        onHostMessage(host!, frame, isBinary);
       } catch {
         refuse(1008, "protocol error");
       }
@@ -377,6 +432,9 @@ export function createRelay(options: RelayOptions): Server {
   function onHostMessage(host: Host, data: Buffer, isBinary: boolean): void {
     if (isBinary) {
       const frame = decodeFrame(data);
+      const exchange = host.requests.get(frame.stream);
+      if (exchange)
+        return onBodyChunk(host, frame.stream, exchange, frame.payload);
       const session = host.streams.get(frame.stream);
       if (!session) return; // closed on our side meanwhile
       if (session.client.bufferedAmount > CLIENT_BUFFER_LIMIT)
@@ -391,11 +449,90 @@ export function createRelay(options: RelayOptions): Server {
       return;
     }
     const message = parseControl(data.toString("utf8"));
-    if (message.t === "http-response") host.requests.get(message.id)?.(message);
+    if (message.t === "http-response") onHttpResponse(host, message);
+    else if (message.t === "http-end") onHttpEnd(host, message);
     else if (message.t === "close") {
       const session = host.streams.get(message.stream);
       if (session) closeSession(host, session, message.code, false);
     } else throw new Error("unexpected message");
+  }
+
+  // An answer for an id that timed out or was dropped meanwhile is ignored, as is a second answer.
+  function onHttpResponse(
+    host: Host,
+    message: Extract<ControlMessage, { t: "http-response" }>,
+  ): void {
+    const exchange = host.requests.get(message.id);
+    if (!exchange || exchange.responding) return;
+    const { res } = exchange;
+    try {
+      const landCsp: string[] = [];
+      for (const [name, value] of Object.entries(message.headers)) {
+        const lower = name.toLowerCase();
+        if (lower === "content-security-policy")
+          landCsp.push(...[value].flat());
+        else if (isRelayedResponseHeader(lower)) res.setHeader(lower, value);
+      }
+      // Two headers: browsers enforce both, so a Land can only tighten the policy.
+      res.setHeader("content-security-policy", [frameAncestors, ...landCsp]);
+      res.setHeader("x-content-type-options", "nosniff");
+      res.writeHead(message.status);
+    } catch {
+      // Invalid status or header values from the Map server.
+      for (const name of res.getHeaderNames()) res.removeHeader(name);
+      return failExchange(
+        host,
+        message.id,
+        exchange,
+        502,
+        "Invalid response from the Land.",
+      );
+    }
+    exchange.responding = true;
+    exchange.timer.refresh();
+  }
+
+  function onBodyChunk(
+    host: Host,
+    id: number,
+    exchange: Exchange,
+    payload: Buffer,
+  ): void {
+    if (!exchange.responding) return; // data before http-response: ignored
+    exchange.received += payload.length;
+    if (
+      exchange.received > HTTP_RESPONSE_LIMIT ||
+      exchange.res.writableLength > RESPONSE_BACKLOG_LIMIT
+    )
+      return failExchange(host, id, exchange, 502, "");
+    host.counters.bytesOut += payload.length;
+    host.counters.messagesOut++;
+    exchange.res.write(payload);
+    exchange.timer.refresh();
+  }
+
+  function onHttpEnd(
+    host: Host,
+    message: Extract<ControlMessage, { t: "http-end" }>,
+  ): void {
+    const exchange = host.requests.get(message.id);
+    if (!exchange) return;
+    if (!exchange.responding || message.aborted)
+      return failExchange(
+        host,
+        message.id,
+        exchange,
+        502,
+        "Invalid response from the Land.",
+      );
+    host.requests.delete(message.id);
+    clearTimeout(exchange.timer);
+    // The exchange no longer counts towards MAX_PENDING_REQUESTS, but up to the backlog limit
+    // may still wait for the browser: a browser that reads nothing for this long loses it.
+    // ponytail: untested, like the backlog limit: on loopback the kernel buffers several MB, so
+    // a test cannot hold a response in the relay; an end-to-end test with a throttled reader can.
+    exchange.res.setTimeout(httpTimeoutMs, () => exchange.res.destroy());
+    exchange.res.end();
   }
 
   function acceptPlayer(
@@ -403,26 +540,27 @@ export function createRelay(options: RelayOptions): Server {
     socket: Duplex,
     head: Buffer,
     landId: number,
-    path: string,
   ): void {
+    const path = req.url ?? "/";
     if (!isForwardPath(path))
-      return rejectUpgrade(socket, 414, "path not allowed");
+      return rejectUpgrade(socket, 414, "path not allowed", landHeaders);
     const host = hosts.get(landId);
-    if (!host) return rejectUpgrade(socket, 503, "Land is offline");
+    if (!host)
+      return rejectUpgrade(socket, 503, "Land is offline", landHeaders);
     if (host.streams.size >= maxClientsPerLand)
-      return rejectUpgrade(socket, 503, "Land is full");
+      return rejectUpgrade(socket, 503, "Land is full", landHeaders);
     playerWss.handleUpgrade(req, socket, head, (client) => {
       client.on("error", () => {}); // "close" follows
       if (hosts.get(landId) !== host)
         return client.close(1001, "Land went offline");
-      // ponytail: 32-bit ids wrap after 4 billion streams on one link; a collision needs one that old to be alive
+      // ponytail: 32-bit ids wrap after 4 billion ids on one link; a collision needs one that old to be alive
       const session: Session = {
-        id: host.nextStream,
+        id: host.nextId,
         client,
         unanswered: 0,
         ...newCounters(),
       };
-      host.nextStream = (host.nextStream + 1) >>> 0;
+      host.nextId = (host.nextId + 1) >>> 0;
       host.streams.set(session.id, session);
       sendControl(host, { t: "open", stream: session.id, path });
       client.on("message", (data, isBinary) => {
@@ -447,20 +585,18 @@ export function createRelay(options: RelayOptions): Server {
     req: IncomingMessage,
     res: ServerResponse,
     landId: number,
-    path: string,
   ): Promise<void> {
     const method = req.method ?? "GET";
+    const path = req.url ?? "/";
     if (!isForwardMethod(method))
-      return sendJson(res, 405, { error: "method not allowed" });
-    if (!isForwardPath(path))
-      return sendJson(res, 414, { error: "path not allowed" });
+      return landPage(res, 405, "Method not allowed.");
+    if (!isForwardPath(path)) return landPage(res, 414, "Path not allowed.");
     const headers = forwardedHeaders(req);
-    if (!headers)
-      return sendJson(res, 431, { error: "request header too large" });
+    if (!headers) return landPage(res, 431, "Request header too large.");
     const host = hosts.get(landId);
-    if (!host) return sendJson(res, 503, { error: "Land is offline" });
+    if (!host) return landPage(res, 503, "This Land is offline.");
     if (host.requests.size >= MAX_PENDING_REQUESTS)
-      return sendJson(res, 503, { error: "Land is busy" });
+      return landPage(res, 503, "This Land is busy.");
     const declared = Number(req.headers["content-length"] ?? 0);
     const body =
       declared > HTTP_BODY_LIMIT
@@ -468,56 +604,49 @@ export function createRelay(options: RelayOptions): Server {
         : await readBody(req, HTTP_BODY_LIMIT);
     if (!body) {
       res.setHeader("connection", "close");
-      return sendJson(res, 413, { error: "request body too large" });
+      return landPage(res, 413, "Request body too large.");
     }
     if (hosts.get(landId) !== host)
-      return sendJson(res, 503, { error: "Land is offline" });
+      return landPage(res, 503, "This Land is offline.");
+    // again: other requests may have started while this body was read
+    if (host.requests.size >= MAX_PENDING_REQUESTS)
+      return landPage(res, 503, "This Land is busy.");
 
-    const id = host.nextRequest++;
-    const outcome = await new Promise<HttpOutcome>((resolve) => {
-      const timer = setTimeout(() => settle("timeout"), httpTimeoutMs);
-      const settle = (result: HttpOutcome) => {
-        clearTimeout(timer);
-        host.requests.delete(id);
-        resolve(result);
-      };
-      host.requests.set(id, settle);
-      sendControl(host, {
-        t: "http",
-        id,
-        method,
-        path,
-        headers,
-        body: body.toString("base64"),
-      });
+    const id = host.nextId;
+    host.nextId = (host.nextId + 1) >>> 0;
+    const exchange: Exchange = {
+      res,
+      timer: setTimeout(
+        () =>
+          failExchange(
+            host,
+            id,
+            exchange,
+            504,
+            "The Land did not answer in time.",
+          ),
+        httpTimeoutMs,
+      ),
+      received: 0,
+      responding: false,
+    };
+    host.requests.set(id, exchange);
+    // The browser went away: stop waiting.
+    res.on("close", () => {
+      if (host.requests.get(id) !== exchange) return;
+      host.requests.delete(id);
+      clearTimeout(exchange.timer);
     });
-    if (outcome === "timeout")
-      return sendJson(res, 504, { error: "Map server timed out" });
-    if (outcome === "dropped")
-      return sendJson(res, 502, { error: "Land went offline" });
-
-    const payload = Buffer.from(outcome.body, "base64");
     host.counters.bytesIn += body.length;
     host.counters.messagesIn++;
-    host.counters.bytesOut += payload.length;
-    host.counters.messagesOut++;
-    try {
-      for (const [name, value] of Object.entries(outcome.headers))
-        if (RELAYED_RESPONSE_HEADERS.test(name.toLowerCase()))
-          res.setHeader(name, value);
-      res.setHeader("x-content-type-options", "nosniff");
-      // Whatever a Map server returns must never run as a page on the relay's origin.
-      res.setHeader("content-security-policy", "sandbox; default-src 'none'");
-      res.setHeader("content-length", payload.length);
-      res.writeHead(outcome.status);
-    } catch {
-      // Invalid status or header values from the Map server.
-      for (const name of res.getHeaderNames()) res.removeHeader(name);
-      return sendJson(res, 502, {
-        error: "invalid response from the Map server",
-      });
-    }
-    res.end(payload);
+    sendControl(host, {
+      t: "http",
+      id,
+      method,
+      path,
+      headers,
+      body: body.toString("base64"),
+    });
   }
 
   function stats() {
@@ -543,49 +672,38 @@ export function createRelay(options: RelayOptions): Server {
   }
 
   const server = createServer((req, res) => {
-    const { pathname, search } = splitTarget(req.url ?? "/");
-    const land = /^\/land\/((?:0|[1-9]\d{0,14}))(\/.*)?$/.exec(pathname);
+    const landId = landOf(req);
     let work: Promise<void> | undefined;
-    if (land)
-      work = forward(req, res, Number(land[1]), (land[2] ?? "/") + search);
-    else if (req.method === "GET" && pathname === "/health") {
-      res.writeHead(200, { "content-type": "text/plain" });
-      res.end("ok");
-    } else if (req.method === "GET" && pathname === "/online")
-      sendJson(res, 200, { lands: [...hosts.keys()].sort((a, b) => a - b) });
-    else if (req.method === "GET" && pathname === "/stats")
-      sendJson(res, 200, stats());
-    else sendJson(res, 404, { error: "not found" });
+    if (landId !== undefined) work = forward(req, res, landId);
+    else {
+      const { pathname } = splitTarget(req.url ?? "/");
+      if (req.method === "GET" && pathname === "/health") {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.end("ok");
+      } else if (req.method === "GET" && pathname === "/online")
+        sendJson(res, 200, { lands: [...hosts.keys()].sort((a, b) => a - b) });
+      else if (req.method === "GET" && pathname === "/stats")
+        sendJson(res, 200, stats());
+      else sendJson(res, 404, { error: "not found" });
+    }
     Promise.resolve(work).catch(() => {
       if (res.headersSent) res.destroy();
+      else if (landId !== undefined) landPage(res, 500, "Internal error.");
       else sendJson(res, 500, { error: "internal error" });
     });
   });
 
   server.on("upgrade", (req, socket, head) => {
     socket.on("error", () => {});
-    const { pathname, search } = splitTarget(req.url ?? "/");
-    const parts = pathname.split("/"); // ["", "host", "<id>"] or ["", "land", "<id>", process, room]
+    const landId = landOf(req);
+    if (landId !== undefined) return acceptPlayer(req, socket, head, landId);
+    const parts = splitTarget(req.url ?? "/").pathname.split("/"); // ["", "host", "<id>"]
     if (
       parts[1] === "host" &&
       parts.length === 3 &&
       LAND_ID.test(parts[2] ?? "")
     )
       return acceptHost(req, socket, head, Number(parts[2]));
-    if (
-      parts[1] === "land" &&
-      parts.length === 5 &&
-      LAND_ID.test(parts[2] ?? "") &&
-      ROOM_SEGMENT.test(parts[3] ?? "") &&
-      ROOM_SEGMENT.test(parts[4] ?? "")
-    )
-      return acceptPlayer(
-        req,
-        socket,
-        head,
-        Number(parts[2]),
-        `/${parts[3]}/${parts[4]}${search}`,
-      );
     rejectUpgrade(socket, 404, "not found");
   });
 
@@ -610,13 +728,13 @@ export function createRelay(options: RelayOptions): Server {
     }
   }, options.pingIntervalMs ?? 15_000);
 
-  // A Delegation can change or a Land can be hidden while its link is up. A Hub outage keeps links.
+  // The Map server key can change or a Land can be hidden while its link is up. A Hub outage keeps links.
   const rechecker = setInterval(() => {
     for (const host of [...hosts.values()])
-      void lookupMiningKey(host.landId).then((key) => {
-        if (key === undefined || hosts.get(host.landId) !== host) return;
-        if (key === null || !isAddressEqual(key, host.miningKey))
-          closeHost(host, 4403, "Delegation changed or Land hidden");
+      void lookupLand(host.landId).then((land) => {
+        if (land === undefined || hosts.get(host.landId) !== host) return;
+        if (land === null || land.mapServerKey !== host.mapServerKey)
+          closeHost(host, 4403, "Map server key changed or Land hidden");
       });
   }, options.recheckIntervalMs ?? 30_000);
 

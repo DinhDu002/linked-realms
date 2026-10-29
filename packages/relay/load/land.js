@@ -1,16 +1,18 @@
 /* global __ENV, console, setInterval, setTimeout, clearInterval -- k6 runtime globals */
 // k6 load test for the relay (PLAN.md section 3.5 rule 8). Opens VUS Player WebSockets to a
-// Land linked by scripts/load-host.ts and exchanges about 20 messages per second each way:
+// Land (`Host: <LAND>.<LAND_BASE_DOMAIN>`) linked by scripts/load-host.ts and exchanges about 20 messages per second each way:
 // every Player sends a 100-byte message each 50 ms (the host echoes it, which gives the
 // round-trip latency), and the host broadcasts 100 bytes to every Player at 20 Hz.
 //
-//   k6 run -e RELAY_WS=ws://host.docker.internal:8080 -e LAND=1 -e VUS=200 -e SECONDS=30 -e RAMP_SECONDS=10 land.js
+//   k6 run -e RELAY_WS=ws://host.docker.internal:8080 -e LAND=1 -e LAND_BASE_DOMAIN=localhost:8080 -e VUS=200 -e SECONDS=30 -e RAMP_SECONDS=10 land.js
 import { WebSocket } from "k6/websockets";
 import { Counter, Trend } from "k6/metrics";
 import { sleep } from "k6";
 
 const RELAY_WS = __ENV.RELAY_WS || "ws://127.0.0.1:8080";
 const LAND = __ENV.LAND || "1";
+// *.localhost does not resolve inside Docker, so connect to RELAY_WS and name the Land in Host.
+const LAND_BASE_DOMAIN = __ENV.LAND_BASE_DOMAIN || "localhost:8080";
 const VUS = Number(__ENV.VUS || 200);
 const SECONDS = Number(__ENV.SECONDS || 30);
 // Players join spread over this window: a burst of hundreds of connects overflows the listen
@@ -42,7 +44,9 @@ export const options = {
 
 export default function () {
   sleep(Math.random() * RAMP_SECONDS);
-  const ws = new WebSocket(`${RELAY_WS}/land/${LAND}/load/room`);
+  const ws = new WebSocket(`${RELAY_WS}/play`, null, {
+    headers: { Host: `${LAND}.${LAND_BASE_DOMAIN}` },
+  });
   ws.onopen = () => {
     const timer = setInterval(() => {
       ws.send(`e|${Date.now()}|`.padEnd(PAYLOAD_BYTES, "x"));

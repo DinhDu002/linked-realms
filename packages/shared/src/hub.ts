@@ -208,6 +208,15 @@ export interface LandInfo {
   online: boolean;
 }
 
+/**
+ * An address as Players see it next to a name: `tlr1`, then the first 6 and the last 6 of the
+ * characters that differ between addresses (every address starts `tlr1qqq`). Payments show the
+ * full address.
+ */
+export function shortAddress(address: string): string {
+  return `tlr1${address.slice(7, 13)}…${address.slice(-6)}`;
+}
+
 /** `GET /directory`: the Lands that have a cell. */
 export interface LandDirectory {
   lands: (LandInfo & { x: number; y: number })[];

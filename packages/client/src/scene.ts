@@ -1,78 +1,98 @@
-// The Land in Phaser. Thin glue: logic lives in tiles.ts, input.ts, interpolate.ts, format.ts.
+// The Land in Phaser. Thin glue: logic lives in tiles.ts, input.ts, interpolate.ts, players.ts.
 import Phaser from "phaser";
 import {
   CHARACTER_HALF_SIZE_PX,
   DIRECTIONS,
   gateOf,
-  Messages,
   parseLandMap,
   type Direction,
   type LandMap,
-  type LandMessage,
-  type MiningStateShape,
-  type PlayerStateShape,
 } from "@linked-realms/shared";
-import type { Room } from "@colyseus/sdk";
-import { shortAddress } from "./format.ts";
+import type { ServerMessage } from "@linked-realms/shared/land-protocol";
 import { createInputDiffer } from "./input.ts";
 import { approach } from "./interpolate.ts";
-import { readMining } from "./mining.ts";
-import { readPlayer } from "./players.ts";
+import {
+  characterLabel,
+  characterMarks,
+  readCharacter,
+  type CharacterState,
+} from "./players.ts";
 import { paintGround } from "./tiles.ts";
 
-interface PlayerView {
+interface CharacterView {
   body: Phaser.GameObjects.Container;
   target: { x: number; y: number };
 }
 
+export interface SceneLink {
+  /** Sends the walking direction (each of dx, dy in -1, 0, 1) with a growing seq. */
+  send(dx: number, dy: number, seq: number): void;
+  /** Called every frame with the Gate the Character stands on, by the server's position. */
+  onGate(gate: Direction | undefined): void;
+  hud(text: string): void;
+  notice(text: string): void;
+  onMapError(message: string): void;
+}
+
 export class LandScene extends Phaser.Scene {
-  private readonly players = new Map<string, PlayerView>();
+  private readonly characters = new Map<number, CharacterState>();
+  private readonly views = new Map<number, CharacterView>();
   private readonly differ = createInputDiffer();
   private keys?: Record<string, Phaser.Input.Keyboard.Key>;
   private pendingTiled?: string;
-  private land?: LandMessage;
+  private landId?: bigint;
+  private selfId?: number;
   private map?: LandMap;
   private mapDrawn = false;
   private ready = false;
-
-  private readonly room: Room;
-  private readonly hud: (text: string) => void;
-  private readonly onMapError: (message: string) => void;
-  private readonly onGate: (
-    gate: Direction | undefined,
-    land: LandMessage,
-  ) => void;
+  private seq = 0;
   private following = false;
   private hudText = "";
-  private miningKey = "";
-  private readonly onMining: (
-    mining: MiningStateShape | undefined,
-    isOwner: boolean,
-  ) => void;
 
-  constructor(
-    room: Room,
-    hud: (text: string) => void,
-    onMining: (mining: MiningStateShape | undefined, isOwner: boolean) => void,
-    onMapError: (message: string) => void,
-    onGate: (gate: Direction | undefined, land: LandMessage) => void,
-  ) {
+  private readonly link: SceneLink;
+
+  constructor(link: SceneLink) {
     super("land");
-    this.room = room;
-    this.hud = hud;
-    this.onMining = onMining;
-    this.onMapError = onMapError;
-    this.onGate = onGate;
+    this.link = link;
   }
 
-  /** Called with the Messages.map payload. */
-  setMap(tiled: string): void {
-    this.pendingTiled = tiled;
-    if (this.ready) this.drawMap();
+  /** Applies one decoded message from the Map server. */
+  handle(message: ServerMessage): void {
+    const m = message.message;
+    switch (m.case) {
+      case "welcome": {
+        this.selfId = m.value.you;
+        this.landId = m.value.land?.landId;
+        this.characters.clear();
+        for (const c of m.value.characters) this.addCharacter(c);
+        this.pendingTiled = m.value.map;
+        if (this.ready) this.drawMap();
+        break;
+      }
+      case "joined":
+        this.addCharacter(m.value);
+        break;
+      case "left":
+        this.characters.delete(m.value.id);
+        break;
+      case "moved":
+        for (const p of m.value.positions) {
+          const c = this.characters.get(p.id);
+          if (c && Number.isFinite(p.x) && Number.isFinite(p.y)) {
+            c.x = p.x;
+            c.y = p.y;
+          }
+        }
+        break;
+      case "notice":
+        this.link.notice(m.value.text);
+        break;
+    }
   }
 
-  setLand(land: LandMessage): void {
-    this.land = land;
+  private addCharacter(raw: unknown): void {
+    const c = readCharacter(raw);
+    if (c) this.characters.set(c.id, c);
   }
 
   create(): void {
@@ -90,8 +110,9 @@ export class LandScene extends Phaser.Scene {
       // P6: never render a map that has not been validated.
       map = parseLandMap(this.pendingTiled);
     } catch (error) {
-      this.onMapError(error instanceof Error ? error.message : String(error));
-      void this.room.leave();
+      this.link.onMapError(
+        error instanceof Error ? error.message : String(error),
+      );
       return;
     }
     this.mapDrawn = true;
@@ -127,26 +148,27 @@ export class LandScene extends Phaser.Scene {
 
   update(_time: number, deltaMs: number): void {
     this.sendInput();
-    this.syncPlayers();
-    for (const [id, view] of this.players) {
+    this.syncViews();
+    for (const [id, view] of this.views) {
       view.body.x = approach(view.body.x, view.target.x, deltaMs);
       view.body.y = approach(view.body.y, view.target.y, deltaMs);
-      if (id === this.room.sessionId && !this.following) {
-        this.following = true;
-        this.cameras.main.startFollow(view.body, true, 0.15, 0.15);
+      if (id === this.selfId) {
+        if (!this.following) {
+          this.following = true;
+          this.cameras.main.startFollow(view.body, true, 0.15, 0.15);
+        }
+        // the server's position decides, not the interpolated sprite
+        if (this.map) this.link.onGate(gateOf(this.map, view.target));
       }
-      // the server's position decides, not the interpolated sprite
-      if (id === this.room.sessionId && this.map && this.land)
-        this.onGate(gateOf(this.map, view.target), this.land);
     }
-    const coords = this.land ? ` (${this.land.x}, ${this.land.y})` : "";
-    const hud = `Land ${this.land?.landId ?? "…"}${coords} · ${this.players.size} player(s)`;
-    if (hud !== this.hudText) this.hud((this.hudText = hud));
+    const hud = `Land ${this.landId ?? "…"} · ${this.characters.size} Character(s)`;
+    if (hud !== this.hudText) this.link.hud((this.hudText = hud));
   }
 
   private sendInput(): void {
     const k = this.keys;
-    if (!k) return;
+    // Before welcome the socket may not be open yet: a key held now is sent once it is.
+    if (!k || this.selfId === undefined) return;
     const down = (...names: string[]) => names.some((n) => k[n]?.isDown);
     const input = this.differ.next({
       up: down("W", "UP"),
@@ -154,63 +176,62 @@ export class LandScene extends Phaser.Scene {
       left: down("A", "LEFT"),
       right: down("D", "RIGHT"),
     });
-    if (input) this.room.send(Messages.input, input);
+    if (input)
+      this.link.send(
+        Number(input.right) - Number(input.left),
+        Number(input.down) - Number(input.up),
+        ++this.seq,
+      );
   }
 
-  /** Mirrors room.state.players into game objects (polled; the state is tiny). */
-  private syncPlayers(): void {
-    const state = this.room.state as
-      { players?: Map<string, unknown>; mining?: unknown } | undefined;
-    const seen = new Set<string>();
-    let isOwner = false;
-    state?.players?.forEach((raw, id) => {
-      const p = readPlayer(raw);
-      if (!p) return;
-      seen.add(id);
-      if (id === this.room.sessionId) isOwner = p.isOwner;
-      const view = this.players.get(id);
-      if (view) {
-        view.target = { x: p.x, y: p.y };
-      } else {
-        this.players.set(id, this.createPlayer(id, p));
-      }
-    });
-    for (const [id, view] of this.players) {
-      if (seen.has(id)) continue;
-      view.body.destroy();
-      this.players.delete(id);
+  /** Mirrors the Characters the server told us about into game objects. */
+  private syncViews(): void {
+    for (const [id, c] of this.characters) {
+      const view = this.views.get(id);
+      if (view) view.target = { x: c.x, y: c.y };
+      else this.views.set(id, this.createView(c));
     }
-    this.syncMining(state, isOwner);
+    for (const [id, view] of this.views) {
+      if (this.characters.has(id)) continue;
+      view.body.destroy();
+      this.views.delete(id);
+    }
   }
 
-  /** Polled like players; the UI is told only when something changed. */
-  private syncMining(state: object | undefined, isOwner: boolean): void {
-    const mining = readMining(
-      (state as { mining?: unknown } | undefined)?.mining,
-    );
-    const key = JSON.stringify([mining, isOwner]);
-    if (key === this.miningKey) return;
-    this.miningKey = key;
-    this.onMining(mining, isOwner);
-  }
-
-  private createPlayer(id: string, p: PlayerStateShape): PlayerView {
-    const own = id === this.room.sessionId;
+  private createView(c: CharacterState): CharacterView {
+    const own = c.id === this.selfId;
     const half = CHARACTER_HALF_SIZE_PX;
     const square = this.add
       .rectangle(0, 0, half * 2, half * 2, own ? 0xffffff : 0xc0504d)
       .setStrokeStyle(own ? 3 : 1, own ? 0xf2c230 : 0x000000);
-    const label = this.add
-      .text(0, -half - 8, own ? "you" : shortAddress(p.address), {
-        fontSize: "12px",
-        color: "#ffffff",
-        backgroundColor: "rgba(0,0,0,0.6)",
-      })
-      .setOrigin(0.5, 1);
+    const text = (value: string, color: string, background: string) =>
+      this.add
+        .text(0, -half - 8, value, {
+          fontSize: "12px",
+          color,
+          backgroundColor: background,
+        })
+        .setOrigin(0, 1);
+    // The name, then badges in colours a name's plain text cannot take.
+    const parts = [
+      text(characterLabel(c), "#ffffff", "rgba(0,0,0,0.6)"),
+      ...characterMarks(c).map((mark) =>
+        mark === "ai"
+          ? text("AI", "#ffffff", "#1f6feb")
+          : text("★", "#000000", "#f2c230"),
+      ),
+    ];
+    const gap = 3;
+    let x =
+      -(parts.reduce((w, p) => w + p.width, 0) + gap * (parts.length - 1)) / 2;
+    for (const part of parts) {
+      part.x = x;
+      x += part.width + gap;
+    }
     const body = this.add
-      .container(p.x, p.y, [square, label])
+      .container(c.x, c.y, [square, ...parts])
       .setDepth(own ? 3 : 2);
-    return { body, target: { x: p.x, y: p.y } };
+    return { body, target: { x: c.x, y: c.y } };
   }
 }
 

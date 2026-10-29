@@ -97,7 +97,8 @@ Status: mandatory (ADR 0008). A Map server, in any language, uses these to regis
 
 **Forwarded headers** (everything else is dropped):
 - Requests: `content-type`, `accept`, `accept-encoding`, `origin`, `if-none-match`, `if-modified-since`, and `access-control-request-*`.
-- Responses: `content-type`, `content-encoding`, `cache-control`, `etag`, `last-modified`, `vary`, `retry-after`, and `access-control-*`.
+- Responses: `content-type`, `content-encoding`, `cache-control`, `etag`, `last-modified`, `vary`, `retry-after`, `access-control-*` and `content-security-policy`.
+- A Land's `content-security-policy` is sent as a second header next to the relay's `frame-ancestors` one. Browsers enforce both, so a Land can only tighten the policy.
 
 `set-cookie` is never forwarded.
 
