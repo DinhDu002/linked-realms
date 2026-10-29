@@ -1,6 +1,6 @@
 # Step 2B — World without the chain
 
-Status: proposed, 2026-10-29. Waiting for the project owner's approval (PLAN.md section 11); no code is written before it. The questions at the end need answers first. The plan is written assuming the recommended answers.
+Status: approved, 2026-10-29, by the project owner, who took the recommended answer to every question below (1 A; 32-byte addresses; BIP-39 seed then HKDF-SHA512; Argon2id; the listed libraries; Rust installed here, and `deploy/` plus the runbook written for a server and domains the owner provides). Being built on branch `phase-2/2b-world`.
 
 **Done when** (PLAN.md section 6, step 2B): two people on two machines run their own Lands, register them with the Hub without any Gold and walk through a Gate into each other's Land; a test shows that a Land's UI cannot read the Shell's keys or sign without the Player's approval.
 
@@ -502,7 +502,7 @@ The compose world and the end-to-end test stay broken from item 5 until item 9.
   - Lands load only in the Shells listed in a relay's `SHELL_ORIGINS`.
 - **Delivery:** one branch, one commit per item above. Nothing is pushed or opened as a PR until the owner asks.
 
-## Questions for the project owner
+## Questions for the project owner (answered 2026-10-29: the recommended option in each)
 
 1. **Where TypeScript checks signatures and derives addresses.**
    - (A, recommended) `hub-api`, `relay` and `map-server` use the WASM build of `crates/core`, like the Shell. That gives one implementation of addresses and signatures, as P9 asks. The cost: Rust and `wasm-bindgen-cli` are needed to run any TypeScript test and to build the image; 2C needs Rust in the image anyway.
