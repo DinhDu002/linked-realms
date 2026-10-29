@@ -9,8 +9,6 @@ packages/core/pkg
 .env
 .env.*
 !.env.example
-contracts/*
-!contracts/package.json
 docs
 packages/client
 **/*.md

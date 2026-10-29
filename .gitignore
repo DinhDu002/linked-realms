@@ -7,13 +7,12 @@ coverage/
 !.env.example
 target/
 packages/core/pkg/
-contracts/out/
-contracts/cache/
-contracts/broadcast/
 .DS_Store
 .playwright-mcp/
 
 # Map server Mining keys
 .data/
+
+# Playwright output
 packages/shell/test-results/
 packages/shell/playwright-report/
