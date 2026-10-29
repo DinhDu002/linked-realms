@@ -1,6 +1,6 @@
 # @linked-realms/client
 
-The reference Land UI: Phaser 4 + Vite. A Land's Map server serves the built `dist/` from the Land's own origin, and the Shell loads it inside its frame. It shows the Land's map and every Character on it, and walks the Player's Character with the arrow keys or WASD.
+The reference Land UI: Phaser 4 + Vite. A Land's Map server serves the built `dist/` from the Land's own origin, and the Shell loads it inside its frame. It shows the Land's map and every Character on it, and walks the Player's Character with the arrow keys or WASD. On a touch screen (CSS `pointer: coarse`) it also shows a pad in the lower left: hold a finger on it and slide the way to walk, in 8 directions (`padKeys` in `src/input.ts`).
 
 ```bash
 pnpm --filter @linked-realms/client dev   # http://localhost:5181, /play proxied to ws://127.0.0.1:2567

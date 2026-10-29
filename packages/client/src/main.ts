@@ -1,5 +1,6 @@
 import { connect, playUrl, type Connection } from "./connection.ts";
 import { createGateEdge } from "./gate.ts";
+import { attachPad } from "./input.ts";
 import { LandScene, startGame } from "./scene.ts";
 import { isOutsideFrame, startShell, travelRefusedText } from "./shell.ts";
 
@@ -55,6 +56,7 @@ if (isOutsideFrame(window)) {
           errorEl.textContent = text;
         },
       });
+      attachPad(el("pad"), (keys) => scene.setTouch(keys));
       startGame(el("game"), scene);
     },
     onTravelRefused(m) {

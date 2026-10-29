@@ -2,7 +2,7 @@
 // `docker compose --profile world up -d`: the real Hub, relay, Shell and two Map servers.
 // Run with `pnpm e2e:world`; HUB_PORT, SHELL_PORT and WORLD_PROJECT follow compose.yaml.
 import { execFileSync } from "node:child_process";
-import { expect, test, type Page } from "@playwright/test";
+import { devices, expect, test, type Page } from "@playwright/test";
 
 const HUB_URL = `http://localhost:${process.env.HUB_PORT || "8787"}`;
 const PROJECT = process.env.WORLD_PROJECT || "linked-realms-world";
@@ -110,6 +110,7 @@ test("two Characters register their Lands, and one walks through a Gate into the
   const land = page.frameLocator("#frame-area iframe");
   await page.getByRole("button", { name: `Enter Land ${home.landId}` }).click();
   await expect(land.locator("#hud-land")).toContainText(`Land ${home.landId}`);
+  await expect(land.locator("#pad")).toBeHidden(); // touch screens only
   // The spawn is under the Mine, 1.5 tiles south of the Gate's rows: walk to the east edge
   // (32 tiles at 4 tiles a second), then north along it into the Gate.
   await land.locator("canvas").click({ position: { x: 5, y: 5 } });
@@ -162,4 +163,61 @@ test("two Characters register their Lands, and one walks through a Gate into the
     .toBe(true);
   await page.locator("#refresh-directory").click();
   await expect(row.locator(".online")).toHaveText("online");
+});
+
+test("on a phone, the touch pad walks a Character through a Gate and back", async ({
+  browser,
+}) => {
+  test.setTimeout(120_000);
+  // A phone with a touch screen, in this project's Chromium.
+  const context = await browser.newContext(devices["Pixel 7"]);
+  const page = await context.newPage();
+  await signIn(page, OWNERS[0]);
+  const lands = await directory();
+  const home = lands.find((l) => l.owner === OWNERS[0].address)!;
+  const neighbour = lands.find((l) => l.owner === OWNERS[1].address)!;
+  expect(home.online && neighbour.online).toBe(true);
+  expect([neighbour.x! - home.x!, neighbour.y! - home.y!]).toEqual([1, 0]);
+
+  const iframe = page.locator("#frame-area iframe");
+  const land = page.frameLocator("#frame-area iframe");
+  await page.getByRole("button", { name: `Enter Land ${home.landId}` }).click();
+  await expect(land.locator("#hud-land")).toContainText(`Land ${home.landId}`);
+  const pad = land.locator("#pad");
+  await expect(pad).toBeVisible();
+  const box = (await pad.boundingBox())!;
+  const centre = { x: box.x + box.width / 2, y: box.y + box.height / 2 };
+  const reach = box.width * 0.4;
+  // Real touches, as a finger makes them (Chromium's DevTools protocol).
+  const cdp = await context.newCDPSession(page);
+  const touch = (
+    type: "touchStart" | "touchMove" | "touchEnd",
+    dx = 0,
+    dy = 0,
+  ) =>
+    cdp.send("Input.dispatchTouchEvent", {
+      type,
+      touchPoints:
+        type === "touchEnd" ? [] : [{ x: centre.x + dx, y: centre.y + dy }],
+    });
+  // As with the keys: east to the edge, then the finger slides to north-east into the Gate.
+  await touch("touchStart", reach, 0);
+  await page.waitForTimeout(11_000);
+  await touch("touchMove", reach * 0.7, -reach * 0.7);
+  await expect(iframe).toHaveAttribute("title", `Land ${neighbour.landId}`, {
+    timeout: 10_000,
+  });
+  await touch("touchEnd");
+  await expect(land.locator("#hud-land")).toContainText(
+    `Land ${neighbour.landId}`,
+  );
+  // One tap-and-hold west is the way home.
+  await expect(land.locator("#pad")).toBeVisible();
+  await touch("touchStart", -reach, 0);
+  await expect(iframe).toHaveAttribute("title", `Land ${home.landId}`, {
+    timeout: 4_000,
+  });
+  await touch("touchEnd");
+  await expect(land.locator("#hud-land")).toContainText(`Land ${home.landId}`);
+  await context.close();
 });
