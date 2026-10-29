@@ -352,6 +352,33 @@ async function main() {
     await refreshYourLand();
   }
 
+  const domainForm = el<HTMLFormElement>("domain-form");
+  const domainInput = el<HTMLInputElement>("domain");
+  const domainStatus = el("domain-status");
+  /** The Land shown under "Your Land", and the own domain last put in the field. */
+  let yourLand: LandInfo | undefined;
+  let shownDomain: string | null | undefined;
+
+  async function saveDomain(domain: string | null) {
+    if (!yourLand) return;
+    const { landId } = yourLand;
+    domainStatus.textContent =
+      domain === null ? "Removing…" : "The Hub is reading the TXT record…";
+    try {
+      await account.call((token) => hub.setDomain(token, landId, domain));
+      domainStatus.textContent = domain === null ? "Removed." : "Saved.";
+    } catch (e) {
+      domainStatus.textContent = errorText(e);
+    }
+    await refreshYourLand();
+  }
+  domainForm.addEventListener("submit", (event) => {
+    event.preventDefault();
+    const domain = domainInput.value.trim();
+    void saveDomain(domain === "" ? null : domain);
+  });
+  el("remove-domain").addEventListener("click", () => void saveDomain(null));
+
   async function refreshYourLand() {
     const landStatus = el("land-status");
     const list = el("map-servers");
@@ -367,6 +394,17 @@ async function main() {
             ? "It has no cell yet: it gets one once its Map server is online. "
             : `Its cell is (${land.x}, ${land.y}). `) +
           (land.online ? "It is online." : "It is offline.");
+      yourLand = land;
+      domainForm.hidden = !land;
+      if (land) {
+        el("domain-txt").textContent = `land=${land.landId}`;
+        el<HTMLButtonElement>("remove-domain").disabled = land.domain === null;
+        // a poll must not wipe what the owner is typing
+        if (land.domain !== shownDomain) {
+          shownDomain = land.domain;
+          domainInput.value = land.domain ?? "";
+        }
+      }
       list.replaceChildren();
       if (offers.mapServers.length === 0)
         list.append(

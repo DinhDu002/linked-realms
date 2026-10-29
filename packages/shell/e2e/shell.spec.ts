@@ -697,6 +697,40 @@ test.describe("the Shell's own controls", () => {
     });
   });
 
+  test("sets and removes the Land's own domain", async ({
+    page,
+    character,
+  }) => {
+    await fetch(`${HUB_URL}/__forget-land?owner=${character.address}`, {
+      method: "POST",
+    });
+    await openShell(page);
+    await expect(page.getByLabel("Domain")).toBeHidden();
+    await page.getByRole("button", { name: /^Register Map server / }).click();
+    await expect(page.locator("#domain-txt")).toHaveText("land=9");
+    await expect(
+      page.getByRole("button", { name: "Remove domain" }),
+    ).toBeDisabled();
+    await page.getByLabel("Domain").fill("other.example");
+    await page.getByRole("button", { name: "Save domain" }).click();
+    await expect(page.locator("#domain-status")).toHaveText(
+      "add the DNS TXT record _linked-realms.other.example with the value land=9, then try again",
+    );
+    await page.getByLabel("Domain").fill("Play.Example");
+    await page.getByRole("button", { name: "Save domain" }).click();
+    await expect(page.locator("#domain-status")).toHaveText("Saved.");
+    await expect(page.locator("#land-status")).toContainText(
+      "Your Land is Land 9 at https://play.example.",
+    );
+    await expect(page.getByLabel("Domain")).toHaveValue("play.example");
+    await page.getByRole("button", { name: "Remove domain" }).click();
+    await expect(page.locator("#domain-status")).toHaveText("Removed.");
+    await expect(page.getByLabel("Domain")).toHaveValue("");
+    await expect(page.locator("#land-status")).toContainText(
+      "Your Land is Land 9 at http://9.localhost:",
+    );
+  });
+
   test("serves the Shell with the CSP and COOP headers", async ({ page }) => {
     const response = (await page.goto("/"))!;
     const headers = response.headers();

@@ -1,3 +1,4 @@
+import { Resolver } from "node:dns/promises";
 import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
 import { Key } from "@linked-realms/core";
@@ -31,6 +32,10 @@ async function online(): Promise<number[]> {
   return body.lands as number[];
 }
 
+// Own domains' TXT records (docs/protocols/map-server-hub-relay.md, Land URLs)
+const resolver = new Resolver({ timeout: 2000, tries: 2 });
+const resolveTxt = (name: string) => resolver.resolveTxt(name);
+
 const app = createApp({
   config,
   db,
@@ -44,6 +49,7 @@ const app = createApp({
     ),
   now: Date.now,
   log,
+  resolveTxt,
 });
 
 let sweeping = false;
@@ -51,7 +57,7 @@ async function runSweep() {
   if (sweeping) return;
   sweeping = true;
   try {
-    await sweep({ db, online, now: Date.now, log });
+    await sweep({ db, online, now: Date.now, log, resolveTxt });
   } catch (err) {
     log(`sweep failed: ${err instanceof Error ? err.message : String(err)}`);
   } finally {

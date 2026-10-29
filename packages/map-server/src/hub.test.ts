@@ -28,6 +28,7 @@ const land = (over: Partial<LandInfo> = {}): LandInfo => ({
   url: "https://7.lands.test",
   mapServerKey: key.address,
   online: false,
+  domain: null,
   ...over,
 });
 

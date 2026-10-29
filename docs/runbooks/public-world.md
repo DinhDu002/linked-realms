@@ -67,6 +67,8 @@ The routes are `GET /admin/reports` and `POST /admin/lands/:landId/hidden`, with
 
 Publish the Shell's URL, the Hub's URL (`https://hub.example.org`) and the relay's URL (`wss://relay.example.org`), and point them to [docs/self-hosting.md](../self-hosting.md). A Land is in the Directory once its owner registers its Map server and the Hub sees it online.
 
+Land owners may also serve their Land at a domain of their own (self-hosting, step 6). Publish where those domains point: a `CNAME` to `relay.example.org`, or the server's addresses for a domain that cannot have a `CNAME`. Caddy makes a certificate for a name it does not know only when the Hub's `GET /tls/allowed?domain=` answers `200`, which it does only for an own domain the Hub has checked, on a visible Land with a cell.
+
 ## Everyday tasks
 
 | Task | Command |
@@ -81,3 +83,4 @@ Publish the Shell's URL, the Hub's URL (`https://hub.example.org`) and the relay
 - `hub-api` runs as one process: used sign-in nonces, rate limits and the presence cache live in its memory.
 - Lands can set cookies for one another until the Lands' domain is on the Public Suffix List.
 - No admin page in the Shell.
+- An own domain's certificate is ordered on its first visit. Let's Encrypt limits how many certificates one account orders in a short time, so a burst of new own domains may wait.

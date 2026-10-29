@@ -52,6 +52,7 @@ const landInfo = (l: Land, mapServerKey: string) => ({
   ...l,
   url: `http://${l.landId}.localhost:${LAND_PORT}`,
   mapServerKey,
+  domain: null,
 });
 
 export async function startHubStub(): Promise<() => void> {
@@ -61,7 +62,10 @@ export async function startHubStub(): Promise<() => void> {
   const usedNonces = new Set<string>();
   const names = new Map<string, string>();
   /** The Land each owner registered (Land 9, which has no cell). */
-  const ownLands = new Map<string, { landId: number; mapServerKey: string }>();
+  const ownLands = new Map<
+    string,
+    { landId: number; mapServerKey: string; domain: string | null }
+  >();
   const state = {
     signIns: {} as Record<string, number>,
     tickets: [] as { landId: number; from?: number; character: string }[],
@@ -138,9 +142,12 @@ export async function startHubStub(): Promise<() => void> {
           ownerName: names.get(owner!) ?? "",
           x: null,
           y: null,
-          url: `http://${own.landId}.localhost:${LAND_PORT}`,
+          url: own.domain
+            ? `https://${own.domain}`
+            : `http://${own.landId}.localhost:${LAND_PORT}`,
           mapServerKey: own.mapServerKey,
           online: false,
+          domain: own.domain,
         });
       return send(404, { error: "Land not found" });
     }
@@ -157,6 +164,7 @@ export async function startHubStub(): Promise<() => void> {
       ownLands.set(verified.fields.owner, {
         landId: 9,
         mapServerKey: waiting.address,
+        domain: null,
       });
       return send(201, { landId: 9 });
     }
@@ -171,6 +179,18 @@ export async function startHubStub(): Promise<() => void> {
         return send(400, { error: "bad name" });
       names.set(address, name);
       return send(200, { name });
+    }
+    const own = ownLands.get(address);
+    if (own && route === `PUT /lands/${own.landId}/domain`) {
+      // Only play.example has its TXT record here.
+      const { domain } = await readBody<{ domain: string | null }>(req);
+      const name = domain?.toLowerCase() ?? null;
+      if (name !== null && name !== "play.example")
+        return send(409, {
+          error: `add the DNS TXT record _linked-realms.${name} with the value land=${own.landId}, then try again`,
+        });
+      own.domain = name;
+      return send(200, { domain: name });
     }
     if (route === "GET /map-servers")
       return send(200, {

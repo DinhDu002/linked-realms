@@ -34,6 +34,10 @@ let relayDown: boolean;
 let logs: string[];
 let onlineCalls: number;
 let peer: string;
+/** DNS TXT records by name; a missing name is NXDOMAIN. */
+let txt: Map<string, string[][]>;
+let dnsDown: boolean;
+let txtLookups: string[];
 let deps: Deps;
 let app: ReturnType<typeof createApp>;
 
@@ -56,6 +60,9 @@ beforeEach(async () => {
   logs = [];
   onlineCalls = 0;
   peer = "203.0.113.5";
+  txt = new Map();
+  dnsDown = false;
+  txtLookups = [];
   const trusted = trustedProxies([PROXY]);
   deps = {
     config: {
@@ -77,6 +84,14 @@ beforeEach(async () => {
       clientAddressOf(trusted, peer, c.req.header("X-Forwarded-For")),
     now: () => nowMs,
     log: (m) => logs.push(m),
+    async resolveTxt(name) {
+      txtLookups.push(name);
+      const fail = (code: string) => Object.assign(new Error(code), { code });
+      if (dnsDown) throw fail("ETIMEOUT");
+      const records = txt.get(name);
+      if (!records) throw fail("ENOTFOUND");
+      return records;
+    },
   };
   app = createApp(deps);
 });
@@ -537,6 +552,7 @@ describe("registering a Land", () => {
       url: "https://1.lands.test",
       mapServerKey: ms1.address,
       online: false,
+      domain: null,
     });
   });
 
@@ -997,5 +1013,161 @@ describe("reports and moderation", () => {
         })
       ).status,
     ).toBe(404);
+  });
+});
+
+describe("own domains", () => {
+  const PLAY = "play.example.com";
+  const setDomain = (token: string, landId: number, domain: unknown) =>
+    req("PUT", `/lands/${landId}/domain`, { token, body: { domain } });
+
+  it("are set once their TXT record names the Land, and then serve its URL", async () => {
+    const [a] = await world(1);
+    const token = await signIn(owner1);
+    const refused = await setDomain(token, a!, PLAY);
+    expect(refused.status).toBe(409);
+    expect(refused.json.error).toBe(
+      `add the DNS TXT record _linked-realms.${PLAY} with the value land=${a}, then try again`,
+    );
+    // TXT strings may arrive in chunks
+    txt.set(`_linked-realms.${PLAY}`, [["v=other"], ["land=", String(a)]]);
+    const set = await setDomain(token, a!, " Play.Example.COM. ");
+    expect(set).toMatchObject({ status: 200, json: { domain: PLAY } });
+    const info = (await req("GET", `/lands/${a}`)).json;
+    expect(info).toMatchObject({ url: `https://${PLAY}`, domain: PLAY });
+    expect((await req("GET", "/directory")).json.lands[0].url).toBe(
+      `https://${PLAY}`,
+    );
+    expect((await req("GET", "/lands?domain=PLAY.example.com")).json).toEqual(
+      info,
+    );
+    expect((await req("GET", "/lands?domain=other.example.com")).status).toBe(
+      404,
+    );
+    expect(await setDomain(token, a!, null)).toMatchObject({
+      status: 200,
+      json: { domain: null },
+    });
+    expect((await req("GET", `/lands/${a}`)).json).toMatchObject({
+      url: `https://${a}.lands.test`,
+      domain: null,
+    });
+    expect((await req("GET", `/lands?domain=${PLAY}`)).status).toBe(404);
+  });
+
+  it("are converted to ASCII, and refused with a port, a wildcard or no dot", async () => {
+    const [a] = await world(1);
+    const token = await signIn(owner1);
+    txt.set("_linked-realms.xn--bcher-kva.example", [[`land=${a}`]]);
+    expect((await setDomain(token, a!, "Bücher.example")).json).toEqual({
+      domain: "xn--bcher-kva.example",
+    });
+    for (const bad of [
+      "",
+      "localhost",
+      "*.example.com",
+      "play.example.com:443",
+      "10.0.0.1",
+      "[::1]",
+      "exa mple.com",
+      "-play.example.com",
+      `${"a".repeat(64)}.example.com`,
+      "https://play.example.com",
+      5,
+      undefined,
+    ])
+      expect((await setDomain(token, a!, bad)).status, String(bad)).toBe(400);
+    expect((await req("GET", "/lands?domain=*.example.com")).status).toBe(400);
+    expect(
+      (await req("GET", `/lands?owner=${owner1.address}&domain=${PLAY}`))
+        .status,
+    ).toBe(400);
+  });
+
+  it("are set only by the Land's owner, with a session, and DNS that answers", async () => {
+    const [a] = await world(1);
+    txt.set(`_linked-realms.${PLAY}`, [[`land=${a}`]]);
+    expect((await setDomain(await signIn(owner2), a!, PLAY)).status).toBe(403);
+    expect(
+      (await req("PUT", `/lands/${a}/domain`, { body: { domain: PLAY } }))
+        .status,
+    ).toBe(401);
+    const token = await signIn(owner1);
+    expect((await setDomain(token, 99, PLAY)).status).toBe(404);
+    txt.set(`_linked-realms.${PLAY}`, [[`land=${a! + 1}`]]);
+    expect((await setDomain(token, a!, PLAY)).status).toBe(409);
+    dnsDown = true;
+    const down = await setDomain(token, a!, PLAY);
+    expect(down.status).toBe(503);
+    expect(down.json.error).toContain(`_linked-realms.${PLAY}`);
+    dnsDown = false;
+    let last = 0;
+    for (let i = 0; i < 10; i++)
+      last = (await setDomain(token, a!, null)).status;
+    expect(last).toBe(429);
+  });
+
+  it("move to another Land only when their TXT record no longer names the first", async () => {
+    const [a, b] = await world(2);
+    txt.set(`_linked-realms.${PLAY}`, [[`land=${a}`], [`land=${b}`]]);
+    expect((await setDomain(await signIn(owner1), a!, PLAY)).status).toBe(200);
+    const second = await signIn(owner2);
+    expect((await setDomain(second, b!, PLAY)).json.error).toBe(
+      "another Land uses this domain",
+    );
+    txt.set(`_linked-realms.${PLAY}`, [[`land=${b}`]]);
+    expect((await setDomain(second, b!, PLAY)).status).toBe(200);
+    expect((await req("GET", `/lands/${a}`)).json.domain).toBeNull();
+    expect((await req("GET", `/lands?domain=${PLAY}`)).json.landId).toBe(b);
+  });
+
+  it("get certificates only while their Land is visible and has a cell", async () => {
+    const allowed = async (domain: string) =>
+      (await req("GET", `/tls/allowed?domain=${domain}`)).status;
+    const a = await register(owner1, ms1);
+    txt.set(`_linked-realms.${PLAY}`, [[`land=${a}`]]);
+    expect((await setDomain(await signIn(owner1), a, PLAY)).status).toBe(200);
+    expect(await allowed(PLAY)).toBe(404);
+    online = [a];
+    await sweep(deps);
+    expect(await allowed(PLAY)).toBe(200);
+    expect(await allowed("PLAY.example.com")).toBe(200);
+    expect(await allowed("other.example.com")).toBe(404);
+    expect(await allowed("*.example.com")).toBe(400);
+    await db.query("UPDATE land SET hidden = true WHERE id = $1", [a]);
+    expect(await allowed(PLAY)).toBe(404);
+  });
+
+  it("are checked again once a day, and dropped only when the TXT record is gone", async () => {
+    const [a] = await world(1);
+    txt.set(`_linked-realms.${PLAY}`, [[`land=${a}`]]);
+    await setDomain(await signIn(owner1), a!, PLAY);
+    txtLookups = [];
+    const domain = async () => (await req("GET", `/lands/${a}`)).json.domain;
+    nowMs += DAY_MS - 1000;
+    await sweep(deps);
+    expect(txtLookups).toEqual([]);
+    nowMs += 1000;
+    await sweep(deps);
+    expect(txtLookups).toEqual([`_linked-realms.${PLAY}`]);
+    // checked: not again until tomorrow
+    await sweep(deps);
+    expect(txtLookups).toHaveLength(1);
+    // DNS that does not answer keeps the domain and asks again an hour later
+    nowMs += DAY_MS;
+    dnsDown = true;
+    await sweep(deps);
+    expect(await domain()).toBe(PLAY);
+    expect(logs.join()).toContain(`could not check the own domain ${PLAY}`);
+    dnsDown = false;
+    txt.delete(`_linked-realms.${PLAY}`);
+    await sweep(deps);
+    expect(await domain()).toBe(PLAY);
+    nowMs += 3_600_000;
+    await sweep(deps);
+    expect(await domain()).toBeNull();
+    expect(logs.join()).toContain(
+      `Land ${a} lost its own domain ${PLAY}: its TXT record no longer names it`,
+    );
   });
 });

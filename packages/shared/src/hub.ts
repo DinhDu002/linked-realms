@@ -37,9 +37,12 @@ export interface LandInfo {
   /** The Land's cell; null while it has none. */
   x: number | null;
   y: number | null;
+  /** The Land owner's verified own domain when set, else `<landId>.<LAND_BASE_DOMAIN>`. */
   url: string;
   mapServerKey: string;
   online: boolean;
+  /** The verified own domain, or null. */
+  domain: string | null;
 }
 
 /**
