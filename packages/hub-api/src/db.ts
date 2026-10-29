@@ -34,6 +34,18 @@ const MIGRATIONS: { id: string; statements: string[] }[] = [
        )`,
     ],
   },
+  {
+    id: "002-sponsorship",
+    statements: [
+      // sponsored transactions per UTC day; identity is a lowercase address, or '*' for the whole world
+      `CREATE TABLE sponsorship (
+         identity text NOT NULL,
+         day      integer NOT NULL,
+         count    integer NOT NULL,
+         PRIMARY KEY (identity, day)
+       )`,
+    ],
+  },
 ];
 
 /** Applies pending migrations; safe to run on every start-up. */

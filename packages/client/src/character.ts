@@ -5,7 +5,7 @@ import {
   landAbi,
   playerRegistryAbi,
 } from "@linked-realms/shared";
-import type { Address, PublicClient } from "viem";
+import { encodeFunctionData, type Address, type PublicClient } from "viem";
 import type { Stat } from "./format.ts";
 import type { Wallet } from "./wallet.ts";
 
@@ -74,19 +74,15 @@ export async function loadCharacter(
 }
 
 /** Sends createCharacter() and waits until it is mined. */
-export async function createCharacter(
-  reader: PublicClient,
+export function createCharacter(
   chainId: number,
   wallet: Wallet,
 ): Promise<void> {
-  const hash = await wallet.client.writeContract({
-    account: wallet.account,
-    chain: wallet.client.chain,
-    address: deploymentFor(chainId).PlayerRegistry.address,
-    abi: playerRegistryAbi,
-    functionName: "createCharacter",
+  return wallet.send({
+    to: deploymentFor(chainId).PlayerRegistry.address,
+    data: encodeFunctionData({
+      abi: playerRegistryAbi,
+      functionName: "createCharacter",
+    }),
   });
-  const receipt = await reader.waitForTransactionReceipt({ hash });
-  if (receipt.status !== "success")
-    throw new Error("createCharacter transaction reverted");
 }

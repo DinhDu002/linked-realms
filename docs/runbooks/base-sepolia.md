@@ -52,7 +52,7 @@ openssl rand -hex 16                 # POSTGRES_PASSWORD
 | Service | Command | Settings |
 |---|---|---|
 | PostgreSQL | image `postgres:18.6-alpine3.24` | `POSTGRES_PASSWORD` from `.env`; no public port |
-| `hub-api` | `node packages/hub-api/src/main.ts` | `DATABASE_URL`, `CHAIN_ID=84532`, `RPC_URL` (a provider key, not the public endpoint), `HUB_TICKET_KEY`, `HUB_SESSION_SECRET`, `HUB_ADMINS` (the owner's address), `HUB_SIWE_DOMAIN` (the client's host), `HUB_ALLOWED_ORIGINS` (the client's origin), `RELAY_PUBLIC_URL=https://<relay host>`, `RELAY_INTERNAL_URL=http://relay:8080` |
+| `hub-api` | `node packages/hub-api/src/main.ts` | `DATABASE_URL`, `CHAIN_ID=84532`, `RPC_URL` (a provider key, not the public endpoint), `HUB_TICKET_KEY`, `HUB_SESSION_SECRET`, `HUB_ADMINS` (the owner's address), `HUB_SIWE_DOMAIN` (the client's host), `HUB_ALLOWED_ORIGINS` (the client's origin), `RELAY_PUBLIC_URL=https://<relay host>`, `RELAY_INTERNAL_URL=http://relay:8080`, `HUB_BUNDLER_URL` (the CDP endpoint, section 7; it holds the API key) |
 | relay | `node packages/relay/src/main.ts` | `HUB_URL=http://hub-api:8787`; `MAX_CLIENTS_PER_LAND`, `MAX_HOSTS` if needed |
 
 The `world` profile in `compose.yaml` shows the same services wired together on anvil.
@@ -83,7 +83,7 @@ VITE_CHAIN_ID=84532 VITE_RPC_URL=<provider URL> VITE_HUB_URL=https://<hub host> 
   pnpm --filter @linked-realms/client build
 ```
 
-Serve `packages/client/dist/` as static files from the host named in `HUB_SIWE_DOMAIN`. Until D5 is decided, Players need a browser wallet (for example MetaMask) on Base Sepolia, with a little ETH to create a Character. The dev wallet exists only on anvil.
+Serve `packages/client/dist/` as static files from the host named in `HUB_SIWE_DOMAIN`, over HTTPS (passkeys need a secure origin). Passkeys are bound to that host name: changing it later strands every Passkey wallet's passkeys, so pick the final one. New Players create a Passkey wallet and need no ETH once section 7 is done; a browser wallet (for example MetaMask) still works, with its own Base Sepolia ETH. The dev wallet exists only on anvil.
 
 ## 5. Publish the Land image (optional)
 
@@ -95,7 +95,7 @@ Until an image is published, Land hosts build from the repository (`docs/self-ho
 
 For each of the three Players, on their own machine:
 
-- [ ] Opens the client, connects a browser wallet on Base Sepolia, creates a Character. The client shows `Your Land: <id> at (x, y)`.
+- [ ] Opens the client, creates a Passkey wallet (or connects a browser wallet), creates a Character. The client shows `Your Land: <id> at (x, y)`.
 - [ ] Follows `docs/self-hosting.md`: starts the Land container, funds the Mining key, registers it under `Your Land`.
 - [ ] Sees their Land online in the Directory, enters it, switches mining on with one thread.
 
@@ -107,3 +107,24 @@ Together:
 - [ ] Each Player's `GOLD` balance in the client equals 50 × their Rounds won. On Basescan, every `RoundWon` pays the Land owner's wallet, never the Mining key.
 
 Record the result, with the dashboard figures, in the Log in PLAN.md.
+
+## 7. Sponsored transactions (CDP Paymaster) and the D5 spike
+
+ADR 0005: Passkey wallets send their game transactions through `hub-api`, which checks them and forwards them to the CDP endpoint. Nothing here was run against CDP or Base Sepolia; the same flow was checked on an anvil fork of Base Sepolia with a stand-in bundler (ADR 0005, "Verified").
+
+1. Create a CDP account and a project at the Coinbase Developer Platform, open Paymaster, select Base Sepolia, and copy the endpoint (`https://api.developer.coinbase.com/rpc/v1/base-sepolia/<key>`). It is a secret: put it only in the Hub server's `.env` as `HUB_BUNDLER_URL`, never in the client build.
+2. Paymaster configuration, the same values as `packages/shared/src/rules/sponsorship.ts`:
+   - Contract allowlist: `PlayerRegistry` with `createCharacter()`, `Land` with `setDesignHash(uint256,bytes32)` (addresses from `84532.json`).
+   - Per-user limit: 20 user operations per day. Global limit: 10,000 user operations per day (or a USD cap you choose).
+3. Restart `hub-api`. `POST /aa` answers 503 until `HUB_BUNDLER_URL` is set.
+
+The spike (ADR 0005), from a fresh browser profile on the client's real host:
+
+- [ ] "Create passkey wallet", then "Create Character". It succeeds while the wallet's address holds no ETH (check on Basescan: the transaction's fee is paid by the CDP paymaster).
+- [ ] "Register Map server" with any address: the Hub accepts the Delegation signed by the deployed wallet.
+- [ ] "Add backup passkey" on a second device or a security key. If CDP refuses it (its allowlist cannot name each Player's own wallet), switch the CDP contract allowlist off and keep its limits: the Hub's list is then the allowlist, and the Hub is the only holder of the key. Record which one you did.
+- [ ] On a second device with the synced passkey, "Sign in with passkey" shows the same wallet address. Same for the Backup passkey on its own device.
+- [ ] A call that is not on the list is refused: `hub-api` answers 403 "only game calls are sponsored" (covered by its tests; repeat with a crafted request only if you change the list).
+- [ ] The 21st Sponsored transaction of a day for one wallet is refused with 429.
+
+Record the result in the Log in PLAN.md. If the paymaster cannot sponsor the first transaction, ADR 0005 is re-opened with option B.

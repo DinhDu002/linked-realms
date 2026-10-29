@@ -21,10 +21,15 @@ import { createHub, REPORT_REASON_MAX, signDelegation } from "./hub.ts";
 import { miningLabel } from "./mining.ts";
 import { LandScene, startGame } from "./scene.ts";
 import {
+  addBackupPasskey,
   connectDev,
   connectInjected,
+  createPasskeyWallet,
   createReader,
   hasInjectedWallet,
+  hasStoredPasskey,
+  ownerCount,
+  signInWithPasskey,
   type Wallet,
 } from "./wallet.ts";
 
@@ -104,6 +109,29 @@ async function run(b: HTMLButtonElement, task: () => Promise<void>) {
 
 function showConnectButtons() {
   actionsEl.replaceChildren();
+  // passkey wallets need the account factory, which exists on Base Sepolia, not on local anvil
+  if (config.chainId !== DEV_CHAIN_ID) {
+    // the first sign-in may have failed, or the session may have expired since
+    const authorization = async () => {
+      if (!hub.signedIn()) {
+        const shown = statusEl.textContent;
+        await signIn();
+        statusEl.textContent = shown;
+      }
+      return hub.authorization();
+    };
+    if (!hasStoredPasskey())
+      actionsEl.append(
+        button("Create passkey wallet", () =>
+          connect((c) => createPasskeyWallet(c, authorization)),
+        ),
+      );
+    actionsEl.append(
+      button("Sign in with passkey", () =>
+        connect((c) => signInWithPasskey(c, authorization)),
+      ),
+    );
+  }
   if (hasInjectedWallet())
     actionsEl.append(
       button("Connect browser wallet", () => connect(connectInjected)),
@@ -149,7 +177,7 @@ async function refresh() {
         if (!wallet) return;
         statusEl.textContent =
           "Creating Character (waiting for the transaction)…";
-        await createCharacter(reader, config.chainId, wallet);
+        await createCharacter(config.chainId, wallet);
         await refresh();
       }),
     );
@@ -168,10 +196,30 @@ async function refresh() {
   land.textContent = `Your Land: ${view.landId} at (${view.x}, ${view.y})`;
   goldEl = document.createElement("div");
   characterEl.append(table, land, registerForm(ownLandId), goldEl);
+  if (wallet.kind === "passkey")
+    await showBackupReminder(wallet).catch(showError);
   // a failing log query must not hide the Enter button
   await refreshGold().catch(showError);
   if (!hub.signedIn()) actionsEl.append(button("Sign in to the Hub", signIn));
   await renderDirectory().catch(showError);
+}
+
+/** No recovery (ADR 0005): until the passkey wallet has a second owner, say so and offer one. */
+async function showBackupReminder(w: Wallet) {
+  if ((await ownerCount(config, w.address)) > 1n) return;
+  const reminder = document.createElement("p");
+  reminder.textContent =
+    "Your Land and GOLD belong to this passkey wallet, and nobody can recover it: lose the passkey and they are lost. Add a backup passkey on another device or a security key. ";
+  reminder.append(
+    button("Add backup passkey", async () => {
+      statusEl.textContent =
+        "Creating the backup passkey, then adding it to your account…";
+      await addBackupPasskey(w);
+      reminder.textContent =
+        "Backup passkey added: either passkey signs in to this wallet.";
+    }),
+  );
+  characterEl.append(reminder);
 }
 
 /** The Directory panel: every Land, online or not; "Enter" only for online ones. */
