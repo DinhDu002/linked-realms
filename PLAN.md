@@ -159,7 +159,8 @@ The values below are defaults. Chain rules live in `crates/core` (P9) and change
 
 ### 5.3 Mine
 
-- A Mine runs beside a Node on the Player's own server and mines for an address the Player chooses. A Player may run any number of Mines there, even before they have a Land.
+- Each Land has one Mine. It runs beside the Land's Node on the Land owner's server and mines for the Land owner's address. No Land, no Mine: a Player without a Land gets Gold only by being sent some (decided by the project owner on 2026-10-30; this replaces ADR 0006 point 11, and ADR 0014 records it).
+- The Land owner switches the Mine on or off and picks its threads in their own Land, signing through the Shell's prompt; everyone in the Land sees when it mines and when it wins a Block.
 - **Voluntary mining (P5):** off at every start. When on, it uses 1 CPU thread unless the owner picks more, and it shows clearly that it is mining.
 - Fast mode when the machine has the memory (about 2 GB), light mode otherwise.
 
@@ -253,7 +254,7 @@ Built on Solidity contracts; superseded on 2026-10-29 by ADR 0006–0008. Step 2
 
 - [ ] `crates/core`: transfers with a memo, key rotation, the Block format with a state root, issuance with halvings and the tail reward, LWMA Retarget, fee and size rules, the RandomX v2 binding (v2.0.1 pinned) with the official vectors on x86 and ARM.
 - [ ] `crates/node`: Block and transaction checks, a mempool with the fee auction and minimum relay fee, `redb` storage, pruning from Checkpoint snapshots, TCP P2P behind an interface, JSON-RPC (`jsonrpsee`), Checkpoint checks.
-- [ ] The Mine: on/off switch, CPU limit, fast or light mode by available memory, any number per server, reward address chosen by the Player.
+- [ ] The Mine: one per Land, switched on and off by the Land owner in the Land, CPU limit, fast or light mode by available memory, rewards to the Land owner's address; the effect everyone in the Land sees when it wins a Block.
 - [ ] Company services: Checkpoint signer, seed nodes, Public node, archive.
 - [ ] Shell: balance, send Gold with a memo, key rotation, prompts for payments a Land asks for.
 - [ ] Docker stack: Map server, Node (on by default, can be turned off) and Mine (off); self-hosting guide updated; Map server ↔ Node protocol specified.
@@ -385,7 +386,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 - [ ] Phase 2 – Own chain, open source and testing
   - [x] 2A – Self-hosting, wallet and dashboard (EVM design)
   - [ ] 2B – World without the chain
-  - [ ] 2C – The chain
+  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; nothing built yet)
   - [ ] 2D – Economy in the reference Land kit
   - [ ] 2E – NPCs
   - [ ] 2F – Audit before Phase 3
@@ -395,7 +396,9 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
 
-- 2026-10-30: Step 2C planned. `docs/plans/phase-2c-the-chain.md` is a draft waiting for the project owner: encodings, issuance, the LWMA Retarget, the RandomX v2 binding (tag v2.0.1, commit aaafe71), `crates/node`, the Mine, the Map server and Node protocol, the Shell's chain features, company services, the Docker stack, the dashboard, the simulation, 26 PR-sized items and 22 questions. It records the owner's decisions of today: the Mine's switch lives in the Land, signed by the Land owner through the Shell's prompt; everyone in the Land sees a won Block; the work follows the order of section 6, 2C. An independent critique found 20 defects in the first draft (among them no network id in transaction signatures, LWMA overflow, a won Block attributed by address, and an unauthenticated Mine control path); all are fixed in the draft.
+- 2026-10-30: The step 2C plan is approved. The project owner answered its 22 questions (recorded in the plan, "Answers of the project owner"). They chose the recommended option except for four: the state root is a sparse Merkle tree from the start (a new item 3, so 27 items); the seed node, Public node and archive run as a separate compose project on the carthings server, with the Checkpoint signer on a separate machine; "No Land, no Mine": one Mine per Land, mining for the Land owner, with no standalone Mine (section 5.3, the Mine item in 2C, `CONTEXT.md` and ADR 0006 point 11 are updated; ADR 0014 will record it); and no minimum for a transfer to a new address. The work keeps the order of section 6, 2C, one stacked PR per item. `CONTEXT.md` gains Account, the chain's record for one address. A review after the answers found that the state-growth estimate left out the tree's own entries: at worst about 140 to 200 MB a day, not 57 MB; the plan says so and the figure goes back to the project owner.
+
+- 2026-10-30: Step 2C planned. `docs/plans/phase-2c-the-chain.md` was drafted for the project owner: encodings, issuance, the LWMA Retarget, the RandomX v2 binding (tag v2.0.1, commit aaafe71), `crates/node`, the Mine, the Map server and Node protocol, the Shell's chain features, company services, the Docker stack, the dashboard, the simulation, 26 PR-sized items and 22 questions. It records the owner's decisions of today: the Mine's switch lives in the Land, signed by the Land owner through the Shell's prompt; everyone in the Land sees a won Block; the work follows the order of section 6, 2C. An independent critique found 20 defects in the first draft (among them no network id in transaction signatures, LWMA overflow, a won Block attributed by address, and an unauthenticated Mine control path); all are fixed in the draft.
 
 - 2026-10-30: Full screen. A "Full screen" button in the Shell's bar puts the whole Shell page in full screen (not the Land's frame, so the signing prompt stays in view, P6) and back; it is hidden where the browser has no full screen. iPhone Safari has none for pages (still missing in the WWDC26 Safari 27 notes), so on a touch screen without it the Shell tells the Player to add it to the Home Screen; `packages/shell/public/manifest.json` (`display: standalone`) opens it from there without Safari's bars, with its own storage, so the Character is restored there with the 24 words. Playwright covers the button and the manifest in Chromium, and the hint on an emulated touch screen; Firefox could not be started on this machine, so its run waits for CI. The owner chose to start step 2C next, which brings the Mine's on/off switch and the effect when a Mine wins a Block.
 

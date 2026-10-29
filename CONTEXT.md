@@ -94,8 +94,12 @@ _Avoid_: authorisation, registration token
 The game currency (`GOLD`). It is created only as Block rewards, on a fixed schedule that halves the reward every four years and then keeps a small constant reward per Block forever.
 _Avoid_: coin, token (on its own)
 
+**Account**:
+What the chain holds for one address: its Gold balance, a count of the transactions it has sent, and, once it has sent one, its public key. It belongs to an address, not to a Player: a Character has an address, and the chain knows only that address's Account.
+_Avoid_: wallet (on its own), balance (for the whole record)
+
 **Mine**:
-One mining process that runs beside a Node on a Player's own server and mines for one Character's address. A Player may run any number of Mines there; each starts switched off. All Mines compete for every Block, with odds in proportion to their hash rate.
+The one mining process of a Land: it runs beside the Land's Node on the Land owner's server and mines for the Land owner's address. No Land, no Mine. It starts switched off, and only the Land owner switches it, in the Land. All Mines compete for every Block, with odds in proportion to their hash rate.
 _Avoid_: miner, gold mine contract, pool
 
 **Checkpoint**:
