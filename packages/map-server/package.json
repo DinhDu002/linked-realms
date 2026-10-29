@@ -7,7 +7,7 @@
     "dev": "node --watch src/main.ts",
     "start": "node src/main.ts",
     "typecheck": "tsc",
-    "test": "vitest run"
+    "test": "vitest run --fsModuleCachePath node_modules/.vitest-cache"
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.16.0",
