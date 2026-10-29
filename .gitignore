@@ -5,6 +5,8 @@ coverage/
 .env
 .env.*
 !.env.example
+target/
+packages/core/pkg/
 contracts/out/
 contracts/cache/
 contracts/broadcast/

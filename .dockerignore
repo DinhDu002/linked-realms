@@ -2,6 +2,8 @@
 **/.turbo
 **/dist
 **/.data
+target
+packages/core/pkg
 .git
 .github
 .env
