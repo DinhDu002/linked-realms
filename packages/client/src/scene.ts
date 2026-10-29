@@ -9,7 +9,7 @@ import {
   type LandMap,
 } from "@linked-realms/shared";
 import type { ServerMessage } from "@linked-realms/shared/land-protocol";
-import { createInputDiffer } from "./input.ts";
+import { createInputDiffer, type PressedKeys } from "./input.ts";
 import { approach } from "./interpolate.ts";
 import {
   characterLabel,
@@ -39,6 +39,12 @@ export class LandScene extends Phaser.Scene {
   private readonly views = new Map<number, CharacterView>();
   private readonly differ = createInputDiffer();
   private keys?: Record<string, Phaser.Input.Keyboard.Key>;
+  private touch: PressedKeys = {
+    up: false,
+    down: false,
+    left: false,
+    right: false,
+  };
   private pendingTiled?: string;
   private landId?: bigint;
   private selfId?: number;
@@ -54,6 +60,11 @@ export class LandScene extends Phaser.Scene {
   constructor(link: SceneLink) {
     super("land");
     this.link = link;
+  }
+
+  /** The directions the touch pad holds; they add to the keys. */
+  setTouch(keys: PressedKeys): void {
+    this.touch = keys;
   }
 
   /** Applies one decoded message from the Map server. */
@@ -168,13 +179,14 @@ export class LandScene extends Phaser.Scene {
   private sendInput(): void {
     const k = this.keys;
     // Before welcome the socket may not be open yet: a key held now is sent once it is.
-    if (!k || this.selfId === undefined) return;
-    const down = (...names: string[]) => names.some((n) => k[n]?.isDown);
+    if (this.selfId === undefined) return;
+    const down = (...names: string[]) => names.some((n) => k?.[n]?.isDown);
+    const t = this.touch;
     const input = this.differ.next({
-      up: down("W", "UP"),
-      down: down("S", "DOWN"),
-      left: down("A", "LEFT"),
-      right: down("D", "RIGHT"),
+      up: t.up || down("W", "UP"),
+      down: t.down || down("S", "DOWN"),
+      left: t.left || down("A", "LEFT"),
+      right: t.right || down("D", "RIGHT"),
     });
     if (input)
       this.link.send(

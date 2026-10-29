@@ -12,7 +12,7 @@ A game made of many Lands. Each player hosts their own Land, and the Lands join 
 
 ## Play
 
-The test world runs at <https://play.linkedrealms.com>. Open it, make a Character, and walk into the Lands in the Directory. To host a Land of your own, install Docker and run the one command the Shell shows under "Your Land" ([docs/self-hosting.md](docs/self-hosting.md)). For now this test world serves Lands 1 to 4.
+The test world runs at <https://play.linkedrealms.com>. Open it, make a Character, and walk into the Lands in the Directory: with the arrow keys on a computer, or with the pad in the lower left on a phone or tablet. To host a Land of your own, install Docker on a computer (phones cannot run it) and run the one command the Shell shows under "Your Land" ([docs/self-hosting.md](docs/self-hosting.md)). For now this test world serves Lands 1 to 4.
 
 ## Development
 

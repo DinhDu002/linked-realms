@@ -41,6 +41,35 @@
         color: #f88;
         overflow-wrap: anywhere;
       }
+      /* The touch pad: hold a finger on it and slide the way to walk. Touch screens only. */
+      #pad {
+        display: none;
+        position: fixed;
+        z-index: 1;
+        left: 24px;
+        bottom: 32px;
+        width: 144px;
+        height: 144px;
+        border: 2px solid rgba(255, 255, 255, 0.4);
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.35);
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 18px;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      #pad span {
+        position: absolute;
+        line-height: 1;
+        transform: translate(-50%, -50%);
+      }
+      @media (pointer: coarse) {
+        #pad {
+          display: block;
+        }
+      }
       [hidden] {
         display: none !important;
       }
@@ -48,6 +77,13 @@
   </head>
   <body>
     <div id="game"></div>
+    <!-- Hidden from assistive technology: it repeats the arrow keys for touch screens. -->
+    <div id="pad" aria-hidden="true">
+      <span style="left: 50%; top: 15%">▲</span>
+      <span style="left: 85%; top: 50%">▶</span>
+      <span style="left: 50%; top: 85%">▼</span>
+      <span style="left: 15%; top: 50%">◀</span>
+    </div>
     <div id="hud">
       <div id="hud-land"></div>
       <div id="status"></div>
