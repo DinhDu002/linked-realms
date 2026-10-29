@@ -11,8 +11,6 @@
   "scripts": {
     "typecheck": "tsc",
     "test": "vitest run",
-    "generate": "node scripts/generate.ts",
-    "export-abi": "node scripts/export-abi.ts",
     "proto": "buf lint && buf generate"
   },
   "devDependencies": {
@@ -24,7 +22,6 @@
   },
   "dependencies": {
     "@bufbuild/protobuf": "2.16.0",
-    "@linked-realms/core": "workspace:*",
-    "viem": "2.57.12"
+    "@linked-realms/core": "workspace:*"
   }
 }

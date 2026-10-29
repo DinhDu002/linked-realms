@@ -73,7 +73,6 @@ Run the client against it with `VITE_RPC_URL=http://127.0.0.1:8546 VITE_HUB_URL=
 - [CONTEXT.md](CONTEXT.md): domain glossary.
 - [docs/decisions/](docs/decisions/): architecture decision records.
 - [docs/self-hosting.md](docs/self-hosting.md): host your own Land with Docker.
-- [docs/runbooks/base-sepolia.md](docs/runbooks/base-sepolia.md): open the testnet world (project owner).
 - [CONTRIBUTING.md](CONTRIBUTING.md): how changes get in.
 
 ## License

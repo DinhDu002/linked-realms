@@ -3,7 +3,7 @@ name: linked-realms
 # The "world" profile (docker compose --profile world up -d) adds the Hub, the relay and three Map
 # servers on top of the default services. Run it as its own project so it never touches the
 # default stack's state:
-#   ANVIL_PORT=8546 POSTGRES_PORT=5433 docker compose -p linked-realms-world --profile world up -d --build
+#   POSTGRES_PORT=5433 docker compose -p linked-realms-world --profile world up -d --build
 # Every key below comes from anvil's public test mnemonic: local development only, never secret.
 
 x-node: &node
@@ -15,13 +15,10 @@ x-node: &node
 x-map: &map
   <<: *node
   environment: &map-env
-    RPC_URL: http://anvil:8545
     RELAY_URL: ws://relay:8080
     # anvil dev account 9, the address of HUB_TICKET_KEY below
     HUB_TICKET_SIGNER: "0xa0Ee7A142d267C1f36714E4a8F75612F20a79720"
   depends_on:
-    seed:
-      condition: service_completed_successfully
     relay:
       condition: service_healthy
   healthcheck:
@@ -47,55 +44,11 @@ services:
       timeout: 3s
       retries: 10
 
-  anvil:
-    image: ghcr.io/foundry-rs/foundry:v1.8.6
-    entrypoint: ["anvil", "--host", "0.0.0.0", "--chain-id", "31337"]
-    ports:
-      - "127.0.0.1:${ANVIL_PORT:-8545}:8545"
-    healthcheck:
-      test: ["CMD", "cast", "chain-id", "--rpc-url", "http://127.0.0.1:8545"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  deploy:
-    profiles: [world]
-    image: ghcr.io/foundry-rs/foundry:v1.8.6
-    restart: "no"
-    # Deploy.s.sol writes into the repo, so it runs on a copy (-L: contracts/node_modules is symlinks)
-    # and the result is compared with the committed addresses.
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        # docker compose up runs this again on a stack that is already deployed
-        land=$$(sed -n '/"Land"/,/}/s/.*"address": "\(0x[0-9a-fA-F]*\)".*/\1/p' /repo/packages/shared/src/deployments/31337.json)
-        if [ "$$(cast code "$$land" --rpc-url http://anvil:8545)" != "0x" ]; then
-          echo "Land is already deployed at $$land: nothing to do"
-          exit 0
-        fi
-        mkdir -p /tmp/work/packages/shared/src /tmp/work/packages/shared/test-vectors
-        cp -rL /repo/contracts /tmp/work/contracts
-        cp -r /repo/packages/shared/test-vectors/. /tmp/work/packages/shared/test-vectors/
-        mkdir -p /tmp/work/packages/shared/src/deployments
-        cd /tmp/work/contracts
-        forge script script/Deploy.s.sol --rpc-url http://anvil:8545 --broadcast --unlocked --sender 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-        if ! diff /tmp/work/packages/shared/src/deployments/31337.json /repo/packages/shared/src/deployments/31337.json; then
-          echo "deployed addresses differ from packages/shared/src/deployments/31337.json: start from a fresh anvil (docker compose -p <project> down -v)" >&2
-          exit 1
-        fi
-        echo "deployed addresses match packages/shared/src/deployments/31337.json"
-    volumes:
-      - .:/repo:ro
-    depends_on:
-      anvil:
-        condition: service_healthy
-
   hub-api:
     <<: *node
     command: ["node", "packages/hub-api/src/main.ts"]
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-linked_realms}:${POSTGRES_PASSWORD:-linked_realms}@postgres:5432/${POSTGRES_DB:-linked_realms}
-      RPC_URL: http://anvil:8545
       RELAY_INTERNAL_URL: http://relay:8080
       RELAY_PUBLIC_URL: http://127.0.0.1:${RELAY_PORT:-8080}
       # anvil dev account 9: signs Travel tickets and holds nothing. LOCAL ONLY, public test key.
@@ -107,8 +60,6 @@ services:
     depends_on:
       postgres:
         condition: service_healthy
-      deploy:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/health"]
       interval: 5s
@@ -130,20 +81,6 @@ services:
       interval: 5s
       timeout: 3s
       retries: 10
-
-  seed:
-    <<: *node
-    command: ["node", "packages/map-server/scripts/seed-world.ts"]
-    environment:
-      RPC_URL: http://anvil:8545
-      HUB_URL: http://hub-api:8787
-    volumes:
-      - map-1-data:/data/map-1
-      - map-2-data:/data/map-2
-      - map-3-data:/data/map-3
-    depends_on:
-      hub-api:
-        condition: service_healthy
 
   map-1:
     <<: *map

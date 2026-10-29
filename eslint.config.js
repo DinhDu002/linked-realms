@@ -5,7 +5,6 @@ import tseslint from "typescript-eslint";
 export default defineConfig(
   {
     ignores: [
-      "contracts/",
       "**/dist/",
       "target/",
       "packages/core/pkg/",
