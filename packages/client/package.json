@@ -11,11 +11,9 @@
     "test": "vitest run"
   },
   "dependencies": {
-    "@colyseus/sdk": "0.18.8",
+    "@bufbuild/protobuf": "2.16.0",
     "@linked-realms/shared": "workspace:*",
-    "ox": "0.14.59",
-    "phaser": "4.2.1",
-    "viem": "2.57.12"
+    "phaser": "4.2.1"
   },
   "devDependencies": {
     "typescript": "6.0.3",

@@ -5,7 +5,9 @@ try {
   const config = loadConfig();
   const relay = createRelay(config);
   relay.listen(config.port, () =>
-    console.log(`relay listening on :${config.port}, Hub at ${config.hubUrl}`),
+    console.log(
+      `relay ${config.relayHost} listening on :${config.port}, Lands at *.${config.landBaseDomain}, Hub at ${config.hubUrl}`,
+    ),
   );
   for (const signal of ["SIGINT", "SIGTERM"] as const)
     process.once(signal, () => relay.close(() => process.exit(0)));

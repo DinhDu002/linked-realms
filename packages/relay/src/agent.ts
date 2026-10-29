@@ -1,17 +1,20 @@
 // The Map server's side of the host link: one outbound WebSocket to the relay that carries
-// Player HTTP requests and WebSockets to the local Colyseus server on 127.0.0.1.
+// Player HTTP requests and WebSockets to the local Map server (node:http + ws) on 127.0.0.1.
 import { request as httpRequest, type ClientRequest } from "node:http";
-import { privateKeyToAccount } from "viem/accounts";
-import type { Hex } from "viem";
+import type { Key } from "@linked-realms/core";
+import { signStatement } from "@linked-realms/shared/identity";
 import { WebSocket } from "ws";
 import {
   HOST_MAX_PAYLOAD,
+  HTTP_CHUNK,
+  HTTP_RESPONSE_LIMIT,
   KIND_BINARY,
   KIND_TEXT,
   MAX_DATA_PAYLOAD,
+  MAX_HEADER_VALUE,
   decodeFrame,
   encodeFrame,
-  hostHelloMessage,
+  isRelayedResponseHeader,
   parseControl,
   rawToBuffer,
   sendableCloseCode,
@@ -20,11 +23,11 @@ import {
 } from "./protocol.ts";
 
 export interface HostOptions {
-  /** Relay base URL (http(s):// or ws(s)://). */
+  /** Relay base URL: ws:// or wss://, no path. */
   relayUrl: string;
   landId: number;
-  /** The Mining key: the only key a Map server uses to identify itself (P2). */
-  privateKey: Hex;
+  /** The Map server key: the only key a Map server uses to identify itself (P2). */
+  mapServerKey: Key;
   /** Port of the local Map server on 127.0.0.1. */
   localPort: number;
   log: (message: string) => void;
@@ -35,7 +38,8 @@ const MAX_BACKOFF_MS = 30_000;
 // The relay pings every 15 s; a link that hears nothing for three intervals is dead.
 const LIVENESS_MS = 45_000;
 const HTTP_TIMEOUT_MS = 25_000;
-const MAX_HTTP_RESPONSE = 512 * 1024;
+/** Pause reading a local response while this much waits to be sent to the relay. */
+const MAX_QUEUED_LINK_BYTES = 1024 * 1024;
 const MAX_QUEUED_BYTES = 64 * 1024;
 const CLOSE_CODE_REPLACED = 4409;
 
@@ -46,22 +50,25 @@ interface LocalStream {
   queued: number;
 }
 
-function hostUrl(relayUrl: string, landId: number): string {
+function parseRelayUrl(relayUrl: string): URL {
   const url = new URL(relayUrl);
-  if (url.protocol === "http:") url.protocol = "ws:";
-  else if (url.protocol === "https:") url.protocol = "wss:";
-  if (url.protocol !== "ws:" && url.protocol !== "wss:")
-    throw new Error(`relayUrl must be http(s) or ws(s), got "${relayUrl}"`);
-  return `${url.origin}${url.pathname.replace(/\/+$/, "")}/host/${landId}`;
+  if (
+    (url.protocol !== "ws:" && url.protocol !== "wss:") ||
+    url.pathname !== "/" ||
+    url.search ||
+    url.hash
+  )
+    throw new Error(`relayUrl must be a ws(s):// base URL, got "${relayUrl}"`);
+  return url;
 }
 
 /** Links this Map server to the relay and keeps it linked (backoff 1 s doubling to 30 s) until closed. */
 export function connectHost(options: HostOptions): {
   close(): Promise<void>;
 } {
-  const { landId, localPort, log } = options;
-  const account = privateKeyToAccount(options.privateKey);
-  const url = hostUrl(options.relayUrl, landId);
+  const { landId, localPort, log, mapServerKey } = options;
+  const relay = parseRelayUrl(options.relayUrl);
+  const url = `${relay.origin}/host/${landId}`;
   let closed = false;
   let current: WebSocket | undefined;
   let retryTimer: NodeJS.Timeout | undefined;
@@ -77,7 +84,6 @@ export function connectHost(options: HostOptions): {
     const streams = new Map<number, LocalStream>();
     const requests = new Set<ClientRequest>();
     let liveness: NodeJS.Timeout | undefined;
-    let nextDelay = backoff;
     const arm = () => {
       clearTimeout(liveness);
       liveness = setTimeout(() => ws.terminate(), LIVENESS_MS);
@@ -130,33 +136,35 @@ export function connectHost(options: HostOptions): {
     }
 
     function forward(message: Extract<ControlMessage, { t: "http" }>): void {
+      const { id } = message;
+      let started = false;
       let done = false;
-      const reply = (status: number, headers: HttpHeaders, body: Buffer) => {
-        if (done || ws.readyState !== WebSocket.OPEN) return;
+      const sendData = (payload: Buffer, written?: () => void) =>
+        ws.send(encodeFrame(id, KIND_BINARY, payload), () => written?.());
+      const end = (aborted = false) => {
+        if (done) return;
         done = true;
-        const text = JSON.stringify({
-          t: "http-response",
-          id: message.id,
-          status,
-          headers,
-          body: body.toString("base64"),
-        });
-        if (text.length > HOST_MAX_PAYLOAD) {
-          done = false;
-          return reply(
-            502,
-            { "content-type": "application/json" },
-            Buffer.from('{"error":"response too large"}'),
+        if (ws.readyState === WebSocket.OPEN)
+          send(
+            aborted
+              ? { t: "http-end", id, aborted: true }
+              : { t: "http-end", id },
           );
-        }
-        ws.send(text);
       };
-      const fail = (error: string) =>
-        reply(
-          502,
-          { "content-type": "application/json" },
-          Buffer.from(JSON.stringify({ error })),
-        );
+      // A failure before the response starts becomes a 502; after it, the body is cut off.
+      const fail = (error: string) => {
+        if (done || ws.readyState !== WebSocket.OPEN) return;
+        if (started) return end(true);
+        started = true;
+        send({
+          t: "http-response",
+          id,
+          status: 502,
+          headers: { "content-type": "application/json" },
+        });
+        sendData(Buffer.from(JSON.stringify({ error })));
+        end();
+      };
 
       const body = Buffer.from(message.body, "base64");
       // The relay already limits headers; the agent still never lets a header redefine the framing.
@@ -186,21 +194,43 @@ export function connectHost(options: HostOptions): {
             headers,
           },
           (res) => {
-            const chunks: Buffer[] = [];
+            const out: HttpHeaders = {};
+            for (const [name, value] of Object.entries(res.headers))
+              if (
+                value !== undefined &&
+                (isRelayedResponseHeader(name) ||
+                  name === "content-security-policy") &&
+                [value].flat().every((v) => v.length <= MAX_HEADER_VALUE)
+              )
+                out[name] = value;
+            started = true;
+            send({
+              t: "http-response",
+              id,
+              status: res.statusCode ?? 502,
+              headers: out,
+            });
             let size = 0;
             res.on("data", (chunk: Buffer) => {
+              if (done || ws.readyState !== WebSocket.OPEN) return;
               size += chunk.length;
-              if (size > MAX_HTTP_RESPONSE) {
-                fail("response too large");
+              if (size > HTTP_RESPONSE_LIMIT) {
                 req.destroy();
-              } else chunks.push(chunk);
+                return end(true);
+              }
+              // Do not read faster than the relay link drains: resume once the last slice is written.
+              const slow = ws.bufferedAmount > MAX_QUEUED_LINK_BYTES;
+              if (slow) res.pause();
+              for (let at = 0; at < chunk.length; at += HTTP_CHUNK) {
+                const last = at + HTTP_CHUNK >= chunk.length;
+                sendData(
+                  chunk.subarray(at, at + HTTP_CHUNK),
+                  slow && last ? () => res.resume() : undefined,
+                );
+              }
             });
-            res.on("end", () => {
-              const out: HttpHeaders = {};
-              for (const [name, value] of Object.entries(res.headers))
-                if (value !== undefined) out[name] = value;
-              reply(res.statusCode ?? 502, out, Buffer.concat(chunks));
-            });
+            res.on("end", () => end());
+            res.on("error", () => end(true));
           },
         );
       } catch {
@@ -216,9 +246,14 @@ export function connectHost(options: HostOptions): {
     function onControl(message: ControlMessage): void {
       switch (message.t) {
         case "challenge":
-          void account
-            .signMessage({ message: hostHelloMessage(landId, message.nonce) })
-            .then((signature) => send({ t: "hello", signature }));
+          send({
+            t: "hello",
+            ...signStatement(
+              "relay-host",
+              { relay: relay.host, land: landId, nonce: message.nonce },
+              mapServerKey,
+            ),
+          });
           break;
         case "ready":
           backoff = INITIAL_BACKOFF_MS;
@@ -260,14 +295,15 @@ export function connectHost(options: HostOptions): {
       for (const stream of streams.values()) stream.ws.terminate();
       for (const req of requests) req.destroy();
       if (closed) return;
-      // A newer link took the Land: do not fight it at full speed.
-      if (code === CLOSE_CODE_REPLACED) nextDelay = MAX_BACKOFF_MS;
+      // A newer link took the Land: do not fight it at full speed. Otherwise `backoff` is back
+      // at its start once a link got `ready`, and doubles only across failed attempts.
+      const delay = code === CLOSE_CODE_REPLACED ? MAX_BACKOFF_MS : backoff;
       log(
-        `relay link closed (${code} ${reason.toString()}); retrying in ${nextDelay / 1000} s`,
+        `relay link closed (${code} ${reason.toString()}); retrying in ${delay / 1000} s`,
       );
-      backoff = Math.min(nextDelay * 2, MAX_BACKOFF_MS);
+      backoff = Math.min(delay * 2, MAX_BACKOFF_MS);
       // Jitter: every Map server drops at once when the relay restarts; they must not return in lockstep.
-      retryTimer = setTimeout(connect, nextDelay * (0.5 + Math.random() / 2));
+      retryTimer = setTimeout(connect, delay * (0.5 + Math.random() / 2));
     });
   }
 

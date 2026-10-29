@@ -100,7 +100,8 @@ message Notice {
 
 // The Map server closes the connection after sending it.
 message Error {
-  // An arrival.md code, or "full", "duplicate", "rate-limited" or "bad-message".
+  // An arrival.md code, or "full", "duplicate", "rate-limited", "bad-message", or
+  // "unavailable" while the Map server does not yet know its Land.
   string code = 1;
   string message = 2;
 }

@@ -9,6 +9,7 @@ import {
   JoinRejected,
   parseWireTicket,
   relayLandUrl,
+  shortAddress,
   ticketToWire,
   TRAVEL_TICKET_TTL_SECONDS,
   TravelTicketTypes,
@@ -197,5 +198,15 @@ describe("relayLandUrl", () => {
     expect(relayLandUrl("ws://localhost:8080//", 7)).toBe(
       "ws://localhost:8080/land/7",
     );
+  });
+});
+
+describe("shortAddress", () => {
+  it("keeps tlr1 and the first and last 6 characters that differ", () => {
+    expect(
+      shortAddress(
+        "tlr1qqq6pcg9hrzz8tnya7wl2f5c5w9gngwatvfahg05g22vq86w7v39c9saugmkh",
+      ),
+    ).toBe("tlr16pcg9h…augmkh");
   });
 });
