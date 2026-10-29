@@ -1,78 +1,39 @@
 import { PGlite } from "@electric-sql/pglite";
+import { Key } from "@linked-realms/core";
 import { sign } from "hono/jwt";
 import {
-  createPublicClient,
-  custom,
-  encodeFunctionData,
-  parseAbi,
-  recoverTypedDataAddress,
-  toHex,
-  verifyMessage,
-  verifyTypedData,
-  type Address,
-  type Hex,
-} from "viem";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import {
-  entryPoint06Address,
-  toCoinbaseSmartAccount,
-} from "viem/account-abstraction";
-import { foundry } from "viem/chains";
-import {
-  createSiweMessage,
-  parseSiweMessage,
-  validateSiweMessage,
-} from "viem/siwe";
+  signStatement,
+  verifyHandoff,
+  verifyStatement,
+  type SignedStatement,
+} from "@linked-realms/shared/identity";
 import { beforeEach, describe, expect, it } from "vitest";
-import {
-  DelegationTypes,
-  type DirectoryLand,
-  HUB_EIP712_DOMAIN,
-  SPONSORED_TRANSACTIONS_PER_DAY,
-  SPONSORED_TRANSACTIONS_PER_PLAYER_PER_DAY,
-  TravelTicketTypes,
-  deploymentFor,
-  goldTokenAbi,
-  landAbi,
-  playerRegistryAbi,
-  parseWireTicket,
-  verifyTravelTicket,
-} from "@linked-realms/shared";
 import { createApp, type Deps } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import { migrate, type Db } from "./db.ts";
+import { clientAddressOf, trustedProxies } from "./network.ts";
+import { CELL_KEPT_OFFLINE_SECONDS, sweep } from "./sweep.ts";
 
-const CHAIN_ID = 31337;
-const DOMAIN = "game.test";
+const HUB = "hub.test";
 const SECRET = "test-session-secret-0123456789-abcdef";
+const DAY_MS = 86_400_000;
+const PROXY = "10.0.0.1";
 
-const owner1 = privateKeyToAccount(generatePrivateKey());
-const owner2 = privateKeyToAccount(generatePrivateKey());
-const owner5 = privateKeyToAccount(generatePrivateKey());
-const player = privateKeyToAccount(generatePrivateKey());
-const noCharacter = privateKeyToAccount(generatePrivateKey());
-const admin = privateKeyToAccount(generatePrivateKey());
-const stranger = privateKeyToAccount(generatePrivateKey());
-const hubKey = privateKeyToAccount(generatePrivateKey());
-const mining1 = privateKeyToAccount(generatePrivateKey()).address;
-
-// Land 1 at (0,0), 2 at (1,0), 3 at (1,1) (not adjacent to 1), 5 at (0,1)
-const LANDS: Record<number, { owner: Address; x: number; y: number }> = {
-  1: { owner: owner1.address, x: 0, y: 0 },
-  2: { owner: owner2.address, x: 1, y: 0 },
-  3: { owner: owner2.address, x: 1, y: 1 },
-  5: { owner: owner5.address, x: 0, y: 1 },
-};
+const key = (n: number) => Key.fromSeed(new Uint8Array(32).fill(n));
+const hubKey = key(0x48);
+const admin = key(0xad);
+const owners = [key(1), key(2), key(3), key(4), key(5)];
+const mapServers = [key(11), key(12), key(13), key(14), key(15)];
+const [owner1, owner2] = owners as [Key, Key];
+const [ms1, ms2] = mapServers as [Key, Key];
 
 let db: Db;
 let nowMs: number;
 let online: number[];
 let relayDown: boolean;
-let chainDown: boolean;
 let logs: string[];
 let onlineCalls: number;
-let bundled: { method: string; params: unknown[] }[];
-let bundlerResult: (method: string) => unknown;
+let peer: string;
 let deps: Deps;
 let app: ReturnType<typeof createApp>;
 
@@ -88,64 +49,41 @@ function pglite(): Db {
 beforeEach(async () => {
   db = pglite();
   await migrate(db);
+  // hono/jwt checks a token's expiry against the real clock
   nowMs = Date.now();
-  online = [1, 2, 3, 5];
+  online = [];
   relayDown = false;
-  chainDown = false;
   logs = [];
   onlineCalls = 0;
-  bundled = [];
-  bundlerResult = () => "0x01";
+  peer = "203.0.113.5";
+  const trusted = trustedProxies([PROXY]);
   deps = {
     config: {
-      chainId: CHAIN_ID,
-      siweDomain: DOMAIN,
+      hubDomain: HUB,
       sessionSecret: SECRET,
       admins: [admin.address],
-      allowedOrigins: ["https://game.test"],
-      relayPublicUrl: "wss://relay.test",
+      allowedOrigins: ["https://shell.test"],
+      landBaseDomain: "lands.test",
+      landUrlScheme: "https",
     },
     db,
-    chain: {
-      async ownerOf(id) {
-        if (chainDown) throw new Error("rpc https://secret-rpc.test down");
-        return LANDS[Number(id)]?.owner;
-      },
-      async coordinatesOf(id) {
-        if (chainDown) throw new Error("rpc down");
-        const l = LANDS[Number(id)];
-        return l && { x: l.x, y: l.y };
-      },
-      async hasCharacter(a) {
-        return a !== noCharacter.address;
-      },
-    },
-    async verifySiwe({ message, signature, domain, nonce, time }) {
-      const parsed = parseSiweMessage(message);
-      if (!parsed.address) return false;
-      return (
-        validateSiweMessage({ message: parsed, domain, nonce, time }) &&
-        (await verifyMessage({ address: parsed.address, message, signature }))
-      );
-    },
-    verifyTypedData: (args) => verifyTypedData(args as never),
     async online() {
       onlineCalls++;
       if (relayDown) throw new Error("relay down");
       return online;
     },
-    ticketSigner: hubKey,
-    async bundler({ id, method, params }) {
-      bundled.push({ method, params });
-      return { jsonrpc: "2.0", id, result: bundlerResult(method) };
-    },
+    ticketKey: hubKey,
+    clientAddress: (c) =>
+      clientAddressOf(trusted, peer, c.req.header("X-Forwarded-For")),
     now: () => nowMs,
     log: (m) => logs.push(m),
   };
   app = createApp(deps);
 });
 
-type Account = typeof player;
+const seconds = () => Math.floor(nowMs / 1000);
+const nonce = () =>
+  Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString("hex");
 
 async function req(
   method: string,
@@ -175,89 +113,125 @@ async function req(
   return { status: res.status, json, headers: res.headers };
 }
 
-async function siweMessage(account: Account, overrides = {}) {
-  const { json } = await req("GET", "/auth/nonce");
-  return createSiweMessage({
-    address: account.address,
-    chainId: CHAIN_ID,
-    domain: DOMAIN,
-    nonce: json.nonce,
-    uri: `https://${DOMAIN}`,
-    version: "1",
-    issuedAt: new Date(nowMs),
-    ...overrides,
-  });
-}
+const signInStatement = (k: Key, fields = {}) =>
+  signStatement(
+    "hub-sign-in",
+    { hub: HUB, nonce: nonce(), issued: seconds(), ...fields },
+    k,
+  );
 
-async function signIn(account: Account): Promise<string> {
-  const message = await siweMessage(account);
-  const signature = await account.signMessage({ message });
-  const res = await req("POST", "/auth/verify", {
-    body: { message, signature },
-  });
+async function signIn(k: Key): Promise<string> {
+  const res = await req("POST", "/auth/verify", { body: signInStatement(k) });
   expect(res.status).toBe(200);
   return res.json.token;
 }
 
-async function delegationBody(
-  landId: number,
-  signer: Account,
-  miningKey: Address,
-  issuedAt = Math.floor(nowMs / 1000),
-) {
-  const signature = await signer.signTypedData({
-    domain: HUB_EIP712_DOMAIN(CHAIN_ID),
-    types: DelegationTypes,
-    primaryType: "Delegation",
-    message: { landId: BigInt(landId), miningKey, issuedAt: BigInt(issuedAt) },
-  });
-  return { miningKey, issuedAt: String(issuedAt), signature };
+const mapServerStatement = (ms: Key, owner: Key, fields = {}) =>
+  signStatement(
+    "map-server",
+    {
+      hub: HUB,
+      owner: owner.address,
+      mapServerKey: ms.address,
+      issued: seconds(),
+      ...fields,
+    },
+    ms,
+  );
+
+const delegation = (owner: Key, ms: Key, fields = {}) =>
+  signStatement(
+    "delegation",
+    {
+      hub: HUB,
+      owner: owner.address,
+      mapServerKey: ms.address,
+      issued: seconds(),
+      ...fields,
+    },
+    owner,
+  );
+
+/** The Map server names its owner, then the owner signs a Delegation. Returns the Land id. */
+async function register(owner: Key, ms: Key): Promise<number> {
+  expect(
+    (await req("POST", "/map-servers", { body: mapServerStatement(ms, owner) }))
+      .status,
+  ).toBe(204);
+  const res = await req("POST", "/lands", { body: delegation(owner, ms) });
+  expect(res.status).toBe(201);
+  return res.json.landId;
 }
 
-async function register(landId: number, signer: Account, issuedAt?: number) {
-  return req("POST", `/lands/${landId}/delegation`, {
-    body: await delegationBody(landId, signer, mining1, issuedAt),
-  });
+/** Registers Lands, brings them online and gives them cells (in id order: 0, 1, 2, ...). */
+async function world(n: number): Promise<number[]> {
+  const ids: number[] = [];
+  for (let i = 0; i < n; i++) {
+    // one network each, so the daily limit does not apply
+    peer = `198.51.100.${i + 1}`;
+    ids.push(await register(owners[i]!, mapServers[i]!));
+  }
+  peer = "203.0.113.5";
+  online = ids;
+  await sweep(deps);
+  return ids;
 }
+
+const cells = async () =>
+  Object.fromEntries(
+    (
+      await db.query<{ id: number; cell: number | null }>(
+        "SELECT id, cell FROM land ORDER BY id",
+      )
+    ).rows.map((r) => [Number(r.id), r.cell]),
+  );
 
 describe("migrations", () => {
   it("are idempotent", async () => {
     await migrate(db);
     await migrate(db);
     const { rows } = await db.query("SELECT id FROM migration");
-    expect(rows).toHaveLength(2);
+    expect(rows).toHaveLength(5);
   });
 });
 
 describe("config", () => {
   const good = {
     DATABASE_URL: "postgres://x",
-    HUB_TICKET_KEY: generatePrivateKey(),
+    HUB_TICKET_KEY: "ab".repeat(32),
     HUB_SESSION_SECRET: SECRET,
-    HUB_ADMINS: admin.address.toLowerCase(),
+    HUB_ADMINS: admin.address,
   };
-  it("loads and normalises", () => {
+  it("loads with development defaults", () => {
     const c = loadConfig(good);
     expect(c.port).toBe(8787);
     expect(c.admins).toEqual([admin.address]);
+    expect(c.hubDomain).toBe("localhost:8787");
+    expect(c.landBaseDomain).toBe("localhost:8080");
+    expect(c.landUrlScheme).toBe("http");
+    expect(c.ticketSeed).toEqual(new Uint8Array(32).fill(0xab));
   });
   it("rejects bad input with clear messages", () => {
-    expect(() => loadConfig({ ...good, HUB_TICKET_KEY: "0x12" })).toThrow(
-      /HUB_TICKET_KEY/,
+    const bad = (env: object, message: RegExp) =>
+      expect(() => loadConfig({ ...good, ...env })).toThrow(message);
+    bad({ HUB_TICKET_KEY: `0x${"ab".repeat(32)}` }, /HUB_TICKET_KEY/);
+    bad({ HUB_SESSION_SECRET: "short" }, /HUB_SESSION_SECRET/);
+    bad({ DATABASE_URL: "" }, /DATABASE_URL is required/);
+    bad({ HUB_ADMINS: admin.address.toUpperCase() }, /HUB_ADMINS/);
+    bad({ PORT: "99999" }, /PORT/);
+    bad({ HUB_DOMAIN: "Hub.Example" }, /HUB_DOMAIN/);
+    bad({ LAND_BASE_DOMAIN: "lands.test/x" }, /LAND_BASE_DOMAIN/);
+    bad({ LAND_URL_SCHEME: "ftp" }, /LAND_URL_SCHEME/);
+    bad({ HUB_TRUSTED_PROXIES: "10.0.0.0/33" }, /HUB_TRUSTED_PROXIES/);
+    bad({ RELAY_INTERNAL_URL: "not a url" }, /RELAY_INTERNAL_URL/);
+  });
+  it("never echoes the ticket key", () => {
+    const secret = "secret".repeat(10);
+    expect(() => loadConfig({ ...good, HUB_TICKET_KEY: secret })).toThrow(
+      expect.objectContaining({
+        message: expect.not.stringContaining(secret) as string,
+      }),
     );
-    expect(() => loadConfig({ ...good, HUB_SESSION_SECRET: "short" })).toThrow(
-      /HUB_SESSION_SECRET/,
-    );
-    expect(() => loadConfig({ ...good, DATABASE_URL: "" })).toThrow(
-      /DATABASE_URL is required/,
-    );
-    expect(() => loadConfig({ ...good, HUB_ADMINS: "nope" })).toThrow(
-      /HUB_ADMINS/,
-    );
-    expect(() => loadConfig({ ...good, PORT: "99999" })).toThrow(/PORT/);
-    expect(() =>
-      loadConfig({ ...good, HUB_BUNDLER_URL: "SECRETKEY not a url" }),
-    ).toThrow(/^HUB_BUNDLER_URL is not a valid URL$/);
   });
 });
 
@@ -278,486 +252,715 @@ describe("health and errors", () => {
   });
   it("rejects oversized bodies", async () => {
     const r = await req("POST", "/auth/verify", {
-      body: { message: "x".repeat(20_000) },
+      body: { statement: "x".repeat(20_000) },
     });
     expect(r.status).toBe(413);
   });
-  it("answers CORS only for allowed origins", async () => {
-    const ok = await req("GET", "/health", {
-      headers: { Origin: "https://game.test" },
+  it("answers CORS only for allowed origins, varying by Origin", async () => {
+    const ok = await req("GET", "/directory", {
+      headers: { Origin: "https://shell.test" },
     });
     expect(ok.headers.get("access-control-allow-origin")).toBe(
-      "https://game.test",
+      "https://shell.test",
     );
+    expect(ok.headers.get("vary")).toContain("Origin");
     const bad = await req("GET", "/health", {
       headers: { Origin: "https://evil.test" },
     });
     expect(bad.headers.get("access-control-allow-origin")).toBeNull();
   });
+  it("logs unexpected errors and hides them from the client", async () => {
+    deps.db = {
+      query: () => Promise.reject(new Error("database is down")),
+    };
+    app = createApp(deps);
+    const r = await req("GET", "/directory");
+    expect(r.status).toBe(500);
+    expect(r.json).toEqual({ error: "internal error" });
+    expect(logs.join()).toContain("database is down");
+  });
+});
+
+describe("GET /keys", () => {
+  it("publishes the Hub's ticket key", async () => {
+    const r = await req("GET", "/keys");
+    expect(r.json.ticket.address).toBe(hubKey.address);
+    expect(Buffer.from(r.json.ticket.publicKey, "base64")).toEqual(
+      Buffer.from(hubKey.publicKey),
+    );
+  });
 });
 
 describe("sign-in", () => {
-  it("issues a one-hour token for the signer", async () => {
-    const message = await siweMessage(player);
-    const signature = await player.signMessage({ message });
+  it("issues a one-hour token for the signer, with its name", async () => {
     const r = await req("POST", "/auth/verify", {
-      body: { message, signature },
+      body: signInStatement(owner1),
     });
     expect(r.status).toBe(200);
-    expect(r.json.address).toBe(player.address);
-    expect(r.json.expiresAt).toBe(Math.floor(nowMs / 1000) + 3600);
-    const reports = await req("GET", "/admin/reports", { token: r.json.token });
-    expect(reports.status).toBe(403); // the token is accepted; the address is just not an admin
-  });
-  it("rejects a bad signature", async () => {
-    const message = await siweMessage(player);
-    const signature = await stranger.signMessage({ message });
-    expect(
-      (await req("POST", "/auth/verify", { body: { message, signature } }))
-        .status,
-    ).toBe(401);
-  });
-  it("makes nonces single use", async () => {
-    const message = await siweMessage(player);
-    const signature = await player.signMessage({ message });
-    const body = { message, signature };
-    expect((await req("POST", "/auth/verify", { body })).status).toBe(200);
-    expect((await req("POST", "/auth/verify", { body })).status).toBe(401);
-  });
-  it("consumes the nonce even when the signature is bad", async () => {
-    const message = await siweMessage(player);
-    const bad = await stranger.signMessage({ message });
-    await req("POST", "/auth/verify", { body: { message, signature: bad } });
-    const good = await player.signMessage({ message });
-    expect(
-      (
-        await req("POST", "/auth/verify", {
-          body: { message, signature: good },
-        })
-      ).status,
-    ).toBe(401);
-  });
-  it("rejects an unknown or expired nonce", async () => {
-    const forged = createSiweMessage({
-      address: player.address,
-      chainId: CHAIN_ID,
-      domain: DOMAIN,
-      nonce: "neverissued1",
-      uri: `https://${DOMAIN}`,
-      version: "1",
+    expect(r.json).toMatchObject({
+      address: owner1.address,
+      name: "",
+      expiresAt: seconds() + 3600,
     });
-    const signature = await player.signMessage({ message: forged });
-    expect(
-      (
-        await req("POST", "/auth/verify", {
-          body: { message: forged, signature },
-        })
-      ).status,
-    ).toBe(401);
-
-    const message = await siweMessage(player);
-    const sig = await player.signMessage({ message });
-    nowMs += 5 * 60_000 + 1;
-    expect(
-      (await req("POST", "/auth/verify", { body: { message, signature: sig } }))
-        .status,
-    ).toBe(401);
+    await req("PUT", "/me/name", {
+      token: r.json.token,
+      body: { name: "Mai" },
+    });
+    const again = await req("POST", "/auth/verify", {
+      body: signInStatement(owner1),
+    });
+    expect(again.json.name).toBe("Mai");
   });
-  it("rejects the wrong domain and the wrong chain id", async () => {
-    for (const overrides of [{ domain: "evil.test" }, { chainId: 1 }]) {
-      const message = await siweMessage(player, overrides);
-      const signature = await player.signMessage({ message });
-      expect(
-        (await req("POST", "/auth/verify", { body: { message, signature } }))
-          .status,
-      ).toBe(401);
+
+  it("cannot be replayed", async () => {
+    const signed = signInStatement(owner1);
+    expect((await req("POST", "/auth/verify", { body: signed })).status).toBe(
+      200,
+    );
+    nowMs += 59_000;
+    const replay = await req("POST", "/auth/verify", { body: signed });
+    expect(replay.status).toBe(401);
+    expect(replay.json.error).toMatch(/already used/);
+    // once the nonce is forgotten, the time check refuses it
+    nowMs += 62_000;
+    expect((await req("POST", "/auth/verify", { body: signed })).status).toBe(
+      401,
+    );
+  });
+
+  it("keeps the nonce for as long as Issued passes the time check", async () => {
+    // first used at the earliest moment Issued passes, replayed at the latest
+    nowMs = Math.floor(nowMs / 1000) * 1000;
+    const signed = signInStatement(owner1, { issued: seconds() + 60 });
+    expect((await req("POST", "/auth/verify", { body: signed })).status).toBe(
+      200,
+    );
+    nowMs += 120_999;
+    const replay = await req("POST", "/auth/verify", { body: signed });
+    expect(replay.json.error).toMatch(/already used/);
+  });
+
+  it("is refused when Issued is more than 60 seconds off", async () => {
+    for (const [offset, status] of [
+      [-61, 401],
+      [61, 401],
+      [-60, 200],
+      [60, 200],
+    ] as const) {
+      const body = signInStatement(owner1, { issued: seconds() + offset });
+      expect((await req("POST", "/auth/verify", { body })).status).toBe(status);
     }
   });
-  it("rejects an expired SIWE message", async () => {
-    const message = await siweMessage(player, {
-      expirationTime: new Date(nowMs - 1000),
+
+  it("is refused for another Hub, a bad signature or another statement", async () => {
+    const other = await req("POST", "/auth/verify", {
+      body: signInStatement(owner1, { hub: "other.test" }),
     });
-    const signature = await player.signMessage({ message });
-    expect(
-      (await req("POST", "/auth/verify", { body: { message, signature } }))
-        .status,
-    ).toBe(401);
+    expect(other.status).toBe(401);
+    const signed = signInStatement(owner1);
+    const forged = {
+      ...signed,
+      publicKey: signInStatement(owner2).publicKey,
+    };
+    expect((await req("POST", "/auth/verify", { body: forged })).json).toEqual({
+      error: "bad signature",
+    });
+    // a Map server statement is signed under another context
+    const wrongKind = await req("POST", "/auth/verify", {
+      body: mapServerStatement(ms1, owner1),
+    });
+    expect(wrongKind.status).toBe(401);
+    for (const body of [{}, { statement: 1 }, { ...signed, signature: "x" }])
+      expect((await req("POST", "/auth/verify", { body })).status).toBe(401);
   });
-  it("rejects malformed bodies", async () => {
+
+  it("is rate-limited per network address", async () => {
+    let last = 0;
+    for (let i = 0; i < 31; i++)
+      last = (
+        await req("POST", "/auth/verify", { body: signInStatement(owner1) })
+      ).status;
+    expect(last).toBe(429);
+    peer = "198.51.100.7";
     expect(
-      (
-        await req("POST", "/auth/verify", {
-          body: { message: 1, signature: "0x00" },
-        })
-      ).status,
-    ).toBe(400);
-    expect(
-      (
-        await req("POST", "/auth/verify", {
-          body: { message: "hi", signature: "zz" },
-        })
-      ).status,
-    ).toBe(400);
-    expect(
-      (
-        await req("POST", "/auth/verify", {
-          body: { message: "hi", signature: "0x00" },
-        })
-      ).status,
-    ).toBe(400);
+      (await req("POST", "/auth/verify", { body: signInStatement(owner1) }))
+        .status,
+    ).toBe(200);
   });
 });
 
-describe("bearer auth", () => {
-  it("rejects a missing, forged or expired token", async () => {
-    const body = { landId: 1 };
-    expect((await req("POST", "/tickets", { body })).status).toBe(401);
-    expect((await req("POST", "/tickets", { body, token: "abc" })).status).toBe(
-      401,
-    );
-    const now = Math.floor(Date.now() / 1000);
-    const forged = await sign(
-      { sub: player.address, exp: now + 600 },
-      "x".repeat(40),
-      "HS256",
-    );
-    expect(
-      (await req("POST", "/tickets", { body, token: forged })).status,
-    ).toBe(401);
+describe("sessions", () => {
+  it("reject a missing, forged, expired or unsigned token", async () => {
+    const valid = await signIn(owner1);
+    for (const token of [undefined, "nope", `${valid}x`])
+      expect(
+        (await req("PUT", "/me/name", { token, body: { name: "x" } })).status,
+      ).toBe(401);
     const expired = await sign(
-      { sub: player.address, exp: now - 10 },
+      { sub: owner1.address, exp: Math.floor(Date.now() / 1000) - 1 },
       SECRET,
       "HS256",
     );
     expect(
-      (await req("POST", "/tickets", { body, token: expired })).status,
+      (await req("PUT", "/me/name", { token: expired, body: { name: "x" } }))
+        .status,
     ).toBe(401);
-    const noSub = await sign({ exp: now + 600 }, SECRET, "HS256");
-    expect((await req("POST", "/tickets", { body, token: noSub })).status).toBe(
+    const b64 = (o: object) =>
+      Buffer.from(JSON.stringify(o)).toString("base64url");
+    const none = `${b64({ alg: "none", typ: "JWT" })}.${b64({ sub: admin.address, exp: seconds() + 99 })}.`;
+    expect((await req("GET", "/admin/reports", { token: none })).status).toBe(
       401,
     );
   });
+
+  it("protect routes whatever the path spelling", async () => {
+    for (const path of ["/tickets/", "/reports/", "/admin/reports/"])
+      expect([401, 404]).toContain((await req("POST", path)).status);
+    expect((await req("GET", "/admin/reports/")).status).toBe(401);
+    expect((await req("GET", "/%61dmin/reports")).status).toBe(401);
+  });
 });
 
-describe("delegation", () => {
-  it("registers a Land, with owner and coordinates from the chain", async () => {
-    const r = await register(2, owner2);
-    expect(r.status).toBe(200);
-    const d = await req("GET", "/directory/2");
-    expect(d.json).toEqual({
-      landId: 2,
-      owner: owner2.address,
-      x: 1,
-      y: 0,
-      miningKey: mining1,
-      online: true,
+describe("names", () => {
+  it("are trimmed and stored", async () => {
+    const token = await signIn(owner1);
+    const r = await req("PUT", "/me/name", {
+      token,
+      body: { name: "  Mai Lan  " },
     });
-  });
-  it("accepts issuedAt as a number", async () => {
-    const body = await delegationBody(1, owner1, mining1);
-    const r = await req("POST", "/lands/1/delegation", {
-      body: { ...body, issuedAt: Number(body.issuedAt) },
-    });
-    expect(r.status).toBe(200);
-  });
-  it("rejects a signature from someone who does not own the Land", async () => {
-    expect((await register(1, stranger)).status).toBe(403);
-    expect((await register(1, owner2)).status).toBe(403);
-    expect((await req("GET", "/directory/1")).status).toBe(404);
-  });
-  it("rejects a signature over other fields", async () => {
-    const body = await delegationBody(1, owner1, mining1);
-    const other = privateKeyToAccount(generatePrivateKey()).address;
+    expect(r.json).toEqual({ name: "Mai Lan" });
+    const emoji = "🌸".repeat(32);
     expect(
-      (
-        await req("POST", "/lands/1/delegation", {
-          body: { ...body, miningKey: other },
-        })
-      ).status,
+      (await req("PUT", "/me/name", { token, body: { name: emoji } })).status,
+    ).toBe(200);
+  });
+
+  it("refuse what a statement could not carry", async () => {
+    const token = await signIn(owner1);
+    for (const name of [
+      "",
+      "   ",
+      "a".repeat(33),
+      "Mai\nLand: 8",
+      "Mai\u0007",
+      "Mai​Lan",
+      "\ud800",
+      7,
+    ])
+      expect(
+        (await req("PUT", "/me/name", { token, body: { name } })).status,
+      ).toBe(400);
+  });
+});
+
+describe("registering a Land", () => {
+  it("keeps the newest Map server statement per key", async () => {
+    const post = (body: SignedStatement) =>
+      req("POST", "/map-servers", { body });
+    const first = mapServerStatement(ms1, owner1);
+    expect((await post(first)).status).toBe(204);
+    expect((await post(first)).status).toBe(204);
+    const older = mapServerStatement(ms1, owner2, { issued: seconds() - 10 });
+    expect((await post(older)).status).toBe(409);
+    const newer = mapServerStatement(ms1, owner2, { issued: seconds() + 10 });
+    expect((await post(newer)).status).toBe(204);
+    // owner2 is now the named owner, so owner1 cannot register it
+    expect(
+      (await req("POST", "/lands", { body: delegation(owner1, ms1) })).status,
     ).toBe(403);
   });
-  it("returns 404 for a missing Land", async () => {
-    expect((await register(99, owner1)).status).toBe(404);
-  });
-  it("rejects malformed fields", async () => {
-    const good = await delegationBody(1, owner1, mining1);
-    const post = (body: unknown, id = "1") =>
-      req("POST", `/lands/${id}/delegation`, { body });
-    expect((await post({ ...good, miningKey: "0x12" })).status).toBe(400);
-    expect((await post({ ...good, issuedAt: "-1" })).status).toBe(400);
-    expect((await post({ ...good, issuedAt: "1.5" })).status).toBe(400);
-    expect((await post({ ...good, issuedAt: String(2n ** 64n) })).status).toBe(
-      400,
+
+  it("refuses a Map server statement for another Hub, at another time or naming another key", async () => {
+    const post = (body: SignedStatement) =>
+      req("POST", "/map-servers", { body });
+    expect(
+      (await post(mapServerStatement(ms1, owner1, { hub: "other.test" })))
+        .status,
+    ).toBe(400);
+    expect(
+      (await post(mapServerStatement(ms1, owner1, { issued: seconds() - 301 })))
+        .status,
+    ).toBe(400);
+    const lying = signStatement(
+      "map-server",
+      {
+        hub: HUB,
+        owner: owner1.address,
+        mapServerKey: ms2.address,
+        issued: seconds(),
+      },
+      ms1,
     );
-    expect((await post({ ...good, signature: "nothex" })).status).toBe(400);
-    expect((await post({ ...good, signature: undefined })).status).toBe(400);
-    expect((await post(good, "abc")).status).toBe(400);
-    expect((await post(good, "0")).status).toBe(400);
-    expect((await post(good, String(2 ** 32))).status).toBe(400);
-    expect((await post([1])).status).toBe(400);
+    expect((await post(lying)).json.error).toMatch(/mapServerKey/);
   });
-  it("rejects an issuedAt more than 5 minutes ahead", async () => {
-    const t = Math.floor(nowMs / 1000);
-    expect((await register(1, owner1, t + 301)).status).toBe(400);
-    expect((await register(1, owner1, t + 299)).status).toBe(200);
-  });
-  it("keeps only the newest Delegation", async () => {
-    const t = Math.floor(nowMs / 1000);
-    expect((await register(1, owner1, t)).status).toBe(200);
-    const newer = privateKeyToAccount(generatePrivateKey()).address;
-    const body = await delegationBody(1, owner1, newer, t + 10);
-    expect((await req("POST", "/lands/1/delegation", { body })).status).toBe(
-      200,
-    );
-    expect((await req("GET", "/directory/1")).json.miningKey).toBe(newer);
-    // stale and equal are refused
-    expect((await register(1, owner1, t + 5)).status).toBe(409);
-    expect((await register(1, owner1, t + 10)).status).toBe(409);
-    expect((await req("GET", "/directory/1")).json.miningKey).toBe(newer);
-  });
-  it("keeps a Land hidden when it is re-registered", async () => {
-    const t = Math.floor(nowMs / 1000);
-    await register(1, owner1, t);
-    const token = await signIn(admin);
-    await req("POST", "/admin/lands/1/hidden", {
-      token,
-      body: { hidden: true },
+
+  it("lists the Map servers that named a Character and serve no Land", async () => {
+    await req("POST", "/map-servers", {
+      body: mapServerStatement(ms1, owner1),
     });
-    expect((await register(1, owner1, t + 1)).status).toBe(200);
-    expect((await req("GET", "/directory/1")).status).toBe(404);
+    await req("POST", "/map-servers", {
+      body: mapServerStatement(ms2, owner1),
+    });
+    const token = await signIn(owner1);
+    const list = await req("GET", `/map-servers?owner=${owner1.address}`, {
+      token,
+    });
+    expect(
+      list.json.mapServers.map((m: { mapServerKey: string }) => m.mapServerKey),
+    ).toEqual(expect.arrayContaining([ms1.address, ms2.address]));
+    await req("POST", "/lands", { body: delegation(owner1, ms1) });
+    const after = await req("GET", `/map-servers?owner=${owner1.address}`, {
+      token,
+    });
+    expect(after.json.mapServers).toEqual([
+      { mapServerKey: ms2.address, issued: seconds() },
+    ]);
+    expect(
+      (await req("GET", `/map-servers?owner=${owner2.address}`, { token }))
+        .status,
+    ).toBe(403);
+    expect(
+      (await req("GET", `/map-servers?owner=${owner1.address}`)).status,
+    ).toBe(401);
   });
-  it("hides chain failures from the client", async () => {
-    chainDown = true;
-    const r = await register(1, owner1);
-    expect(r.status).toBe(502);
-    expect(JSON.stringify(r.json)).not.toContain("secret-rpc");
-    expect(logs.join()).toContain("chain read failed");
+
+  it("creates a Land with no cell", async () => {
+    const landId = await register(owner1, ms1);
+    expect(landId).toBe(1);
+    const r = await req("GET", `/lands/${landId}`);
+    expect(r.json).toEqual({
+      landId: 1,
+      owner: owner1.address,
+      ownerName: "",
+      x: null,
+      y: null,
+      url: "https://1.lands.test",
+      mapServerKey: ms1.address,
+      online: false,
+    });
+  });
+
+  it("is refused without the Map server's statement, so nobody claims another's Map server", async () => {
+    expect(
+      (await req("POST", "/lands", { body: delegation(owner1, ms1) })).status,
+    ).toBe(403);
+    await req("POST", "/map-servers", {
+      body: mapServerStatement(ms1, owner1),
+    });
+    const claim = await req("POST", "/lands", {
+      body: delegation(owner2, ms1),
+    });
+    expect(claim.status).toBe(403);
+  });
+
+  it("refuses a Delegation signed by someone else, for another Hub or at another time", async () => {
+    await req("POST", "/map-servers", {
+      body: mapServerStatement(ms1, owner1),
+    });
+    const forged = signStatement(
+      "delegation",
+      {
+        hub: HUB,
+        owner: owner1.address,
+        mapServerKey: ms1.address,
+        issued: seconds(),
+      },
+      owner2,
+    );
+    expect((await req("POST", "/lands", { body: forged })).status).toBe(400);
+    for (const fields of [{ hub: "other.test" }, { issued: seconds() + 301 }])
+      expect(
+        (await req("POST", "/lands", { body: delegation(owner1, ms1, fields) }))
+          .status,
+      ).toBe(400);
+  });
+
+  it("gives one Land per Character; a newer Delegation replaces the Map server key", async () => {
+    const landId = await register(owner1, ms1);
+    await req("POST", "/map-servers", {
+      body: mapServerStatement(ms2, owner1),
+    });
+    nowMs += 1000;
+    const newer = delegation(owner1, ms2);
+    const moved = await req("POST", "/lands", { body: newer });
+    expect(moved).toMatchObject({ status: 200, json: { landId } });
+    expect((await req("GET", `/lands/${landId}`)).json.mapServerKey).toBe(
+      ms2.address,
+    );
+    // the same Delegation sent again (a retry) gets the same answer
+    expect(await req("POST", "/lands", { body: newer })).toMatchObject({
+      status: 200,
+      json: { landId },
+    });
+    const stale = await req("POST", "/lands", {
+      body: delegation(owner1, ms1, { issued: seconds() - 1 }),
+    });
+    expect(stale.status).toBe(409);
+    const { rows } = await db.query("SELECT id FROM land");
+    expect(rows).toHaveLength(1);
+  });
+
+  it("refuses a key that serves another Land", async () => {
+    await register(owner1, ms1);
+    await req("POST", "/map-servers", {
+      body: mapServerStatement(ms1, owner2, { issued: seconds() + 1 }),
+    });
+    const r = await req("POST", "/lands", { body: delegation(owner2, ms1) });
+    expect(r.status).toBe(409);
+  });
+
+  it("allows 3 new Lands per network address per day, whatever X-Forwarded-For says", async () => {
+    // behind the trusted proxy, the client is the rightmost untrusted entry
+    peer = PROXY;
+    const as = (i: number, xff: string) =>
+      req("POST", "/map-servers", {
+        body: mapServerStatement(mapServers[i]!, owners[i]!),
+      }).then(() =>
+        req("POST", "/lands", {
+          body: delegation(owners[i]!, mapServers[i]!),
+          headers: { "X-Forwarded-For": xff },
+        }),
+      );
+    expect((await as(0, "198.51.100.7")).status).toBe(201);
+    expect((await as(1, "1.1.1.1, 198.51.100.7")).status).toBe(201);
+    expect((await as(2, `2.2.2.2, 198.51.100.7, ${PROXY}`)).status).toBe(201);
+    const fourth = await as(3, "3.3.3.3, 198.51.100.7");
+    expect(fourth.status).toBe(429);
+    // the refusal did not use up anything; another network still can
+    expect((await as(3, "198.51.100.8")).status).toBe(201);
+    // the next UTC day starts afresh
+    nowMs += DAY_MS;
+    expect((await as(4, "198.51.100.7")).status).toBe(201);
+  });
+
+  it("counts an IPv6 /64 as one network, and replacing a key does not count", async () => {
+    const as = async (i: number, ip: string) => {
+      peer = ip;
+      await req("POST", "/map-servers", {
+        body: mapServerStatement(mapServers[i]!, owners[i]!),
+      });
+      return req("POST", "/lands", {
+        body: delegation(owners[i]!, mapServers[i]!),
+      });
+    };
+    expect((await as(0, "2001:db8:1:2::1")).status).toBe(201);
+    expect((await as(1, "2001:db8:1:2:ffff::9")).status).toBe(201);
+    // a newer Delegation for the same Land replaces its key and is not a new Land
+    nowMs += 1000;
+    expect((await as(0, "2001:db8:1:2::1")).status).toBe(200);
+    expect((await as(2, "2001:db8:1:2::3")).status).toBe(201);
+    expect((await as(3, "2001:db8:1:2::4")).status).toBe(429);
+    expect((await as(3, "2001:db8:1:3::4")).status).toBe(201);
   });
 });
 
-describe("directory", () => {
-  beforeEach(async () => {
-    await register(1, owner1);
-    await register(2, owner2);
+describe("Land lookups", () => {
+  it("find a visible Land by owner or Map server key", async () => {
+    const landId = await register(owner1, ms1);
+    for (const query of [
+      `owner=${owner1.address}`,
+      `mapServerKey=${ms1.address}`,
+    ])
+      expect((await req("GET", `/lands?${query}`)).json.landId).toBe(landId);
+    expect((await req("GET", `/lands?owner=${owner2.address}`)).status).toBe(
+      404,
+    );
   });
-  it("lists registered Lands with online status and cache headers", async () => {
-    online = [2];
-    const r = await req("GET", "/directory");
-    expect(r.status).toBe(200);
-    expect(r.headers.get("cache-control")).toBe(
+
+  it("refuse bad queries", async () => {
+    for (const query of [
+      "",
+      `owner=${owner1.address}&mapServerKey=${ms1.address}`,
+      "owner=nope",
+      `owner=${owner1.address.toUpperCase()}`,
+    ])
+      expect((await req("GET", `/lands?${query}`)).status).toBe(400);
+    for (const id of ["0", "x", "9007199254740992", "%E0%A4%A"])
+      expect((await req("GET", `/lands/${id}`)).status).toBe(400);
+    expect((await req("GET", "/lands/7")).status).toBe(404);
+  });
+});
+
+describe("cells and the sweep", () => {
+  it("gives a cell only to a Land whose Map server is online", async () => {
+    const a = await register(owner1, ms1);
+    const b = await register(owner2, ms2);
+    online = [a];
+    await sweep(deps);
+    expect(await cells()).toEqual({ [a]: 0, [b]: null });
+    const dir = await req("GET", "/directory");
+    expect(dir.json.lands).toEqual([
+      expect.objectContaining({ landId: a, x: 0, y: 0, online: true }),
+    ]);
+    expect(dir.headers.get("cache-control")).toBe(
       "public, s-maxage=5, stale-while-revalidate=30",
     );
-    expect(r.json.relayUrl).toBe("wss://relay.test");
-    expect(
-      r.json.lands.map((l: DirectoryLand) => [l.landId, l.online]),
-    ).toEqual([
-      [1, false],
-      [2, true],
-    ]);
-  });
-  it("excludes hidden Lands and answers 404 for them", async () => {
-    const token = await signIn(admin);
-    await req("POST", "/admin/lands/1/hidden", {
-      token,
-      body: { hidden: true },
+    // a Land without a cell is still found, so its Map server can link
+    expect((await req("GET", `/lands/${b}`)).json).toMatchObject({
+      x: null,
+      y: null,
     });
-    expect(
-      (await req("GET", "/directory")).json.lands.map(
-        (l: DirectoryLand) => l.landId,
-      ),
-    ).toEqual([2]);
-    expect((await req("GET", "/directory/1")).status).toBe(404);
-    expect((await req("GET", "/directory/7")).status).toBe(404);
-    expect((await req("GET", "/directory/x")).status).toBe(400);
   });
-  it("caches presence for 2 seconds", async () => {
+
+  it("fills the spiral from the centre, never twice the same cell", async () => {
+    const ids = await world(4);
+    await sweep(deps);
+    expect(await cells()).toEqual({
+      [ids[0]!]: 0,
+      [ids[1]!]: 1,
+      [ids[2]!]: 2,
+      [ids[3]!]: 3,
+    });
+    await expect(
+      db.query("UPDATE land SET cell = 0 WHERE id = $1", [ids[1]]),
+    ).rejects.toMatchObject({ code: "23505" });
+  });
+
+  it("takes the cell of a Land offline for 30 days, which returns at the edge", async () => {
+    const [a, b] = await world(2);
+    online = [b!];
+    nowMs += (CELL_KEPT_OFFLINE_SECONDS - 15) * 1000;
+    await sweep(deps);
+    expect((await cells())[a!]).toBe(0);
+    nowMs += 15_000;
+    await sweep(deps);
+    expect(await cells()).toEqual({ [a!]: null, [b!]: 1 });
+    // a new Land fills the hole, the returning one goes to the edge
+    const c = await register(owners[2]!, mapServers[2]!);
+    online = [a!, b!, c];
+    await sweep(deps);
+    expect(await cells()).toEqual({ [a!]: 2, [b!]: 1, [c]: 0 });
+  });
+
+  it("gives no cell to a hidden Land and keeps going when the relay is down", async () => {
+    const a = await register(owner1, ms1);
+    await db.query("UPDATE land SET hidden = true WHERE id = $1", [a]);
+    online = [a];
+    await sweep(deps);
+    expect((await cells())[a]).toBeNull();
+    relayDown = true;
+    await expect(sweep(deps)).resolves.toBeUndefined();
+    expect(logs.join()).toContain("relay presence unavailable");
+  });
+
+  it("forgets old quota rows and Map server statements that serve no Land", async () => {
+    await register(owner1, ms1);
+    await req("POST", "/map-servers", {
+      body: mapServerStatement(ms2, owner2),
+    });
+    nowMs += 7 * DAY_MS + 1000;
+    await sweep(deps);
+    const keys = (await db.query<{ key: string }>("SELECT key FROM map_server"))
+      .rows;
+    expect(keys).toEqual([{ key: ms1.address }]);
+    expect((await db.query("SELECT * FROM land_quota")).rows).toEqual([]);
+  });
+});
+
+describe("online status", () => {
+  it("is cached for 2 seconds", async () => {
+    await world(1);
+    onlineCalls = 0;
     await req("GET", "/directory");
-    await req("GET", "/directory/1");
+    await req("GET", "/directory");
+    nowMs += 1999;
+    await req("GET", "/directory");
     expect(onlineCalls).toBe(1);
-    nowMs += 2001;
+    nowMs += 1;
     await req("GET", "/directory");
     expect(onlineCalls).toBe(2);
   });
-  it("shows every Land offline and logs once per failure burst", async () => {
+
+  it("shows every Land offline when the relay is down, logging once per burst", async () => {
+    await world(1);
     relayDown = true;
-    const r = await req("GET", "/directory");
-    expect(r.json.lands.every((l: DirectoryLand) => !l.online)).toBe(true);
-    nowMs += 3000;
-    await req("GET", "/directory");
-    nowMs += 3000;
-    await req("GET", "/directory");
-    expect(logs.filter((l) => l.includes("relay presence"))).toHaveLength(1);
-    relayDown = false;
-    nowMs += 3000;
-    expect((await req("GET", "/directory")).json.lands[0].online).toBe(true);
-    relayDown = true;
-    nowMs += 3000;
-    await req("GET", "/directory");
-    expect(logs.filter((l) => l.includes("relay presence"))).toHaveLength(2);
+    for (let i = 0; i < 3; i++) {
+      nowMs += 2000;
+      const dir = await req("GET", "/directory");
+      expect(dir.json.lands[0].online).toBe(false);
+    }
+    expect(
+      logs.filter((l) => l.includes("relay presence unavailable")),
+    ).toHaveLength(1);
   });
 });
 
-describe("tickets", () => {
-  let token: string;
-  beforeEach(async () => {
-    for (const [id, who] of [
-      [1, owner1],
-      [2, owner2],
-      [3, owner2],
-      [5, owner5],
-    ] as const)
-      expect((await register(id, who)).status).toBe(200);
-    token = await signIn(player);
-  });
-  const ask = (body: unknown, t = token) =>
-    req("POST", "/tickets", { token: t, body });
+describe("Travel tickets", () => {
+  // one session per Character: hono/jwt refuses a token whose iat is ahead of the real clock,
+  // and these tests move the Hub's clock forward
+  const tokens = new Map<Key, Promise<string>>();
+  beforeEach(() => tokens.clear());
+  async function ticket(body: object, k: Key = owner1) {
+    if (!tokens.has(k)) tokens.set(k, signIn(k));
+    return req("POST", "/tickets", { token: await tokens.get(k), body });
+  }
 
-  it("issues a ticket the Map server can verify offline (no from: GATE_NONE)", async () => {
-    const r = await ask({ landId: 2 });
+  it("issues a ticket the Land accepts offline (Gate 0 without from)", async () => {
+    const [a] = await world(1);
+    const token = await signIn(owner2);
+    await req("PUT", "/me/name", { token, body: { name: "Lan" } });
+    const r = await req("POST", "/tickets", { token, body: { landId: a } });
     expect(r.status).toBe(200);
-    expect(r.json.ticket).toMatchObject({
-      player: player.address,
-      landId: "2",
+    const arrival = signStatement(
+      "arrival",
+      {
+        land: a!,
+        ticketNonce: verifyStatement(r.json, "travel-ticket").fields.nonce,
+        drivenByAi: false,
+      },
+      owner2,
+    );
+    const verified = verifyHandoff(
+      { ticket: r.json, arrival },
+      {
+        landId: a!,
+        hubTicketSigner: hubKey.address,
+        startedAt: seconds() - 1,
+        now: seconds(),
+        isUsed: () => false,
+      },
+    );
+    expect(verified.ticket).toMatchObject({
+      hub: HUB,
+      character: owner2.address,
+      name: "Lan",
+      land: a,
       gate: 0,
+      issued: seconds(),
+      expires: seconds() + 60,
     });
-    const nowSeconds = Math.floor(nowMs / 1000);
-    expect(r.json.ticket.expiresAt).toBe(String(nowSeconds + 60));
-    const t = await verifyTravelTicket({
-      ticket: r.json.ticket,
-      signature: r.json.signature,
-      hubSigner: hubKey.address,
-      chainId: CHAIN_ID,
-      landId: 2,
-      nowSeconds,
+  });
+
+  it("uses a fresh nonce each time", async () => {
+    const [a] = await world(1);
+    const nonces = new Set<string>();
+    for (let i = 0; i < 3; i++)
+      nonces.add(
+        verifyStatement((await ticket({ landId: a })).json, "travel-ticket")
+          .fields.nonce,
+      );
+    expect(nonces.size).toBe(3);
+  });
+
+  it("sets the arrival Gate from an adjacent cell", async () => {
+    // cells 0 (0,0), 1 (1,0), 2 (1,1), 3 (0,1)
+    const [a, b, c, d] = await world(4);
+    const gate = async (from: number, to: number) =>
+      verifyStatement(
+        (await ticket({ landId: to, from })).json,
+        "travel-ticket",
+      ).fields.gate;
+    expect(await gate(a!, b!)).toBe(4); // walked east, arrives at the west Gate
+    expect(await gate(b!, a!)).toBe(2);
+    expect(await gate(b!, c!)).toBe(1); // walked south, arrives at the north Gate
+    expect(await gate(d!, a!)).toBe(3);
+    const far = await ticket({ landId: c, from: a });
+    expect(far).toMatchObject({
+      status: 409,
+      json: { error: "Lands are not adjacent" },
     });
-    expect(t.player).toBe(player.address);
-    expect(
-      await recoverTypedDataAddress({
-        domain: HUB_EIP712_DOMAIN(CHAIN_ID),
-        types: TravelTicketTypes,
-        primaryType: "TravelTicket",
-        message: parseWireTicket(r.json.ticket),
-        signature: r.json.signature as Hex,
-      }),
-    ).toBe(hubKey.address);
   });
-  it("uses random nonces", async () => {
-    const a = await ask({ landId: 2 });
-    const b = await ask({ landId: 2 });
-    expect(a.json.ticket.nonce).toMatch(/^0x[0-9a-f]{64}$/);
-    expect(a.json.ticket.nonce).not.toBe(b.json.ticket.nonce);
-  });
-  it("sets the arrival Gate for adjacent Lands", async () => {
-    // 1 (0,0) -> 2 (1,0): walking east, arriving at the west Gate (4)
-    expect((await ask({ landId: 2, from: 1 })).json.ticket.gate).toBe(4);
-    // 2 -> 1: walking west, arriving at the east Gate (2)
-    expect((await ask({ landId: 1, from: 2 })).json.ticket.gate).toBe(2);
-    // 1 (0,0) -> 5 (0,1): walking south, arriving at the north Gate (1)
-    expect((await ask({ landId: 5, from: 1 })).json.ticket.gate).toBe(1);
-    // 5 -> 1: north, arriving at the south Gate (3)
-    expect((await ask({ landId: 1, from: 5 })).json.ticket.gate).toBe(3);
-  });
-  it("refuses Lands that are not adjacent", async () => {
-    expect((await ask({ landId: 3, from: 1 })).status).toBe(403); // diagonal
-    expect((await ask({ landId: 5, from: 2 })).status).toBe(403); // diagonal
-  });
-  it("rejects an unknown origin Land and from equal to landId", async () => {
-    expect((await ask({ landId: 2, from: 99 })).status).toBe(404);
-    expect((await ask({ landId: 2, from: 2 })).status).toBe(400);
-  });
-  it("requires a Character", async () => {
-    const t = await signIn(noCharacter);
-    expect((await ask({ landId: 2 }, t)).status).toBe(403);
-  });
-  it("refuses unregistered and hidden Lands", async () => {
-    expect((await ask({ landId: 4 })).status).toBe(404);
-    const adminToken = await signIn(admin);
-    await req("POST", "/admin/lands/2/hidden", {
-      token: adminToken,
-      body: { hidden: true },
-    });
-    expect((await ask({ landId: 2 })).status).toBe(404);
-  });
-  it("refuses offline Lands, including when the relay is down", async () => {
-    online = [1];
-    expect((await ask({ landId: 2 })).status).toBe(409);
-    online = [1, 2];
-    nowMs += 3000;
-    expect((await ask({ landId: 2 })).status).toBe(200);
+
+  it("refuses unknown, hidden, cell-less and offline Lands", async () => {
+    const [a, b] = await world(2);
+    expect((await ticket({ landId: 99 })).status).toBe(404);
+    expect((await ticket({ landId: b, from: 99 })).status).toBe(404);
+    const c = await register(owners[2]!, mapServers[2]!);
+    online = [a!, b!, c];
+    expect((await ticket({ landId: c })).status).toBe(409);
+    // an origin without a cell is not adjacent to anything
+    expect((await ticket({ landId: a, from: c })).status).toBe(409);
+    await db.query("UPDATE land SET hidden = true WHERE id = $1", [b]);
+    expect((await ticket({ landId: b })).status).toBe(404);
+    online = [];
+    nowMs += 2000;
+    expect((await ticket({ landId: a })).json.error).toBe("Land is offline");
     relayDown = true;
-    nowMs += 3000;
-    expect((await ask({ landId: 2 })).status).toBe(409);
+    nowMs += 2000;
+    expect((await ticket({ landId: a })).status).toBe(409);
   });
-  it("validates the body", async () => {
-    expect((await ask({})).status).toBe(400);
-    expect((await ask({ landId: "x" })).status).toBe(400);
-    expect((await ask({ landId: 2, from: -1 })).status).toBe(400);
+
+  it("validates the body and needs a session", async () => {
+    const [a] = await world(1);
+    for (const body of [
+      {},
+      { landId: "x" },
+      { landId: 0 },
+      { landId: a, from: a },
+    ])
+      expect((await ticket(body)).status).toBe(400);
+    expect(
+      (await req("POST", "/tickets", { body: { landId: a } })).status,
+    ).toBe(401);
   });
-  it("limits tickets to 30 per minute per address", async () => {
-    for (let i = 0; i < 30; i++)
-      expect((await ask({ landId: 2 })).status).toBe(200);
-    expect((await ask({ landId: 2 })).status).toBe(429);
-    // another address is unaffected
-    expect((await ask({ landId: 2 }, await signIn(admin))).status).toBe(200);
-    nowMs += 61_000;
-    expect((await ask({ landId: 2 })).status).toBe(200);
+
+  it("allows 30 per minute per Character", async () => {
+    const [a] = await world(1);
+    const token = await signIn(owner1);
+    let last = 0;
+    for (let i = 0; i < 31; i++)
+      last = (await req("POST", "/tickets", { token, body: { landId: a } }))
+        .status;
+    expect(last).toBe(429);
   });
 });
 
 describe("reports and moderation", () => {
-  let token: string;
-  let adminToken: string;
-  beforeEach(async () => {
-    await register(1, owner1);
-    token = await signIn(player);
-    adminToken = await signIn(admin);
-  });
-  const report = (body: unknown, t = token) =>
-    req("POST", "/reports", { token: t, body });
-
   it("stores a report and lists it for admins", async () => {
-    expect((await report({ landId: 1, reason: "  spam  " })).status).toBe(201);
-    // 500 characters is the limit
-    expect((await report({ landId: 1, reason: "y".repeat(500) })).status).toBe(
-      201,
-    );
-    const r = await req("GET", "/admin/reports", { token: adminToken });
-    expect(r.status).toBe(200);
-    expect(r.json.reports).toHaveLength(2);
-    expect(r.json.reports.slice(0, 1)).toEqual([
+    const [a] = await world(1);
+    const token = await signIn(owner2);
+    const r = await req("POST", "/reports", {
+      token,
+      body: { landId: a, reason: "  spam  " },
+    });
+    expect(r.status).toBe(201);
+    const list = await req("GET", "/admin/reports", {
+      token: await signIn(admin),
+    });
+    expect(list.json.reports).toEqual([
       {
-        id: expect.any(Number),
-        landId: 1,
-        reporter: player.address,
+        id: 1,
+        landId: a,
+        reporter: owner2.address,
         reason: "spam",
-        createdAt: Math.floor(nowMs / 1000),
+        createdAt: seconds(),
       },
     ]);
   });
-  it("requires a session", async () => {
+
+  it("validates reports and limits them to 5 per hour", async () => {
+    const [a] = await world(1);
+    const token = await signIn(owner2);
     expect(
-      (await req("POST", "/reports", { body: { landId: 1, reason: "x" } }))
+      (await req("POST", "/reports", { body: { landId: a, reason: "x" } }))
         .status,
     ).toBe(401);
+    for (const reason of ["", "   ", "x".repeat(501), 5])
+      expect(
+        (await req("POST", "/reports", { token, body: { landId: a, reason } }))
+          .status,
+      ).toBe(400);
+    expect(
+      (
+        await req("POST", "/reports", {
+          token,
+          body: { landId: 99, reason: "x" },
+        })
+      ).status,
+    ).toBe(404);
+    let last = 0;
+    for (let i = 0; i < 6; i++)
+      last = (
+        await req("POST", "/reports", {
+          token,
+          body: { landId: a, reason: "x" },
+        })
+      ).status;
+    expect(last).toBe(429);
   });
-  it("rejects bad reasons and unknown Lands", async () => {
-    expect((await report({ landId: 1, reason: "x".repeat(501) })).status).toBe(
-      400,
-    );
-    expect((await report({ landId: 1, reason: "   " })).status).toBe(400);
-    expect((await report({ landId: 1, reason: 5 })).status).toBe(400);
-    expect((await report({ landId: 1 })).status).toBe(400);
-    expect((await report({ landId: 9, reason: "x" })).status).toBe(404);
-  });
-  it("limits reports to 5 per hour per address", async () => {
-    for (let i = 0; i < 5; i++)
-      expect((await report({ landId: 1, reason: `r${i}` })).status).toBe(201);
-    expect((await report({ landId: 1, reason: "again" })).status).toBe(429);
-    nowMs += 3_600_001;
-    expect((await report({ landId: 1, reason: "later" })).status).toBe(201);
-  });
+
   it("keeps admin routes for admins", async () => {
-    expect((await req("GET", "/admin/reports")).status).toBe(401);
+    const token = await signIn(owner1);
     expect((await req("GET", "/admin/reports", { token })).status).toBe(403);
     expect(
       (
@@ -767,350 +970,32 @@ describe("reports and moderation", () => {
         })
       ).status,
     ).toBe(403);
-    expect((await req("GET", "/directory/1")).status).toBe(200);
   });
+
   it("hides and unhides a Land", async () => {
+    const [a] = await world(1);
+    const token = await signIn(admin);
     const hide = (hidden: unknown) =>
-      req("POST", "/admin/lands/1/hidden", {
-        token: adminToken,
-        body: { hidden },
-      });
-    expect((await hide(true)).json).toEqual({ landId: 1, hidden: true });
-    expect((await req("GET", "/directory/1")).status).toBe(404);
-    expect((await hide(false)).status).toBe(200);
-    expect((await req("GET", "/directory/1")).status).toBe(200);
+      req("POST", `/admin/lands/${a}/hidden`, { token, body: { hidden } });
     expect((await hide("yes")).status).toBe(400);
+    expect((await hide(true)).json).toEqual({ landId: a, hidden: true });
+    expect((await req("GET", "/directory")).json.lands).toEqual([]);
+    // the relay reads this route, so it drops the Land's link
+    expect((await req("GET", `/lands/${a}`)).status).toBe(404);
+    expect(logs.join()).toContain(`Land ${a} hidden by ${admin.address}`);
+    // re-registering keeps it hidden
+    nowMs += 1000;
+    await req("POST", "/lands", { body: delegation(owner1, ms1) });
+    expect((await req("GET", `/lands/${a}`)).status).toBe(404);
+    await hide(false);
+    expect((await req("GET", `/lands/${a}`)).status).toBe(200);
     expect(
       (
-        await req("POST", "/admin/lands/9/hidden", {
-          token: adminToken,
+        await req("POST", "/admin/lands/99/hidden", {
+          token,
           body: { hidden: true },
         })
       ).status,
     ).toBe(404);
-  });
-});
-
-describe("hardening", () => {
-  it("does not log RPC details (they can carry URLs and API keys)", async () => {
-    chainDown = true;
-    await register(1, owner1);
-    expect(logs.join()).toContain("chain read failed");
-    expect(logs.join()).not.toContain("secret-rpc");
-  });
-
-  it("keeps the nonce store bounded, dropping the oldest", async () => {
-    const first = (await req("GET", "/auth/nonce")).json.nonce;
-    for (let i = 0; i < 10_000; i++) await req("GET", "/auth/nonce");
-    const message = await siweMessage(player, { nonce: first });
-    const signature = await player.signMessage({ message });
-    const r = await req("POST", "/auth/verify", {
-      body: { message, signature },
-    });
-    expect(r.status).toBe(401);
-  }, 30_000);
-
-  it("rejects oversized sign-in messages before parsing", async () => {
-    const r = await req("POST", "/auth/verify", {
-      body: { message: "x".repeat(5000), signature: "0x00" },
-    });
-    expect(r.status).toBe(400);
-  });
-
-  it("rate-limits Delegation attempts per Land before any chain read", async () => {
-    const body = await delegationBody(1, stranger, mining1);
-    let last = 0;
-    for (let i = 0; i < 11; i++)
-      last = (await req("POST", "/lands/1/delegation", { body })).status;
-    expect(last).toBe(429);
-    // another Land is not affected
-    expect((await register(2, owner2)).status).toBe(200);
-  });
-
-  it("protects routes whatever the path spelling", async () => {
-    for (const path of ["/tickets/", "/reports/", "/admin/reports/"])
-      expect([401, 404]).toContain((await req("POST", path)).status);
-    expect((await req("GET", "/admin/reports/")).status).toBe(401);
-    expect((await req("GET", "/%61dmin/reports")).status).toBe(401);
-  });
-
-  it("rejects an unsigned (alg none) token", async () => {
-    const b64 = (o: object) =>
-      Buffer.from(JSON.stringify(o)).toString("base64url");
-    const token = `${b64({ alg: "none", typ: "JWT" })}.${b64({ sub: admin.address, exp: Math.floor(nowMs / 1000) + 99 })}.`;
-    expect((await req("GET", "/admin/reports", { token })).status).toBe(401);
-  });
-
-  it("answers malformed percent-encoding with 400, not 500", async () => {
-    expect((await req("GET", "/directory/%E0%A4%A")).status).toBe(400);
-  });
-
-  it("varies cached CORS answers by Origin", async () => {
-    const r = await req("GET", "/directory", {
-      headers: { Origin: "https://game.test" },
-    });
-    expect(r.headers.get("vary")).toContain("Origin");
-  });
-});
-
-describe("sponsored user operations", () => {
-  const { PlayerRegistry, Land, GoldToken } = deploymentFor(CHAIN_ID);
-  const PER_PLAYER = SPONSORED_TRANSACTIONS_PER_PLAYER_PER_DAY;
-  // every account below is given its address; eth_getCode answers "not deployed yet"
-  const reader = createPublicClient({
-    chain: foundry,
-    transport: custom({ request: async () => "0x" }),
-  });
-  const createCall = {
-    to: PlayerRegistry.address,
-    data: encodeFunctionData({
-      abi: playerRegistryAbi,
-      functionName: "createCharacter",
-    }),
-  };
-  const designCall = {
-    to: Land.address,
-    data: encodeFunctionData({
-      abi: landAbi,
-      functionName: "setDesignHash",
-      args: [1n, toHex(1, { size: 32 })],
-    }),
-  };
-  const transferCall = {
-    to: GoldToken.address,
-    data: encodeFunctionData({
-      abi: goldTokenAbi,
-      functionName: "transfer",
-      args: [stranger.address, 1n],
-    }),
-  };
-  const addOwnerData = encodeFunctionData({
-    abi: parseAbi(["function addOwnerPublicKey(bytes32 x, bytes32 y)"]),
-    functionName: "addOwnerPublicKey",
-    args: [toHex(1, { size: 32 }), toHex(2, { size: 32 })],
-  });
-
-  /** A v0.6 user operation as viem's bundler client sends it, from a Coinbase account at `sender`'s address (the session's). */
-  async function userOp(
-    sender: Account,
-    calls: { to: Address; data: Hex; value?: bigint }[],
-    deployed = true,
-  ) {
-    const account = await toCoinbaseSmartAccount({
-      client: reader,
-      owners: [sender],
-      version: "1.1",
-      address: sender.address,
-    });
-    const { factory, factoryData } = await account.getFactoryArgs();
-    return {
-      sender: sender.address,
-      nonce: "0x0",
-      initCode: deployed ? "0x" : `${factory}${factoryData?.slice(2)}`,
-      callData: await account.encodeCalls(calls),
-      callGasLimit: "0x1",
-      verificationGasLimit: "0x1",
-      preVerificationGas: "0x1",
-      maxFeePerGas: "0x1",
-      maxPriorityFeePerGas: "0x1",
-      paymasterAndData: "0x",
-      signature: "0x",
-    };
-  }
-
-  function rpc(token: string, method: string, params: unknown) {
-    return req("POST", "/aa", {
-      token,
-      body: { jsonrpc: "2.0", id: 7, method, params },
-    });
-  }
-  const pmData = (token: string, op: unknown) =>
-    rpc(token, "pm_getPaymasterData", [
-      op,
-      entryPoint06Address,
-      toHex(CHAIN_ID),
-      {},
-    ]);
-  async function counts() {
-    return (
-      await db.query<{ identity: string; count: number }>(
-        "SELECT identity, count FROM sponsorship ORDER BY identity",
-      )
-    ).rows;
-  }
-
-  it("forwards a new Player's createCharacter() through every step and counts one sponsorship", async () => {
-    const token = await signIn(noCharacter);
-    const op = await userOp(noCharacter, [createCall], false);
-    const steps: [string, unknown[]][] = [
-      ["pm_getPaymasterStubData", [op, entryPoint06Address, toHex(CHAIN_ID)]],
-      ["eth_estimateUserOperationGas", [op, entryPoint06Address]],
-      ["pm_getPaymasterData", [op, entryPoint06Address, toHex(CHAIN_ID)]],
-      ["eth_sendUserOperation", [op, entryPoint06Address]],
-      ["eth_getUserOperationReceipt", [toHex(1, { size: 32 })]],
-    ];
-    for (const [method, params] of steps) {
-      const res = await rpc(token, method, params);
-      expect(res.status).toBe(200);
-      expect(res.json).toEqual({ jsonrpc: "2.0", id: 7, result: "0x01" });
-    }
-    expect(bundled).toEqual(
-      steps.map(([method, params]) => ({ method, params })),
-    );
-    expect(await counts()).toEqual([
-      { identity: "*", count: 1 },
-      { identity: noCharacter.address.toLowerCase(), count: 1 },
-    ]);
-  });
-
-  it("sponsors Land.setDesignHash and a backup passkey on the Player's own account, batched", async () => {
-    const token = await signIn(player);
-    const op = await userOp(player, [
-      designCall,
-      { to: player.address, data: addOwnerData },
-    ]);
-    expect((await pmData(token, op)).status).toBe(200);
-  });
-
-  it("refuses calls that are not sponsored, before reaching the bundler", async () => {
-    const token = await signIn(player);
-    const refused = [
-      [transferCall],
-      [designCall, transferCall],
-      [{ ...designCall, value: 1n }],
-      [],
-      // a backup owner for someone else's account
-      [{ to: stranger.address, data: addOwnerData }],
-      [{ to: Land.address, data: "0x" as Hex }],
-    ];
-    for (const calls of refused) {
-      const res = await pmData(token, await userOp(player, calls));
-      expect(res.status).toBe(403);
-      expect(res.json.error).toBe("only game calls are sponsored");
-    }
-    const op = await userOp(player, [designCall]);
-    expect(
-      (await pmData(token, { ...op, callData: "0xdeadbeef" })).status,
-    ).toBe(403);
-    expect(bundled).toEqual([]);
-  });
-
-  it("refuses another sender, factory, EntryPoint or chain, other methods and malformed params", async () => {
-    const token = await signIn(player);
-    const op = await userOp(player, [designCall]);
-    const statuses = [
-      await pmData(token, { ...op, sender: stranger.address }),
-      await pmData(token, { ...op, initCode: `0x${"ab".repeat(20)}00` }),
-      await rpc(token, "pm_getPaymasterData", [
-        op,
-        stranger.address,
-        toHex(CHAIN_ID),
-      ]),
-      await rpc(token, "pm_getPaymasterData", [
-        op,
-        entryPoint06Address,
-        toHex(1),
-      ]),
-      await rpc(token, "eth_sendRawTransaction", ["0x00"]),
-      await rpc(token, "eth_getUserOperationReceipt", "0x00"),
-      await pmData(token, "not an object"),
-    ].map((r) => r.status);
-    expect(statuses).toEqual([403, 403, 400, 400, 400, 400, 400]);
-    expect(bundled).toEqual([]);
-  });
-
-  it("refuses a second Character, so a reverting operation is never paid for", async () => {
-    const token = await signIn(player);
-    const res = await pmData(token, await userOp(player, [createCall]));
-    expect(res.status).toBe(409);
-    expect(bundled).toEqual([]);
-  });
-
-  it("requires a session and a configured bundler", async () => {
-    expect((await req("POST", "/aa", { body: {} })).status).toBe(401);
-    app = createApp({ ...deps, bundler: undefined });
-    const res = await rpc(await signIn(player), "eth_getUserOperationReceipt", [
-      toHex(1, { size: 32 }),
-    ]);
-    expect(res.status).toBe(503);
-  });
-
-  it(`allows ${PER_PLAYER} sponsored operations per Player per UTC day`, async () => {
-    const op = await userOp(player, [designCall]);
-    const token = await signIn(player);
-    for (let i = 0; i < PER_PLAYER; i++)
-      expect((await pmData(token, op)).status).toBe(200);
-    const refused = await pmData(token, op);
-    expect(refused.status).toBe(429);
-    expect(refused.json.error).toMatch(/limit reached/);
-    // another Player is not affected
-    const other = await signIn(owner1);
-    expect(
-      (await pmData(other, await userOp(owner1, [designCall]))).status,
-    ).toBe(200);
-    // the next UTC day (the session token is checked against the real clock, so it stays valid)
-    nowMs += 86_400_000;
-    expect((await pmData(token, op)).status).toBe(200);
-  });
-
-  it("stops at the world's daily budget, gives the Player's count back and logs once", async () => {
-    const day = Math.floor(nowMs / 86_400_000);
-    await db.query(
-      "INSERT INTO sponsorship (identity, day, count) VALUES ('*', $1, $2)",
-      [day, SPONSORED_TRANSACTIONS_PER_DAY],
-    );
-    const token = await signIn(player);
-    const op = await userOp(player, [designCall]);
-    for (let i = 0; i < 2; i++) {
-      const res = await pmData(token, op);
-      expect(res.status).toBe(429);
-      expect(res.json.error).toMatch(/budget/);
-    }
-    expect(await counts()).toContainEqual({
-      identity: player.address.toLowerCase(),
-      count: 0,
-    });
-    expect(logs.filter((l) => l.includes("budget"))).toHaveLength(1);
-    expect(bundled).toEqual([]);
-  });
-
-  it("counts a paymaster stub only when it is marked final (ERC-7677)", async () => {
-    const token = await signIn(player);
-    const op = await userOp(player, [designCall]);
-    const stub = () =>
-      rpc(token, "pm_getPaymasterStubData", [
-        op,
-        entryPoint06Address,
-        toHex(CHAIN_ID),
-      ]);
-    bundlerResult = () => ({ paymasterAndData: "0x01" });
-    await stub();
-    expect(await counts()).toEqual([]);
-    bundlerResult = () => ({ paymasterAndData: "0x01", isFinal: true });
-    await stub();
-    expect(await counts()).toContainEqual({
-      identity: player.address.toLowerCase(),
-      count: 1,
-    });
-  });
-
-  it("passes bundler errors through and hides transport failures", async () => {
-    const token = await signIn(player);
-    const receipt = () =>
-      rpc(token, "eth_getUserOperationReceipt", [toHex(1, { size: 32 })]);
-    deps.bundler = async ({ id }) => ({
-      jsonrpc: "2.0",
-      id,
-      error: { code: -32500, message: "AA21 didn't pay prefund" },
-    });
-    expect((await receipt()).json.error.message).toBe(
-      "AA21 didn't pay prefund",
-    );
-    deps.bundler = async () => {
-      throw new Error("fetch https://api.test/rpc/v1/base-sepolia/SECRETKEY");
-    };
-    const res = await receipt();
-    expect(res.status).toBe(502);
-    expect(logs.join("\n")).not.toContain("SECRETKEY");
   });
 });

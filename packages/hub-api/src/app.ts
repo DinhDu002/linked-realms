@@ -1,131 +1,72 @@
-import { Hono } from "hono";
+import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
 import { sign, verify } from "hono/jwt";
-import {
-  BaseError,
-  decodeFunctionData,
-  getAddress,
-  isAddress,
-  isAddressEqual,
-  isHex,
-  parseAbi,
-  toFunctionSelector,
-  toHex,
-  type Address,
-  type Hex,
-  type LocalAccount,
-  type TypedDataDefinition,
-} from "viem";
-import { entryPoint06Address } from "viem/account-abstraction";
-import { generateSiweNonce, parseSiweMessage } from "viem/siwe";
+import { isAddress, type Key } from "@linked-realms/core";
 import {
   DIRECTIONS,
-  DelegationTypes,
-  HUB_EIP712_DOMAIN,
-  SPONSORED_CALLS,
-  SPONSORED_TRANSACTIONS_PER_DAY,
-  SPONSORED_TRANSACTIONS_PER_PLAYER_PER_DAY,
+  GATE_NONE,
   TRAVEL_TICKET_TTL_SECONDS,
-  TravelTicketTypes,
   arrivalGate,
-  deploymentFor,
   gateNumber,
   neighbourOf,
-  ticketToWire,
-  type Directory,
-  type DirectoryLand,
-  type TravelTicket,
+  spiralCoordinates,
+  type LandDirectory,
+  type LandInfo,
 } from "@linked-realms/shared";
+import {
+  NAME_MAX_CODE_POINTS,
+  StatementError,
+  isName,
+  signStatement,
+  toBase64,
+  verifyStatement,
+  type StatementKind,
+} from "@linked-realms/shared/identity";
 import type { Config } from "./config.ts";
 import type { Db } from "./db.ts";
-
-export interface ChainReads {
-  /** undefined when the Land does not exist. */
-  ownerOf(landId: bigint): Promise<Address | undefined>;
-  /** undefined when the Land does not exist. */
-  coordinatesOf(landId: bigint): Promise<{ x: number; y: number } | undefined>;
-  hasCharacter(player: Address): Promise<boolean>;
-}
+import { networkOf } from "./network.ts";
 
 export interface Deps {
   config: Pick<
     Config,
-    | "chainId"
-    | "siweDomain"
+    | "hubDomain"
     | "sessionSecret"
     | "admins"
     | "allowedOrigins"
-    | "relayPublicUrl"
+    | "landBaseDomain"
+    | "landUrlScheme"
   >;
   db: Db;
-  chain: ChainReads;
-  /** Production: the public client's verifySiweMessage (accepts smart-contract wallets). */
-  verifySiwe(args: {
-    message: string;
-    signature: Hex;
-    domain: string;
-    nonce: string;
-    time: Date;
-  }): Promise<boolean>;
-  /** Production: the public client's verifyTypedData (accepts smart-contract wallets). */
-  verifyTypedData(
-    args: TypedDataDefinition & { address: Address; signature: Hex },
-  ): Promise<boolean>;
   /** Ids of Lands whose Map server link to the relay is open; rejects when the relay is unreachable. */
   online(): Promise<number[]>;
-  ticketSigner: Pick<LocalAccount, "address" | "signTypedData">;
-  /** Forwards one JSON-RPC request to the bundler and paymaster (CDP); undefined turns sponsorship off. */
-  bundler?: (request: {
-    jsonrpc: "2.0";
-    id: unknown;
-    method: string;
-    params: unknown[];
-  }) => Promise<unknown>;
+  /** Signs Travel tickets. */
+  ticketKey: Key;
+  /** The address the request comes from. Production: the socket's peer, behind HUB_TRUSTED_PROXIES. */
+  clientAddress(c: Context): string;
   /** Milliseconds since the epoch. */
   now(): number;
   log(message: string): void;
 }
 
 const SESSION_SECONDS = 3600;
-const NONCE_TTL_MS = 5 * 60_000;
-const MAX_FUTURE_ISSUED_AT_SECONDS = 5 * 60;
+// a sign-in is accepted while Issued is this close to the Hub's clock (whole seconds), so a
+// statement is usable for just under 2 × skew + 1 seconds; its nonce is kept that long, after
+// which the statement is refused for its time anyway
+const SIGN_IN_SKEW_SECONDS = 60;
+const SIGN_IN_NONCE_TTL_MS = (2 * SIGN_IN_SKEW_SECONDS + 1) * 1000;
+const MAX_SIGN_IN_NONCES = 100_000;
+// Map server statements and Delegations (docs/protocols/map-server-hub-relay.md)
+const STATEMENT_SKEW_SECONDS = 5 * 60;
+const NEW_LANDS_PER_NETWORK_PER_DAY = 3;
 const ONLINE_CACHE_MS = 2000;
 const MAX_REASON_LENGTH = 500;
 const MAX_BODY_BYTES = 16 * 1024;
-const MAX_SIGNATURE_LENGTH = 8192;
-const MAX_SIWE_MESSAGE_LENGTH = 4096;
-// anyone can ask for a nonce: past this many the oldest are dropped
-const MAX_NONCES = 10_000;
-const DELEGATION_PER_LAND_PER_MINUTE = 10;
-const DELEGATION_PER_MINUTE = 200;
-// uint32 is the room state type of landId in the Map server
-const MAX_LAND_ID = 2 ** 32 - 1;
-const UINT64_MAX = 2n ** 64n - 1n;
 const DAY_MS = 86_400_000;
-// sponsored or not, each request is a call on the bundler's quota; receipt polling needs the headroom
-const AA_PER_MINUTE = 120;
-// Coinbase Smart Wallet v1.1: the version the client passes to viem's toCoinbaseSmartAccount
-const ACCOUNT_FACTORY = "0xba5ed110efdba3d005bfc882d75358acbbb85842";
-const accountAbi = parseAbi([
-  "function execute(address target, uint256 value, bytes data)",
-  "function executeBatch((address target, uint256 value, bytes data)[] calls)",
-]);
-// What the client's viem bundler client calls: ERC-4337 bundler and ERC-7677 paymaster methods
-const USER_OPERATION_METHODS = new Set([
-  "eth_estimateUserOperationGas",
-  "eth_sendUserOperation",
-  "pm_getPaymasterStubData",
-  "pm_getPaymasterData",
-]);
-const AA_METHODS = new Set([
-  ...USER_OPERATION_METHODS,
-  "eth_getUserOperationReceipt",
-]);
 
 class HttpError extends Error {
-  status: 400 | 401 | 403 | 404 | 409 | 429 | 502 | 503;
+  status: 400 | 401 | 403 | 404 | 409 | 429;
   constructor(status: HttpError["status"], message: string) {
     super(message);
     this.status = status;
@@ -134,10 +75,10 @@ class HttpError extends Error {
 
 function landIdOf(value: unknown): number {
   const n =
-    typeof value === "string" && /^[1-9]\d{0,9}$/.test(value)
+    typeof value === "string" && /^[1-9]\d{0,15}$/.test(value)
       ? Number(value)
       : value;
-  if (!Number.isInteger(n) || (n as number) < 1 || (n as number) > MAX_LAND_ID)
+  if (!Number.isSafeInteger(n) || (n as number) < 1)
     throw new HttpError(400, "invalid landId");
   return n as number;
 }
@@ -156,27 +97,36 @@ async function jsonBody(req: {
   return body as Record<string, unknown>;
 }
 
-function signatureOf(value: unknown): Hex {
-  if (
-    typeof value !== "string" ||
-    !isHex(value, { strict: true }) ||
-    value.length > MAX_SIGNATURE_LENGTH
-  )
-    throw new HttpError(400, "invalid signature");
-  return value;
+/** Verifies a signed statement (identity.md); a refusal answers `status`. */
+function statementOf<K extends StatementKind>(
+  body: unknown,
+  kind: K,
+  status: 400 | 401,
+) {
+  try {
+    return verifyStatement(body, kind);
+  } catch (err) {
+    if (err instanceof StatementError) throw new HttpError(status, err.message);
+    throw err;
+  }
 }
 
-/** Error text that is safe to log: viem's full message carries the RPC URL (often with an API key). */
-function logSafe(err: unknown): string {
-  if (err instanceof BaseError) return err.shortMessage;
-  return err instanceof Error ? err.name : "unknown error";
+/** A unique index refused the write: someone else holds that owner, key or cell. */
+async function unique<T>(write: () => Promise<T>, message: string) {
+  try {
+    return await write();
+  } catch (err) {
+    if ((err as { code?: unknown }).code === "23505")
+      throw new HttpError(409, message);
+    throw err;
+  }
 }
 
 /** Sliding window per key, in memory: one process only (ponytail: Redis counters with several nodes). */
 function rateLimiter(max: number, windowMs: number) {
   const hits = new Map<string, number[]>();
   return (key: string, now: number): boolean => {
-    // keys are free for callers to mint (addresses, Land ids): drop idle ones so the map stays bounded
+    // keys are free for callers to mint (addresses, networks): drop idle ones so the map stays bounded
     if (hits.size > 10_000)
       for (const [k, times] of hits)
         if (now - (times.at(-1) ?? 0) >= windowMs) hits.delete(k);
@@ -191,57 +141,32 @@ function rateLimiter(max: number, windowMs: number) {
   };
 }
 
-interface DelegationRow {
-  land_id: string;
-  owner: Address;
-  x: number;
-  y: number;
-  mining_key: Address;
-  hidden: boolean;
+interface LandRow {
+  id: number | string;
+  owner: string;
+  map_server_key: string;
+  cell: number | null;
+  name: string | null;
 }
 
-function toDirectoryLand(row: DelegationRow, online: Set<number>) {
-  const landId = Number(row.land_id);
-  return {
-    landId,
-    owner: row.owner,
-    x: row.x,
-    y: row.y,
-    miningKey: row.mining_key,
-    online: online.has(landId),
-  } satisfies DirectoryLand;
-}
+const LAND_COLUMNS =
+  "SELECT l.id, l.owner, l.map_server_key, l.cell, c.name FROM land l LEFT JOIN character c ON c.address = l.owner";
 
 export function createApp(deps: Deps) {
-  const { config, db, chain } = deps;
-  const app = new Hono<{ Variables: { address: Address } }>();
+  const { config, db } = deps;
+  const app = new Hono<{ Variables: { address: string } }>();
 
-  // SIWE nonces live in memory and are single use: one process only (ponytail: shared store with several nodes)
-  const nonces = new Map<string, number>();
+  // nonce -> expiry of verified sign-ins, in memory: one process only (ponytail: shared store with several nodes)
+  const usedNonces = new Map<string, number>();
+  const signInLimit = rateLimiter(30, 60_000);
+  const mapServerLimit = rateLimiter(10, 60_000);
+  const landLimit = rateLimiter(10, 60_000);
   const ticketLimit = rateLimiter(30, 60_000);
   const reportLimit = rateLimiter(5, 3_600_000);
-  // unauthenticated and costs chain reads: limited per Land and overall
-  const delegationLimit = rateLimiter(DELEGATION_PER_LAND_PER_MINUTE, 60_000);
-  const delegationAllLimit = rateLimiter(DELEGATION_PER_MINUTE, 60_000);
-  const aaLimit = rateLimiter(AA_PER_MINUTE, 60_000);
-
-  // "<to>:<selector>" for each sponsored call; to is a lowercase address, or "account" for the sender itself
-  const deployment = deploymentFor(config.chainId);
-  const callKey = (to: string, signature: string) =>
-    `${to}:${toFunctionSelector(signature)}`;
-  const sponsoredCalls = new Set(
-    SPONSORED_CALLS.map(({ to, signature }) =>
-      callKey(
-        to === "account" ? to : deployment[to].address.toLowerCase(),
-        signature,
-      ),
-    ),
-  );
-  const createCharacterCall = callKey(
-    deployment.PlayerRegistry.address.toLowerCase(),
-    "createCharacter()",
-  );
-  let budgetLoggedDay: number | undefined;
+  const ticketKey = {
+    address: deps.ticketKey.address,
+    publicKey: toBase64(deps.ticketKey.publicKey),
+  };
 
   // Relay presence, cached 2 s. A failure counts as "all offline" and is logged once per burst.
   let presence: { at: number; lands: Promise<Set<number>> } | undefined;
@@ -269,13 +194,43 @@ export function createApp(deps: Deps) {
     return presence.lands;
   }
 
-  async function chainRead<T>(read: () => Promise<T>): Promise<T> {
-    try {
-      return await read();
-    } catch (err) {
-      deps.log(`chain read failed: ${logSafe(err)}`);
-      throw new HttpError(502, "chain unavailable");
-    }
+  const network = (c: Context) => networkOf(deps.clientAddress(c));
+  const seconds = () => Math.floor(deps.now() / 1000);
+
+  function landInfo(row: LandRow, online: Set<number>): LandInfo {
+    const landId = Number(row.id);
+    const cell = row.cell === null ? null : spiralCoordinates(row.cell);
+    return {
+      landId,
+      owner: row.owner,
+      ownerName: row.name ?? "",
+      x: cell?.x ?? null,
+      y: cell?.y ?? null,
+      url: `${config.landUrlScheme}://${landId}.${config.landBaseDomain}`,
+      mapServerKey: row.map_server_key,
+      online: online.has(landId),
+    };
+  }
+
+  /** The visible Land matching `where` (on alias `l`, one parameter $1). */
+  async function landWhere(where: string, value: unknown) {
+    return (
+      await db.query<LandRow>(
+        `${LAND_COLUMNS} WHERE NOT l.hidden AND ${where}`,
+        [value],
+      )
+    ).rows[0];
+  }
+
+  /** Throws unless the statement names this Hub and its time is close to the Hub's clock. */
+  function checkHubAndTime(fields: { hub: string; issued: number }) {
+    if (fields.hub !== config.hubDomain)
+      throw new HttpError(400, "the statement names another Hub");
+    if (Math.abs(fields.issued - seconds()) > STATEMENT_SKEW_SECONDS)
+      throw new HttpError(
+        400,
+        "Issued is more than 5 minutes off the Hub's clock",
+      );
   }
 
   app.use(
@@ -283,7 +238,7 @@ export function createApp(deps: Deps) {
       origin: (origin) =>
         config.allowedOrigins.includes(origin) ? origin : null,
       allowHeaders: ["Authorization", "Content-Type"],
-      allowMethods: ["GET", "POST", "OPTIONS"],
+      allowMethods: ["GET", "POST", "PUT", "OPTIONS"],
     }),
   );
   app.use(
@@ -296,71 +251,62 @@ export function createApp(deps: Deps) {
   app.onError((err, c) => {
     if (err instanceof HttpError)
       return c.json({ error: err.message }, err.status);
-    // details stay in the log: they can contain RPC URLs
-    deps.log(`unhandled error: ${logSafe(err)}`);
+    deps.log(
+      `unhandled error: ${err instanceof Error ? `${err.name}: ${err.message}` : "unknown"}`,
+    );
     return c.json({ error: "internal error" }, 500);
   });
   app.notFound((c) => c.json({ error: "not found" }, 404));
 
   app.get("/health", (c) => c.text("ok"));
 
-  // --- Sign-in (SIWE) ---
+  app.get("/keys", (c) => c.json({ ticket: ticketKey }));
 
-  app.get("/auth/nonce", (c) => {
-    const now = deps.now();
-    // same TTL for all, so insertion order is expiry order
-    for (const [n, expires] of nonces) {
-      if (expires > now && nonces.size < MAX_NONCES) break;
-      nonces.delete(n);
-    }
-    const nonce = generateSiweNonce();
-    nonces.set(nonce, now + NONCE_TTL_MS);
-    return c.json({
-      nonce,
-      expiresAt: Math.floor((now + NONCE_TTL_MS) / 1000),
-    });
-  });
+  // --- Sign-in (docs/plans/phase-2b-world-without-chain.md, flow 2) ---
 
   app.post("/auth/verify", async (c) => {
-    const body = await jsonBody(c.req);
-    const { message } = body;
-    const signature = signatureOf(body.signature);
-    if (typeof message !== "string" || message.length > MAX_SIWE_MESSAGE_LENGTH)
-      throw new HttpError(400, "invalid message");
-    const parsed = parseSiweMessage(message);
-    if (!parsed.address || !parsed.nonce)
-      throw new HttpError(400, "invalid message");
-    const now = deps.now();
-    // consume first, so a failed attempt cannot be retried with the same nonce
-    const expires = nonces.get(parsed.nonce);
-    nonces.delete(parsed.nonce);
-    if (expires === undefined || expires <= now)
-      throw new HttpError(401, "unknown or expired nonce");
-    if (parsed.chainId !== config.chainId)
-      throw new HttpError(401, "wrong chain id");
-    const valid = await chainRead(() =>
-      deps.verifySiwe({
-        message,
-        signature,
-        domain: config.siweDomain,
-        nonce: parsed.nonce as string,
-        time: new Date(now),
-      }),
+    if (!signInLimit(network(c), deps.now()))
+      throw new HttpError(429, "too many sign-ins");
+    const { fields, address } = statementOf(
+      await jsonBody(c.req),
+      "hub-sign-in",
+      401,
     );
-    if (!valid)
-      throw new HttpError(401, "invalid sign-in message or signature");
-    const address = getAddress(parsed.address);
+    if (fields.hub !== config.hubDomain)
+      throw new HttpError(401, "the statement names another Hub");
+    const now = deps.now();
     const iat = Math.floor(now / 1000);
+    if (Math.abs(fields.issued - iat) > SIGN_IN_SKEW_SECONDS)
+      throw new HttpError(
+        401,
+        `Issued is more than ${SIGN_IN_SKEW_SECONDS} seconds off the Hub's clock`,
+      );
+    // same TTL for all, so insertion order is expiry order
+    for (const [n, expires] of usedNonces) {
+      if (expires > now) break;
+      usedNonces.delete(n);
+    }
+    if (usedNonces.has(fields.nonce))
+      throw new HttpError(401, "this sign-in statement was already used");
+    if (usedNonces.size >= MAX_SIGN_IN_NONCES)
+      throw new HttpError(429, "too many sign-ins, try again shortly");
+    usedNonces.set(fields.nonce, now + SIGN_IN_NONCE_TTL_MS);
     const expiresAt = iat + SESSION_SECONDS;
     const token = await sign(
       { sub: address, iat, exp: expiresAt },
       config.sessionSecret,
       "HS256",
     );
-    return c.json({ token, address, expiresAt });
+    const name = (
+      await db.query<{ name: string }>(
+        "SELECT name FROM character WHERE address = $1",
+        [address],
+      )
+    ).rows[0]?.name;
+    return c.json({ token, address, name: name ?? "", expiresAt });
   });
 
-  const session = createMiddleware<{ Variables: { address: Address } }>(
+  const session = createMiddleware<{ Variables: { address: string } }>(
     async (c, next) => {
       const header = c.req.header("Authorization") ?? "";
       const token = /^Bearer (\S+)$/.exec(header)?.[1];
@@ -373,137 +319,226 @@ export function createApp(deps: Deps) {
       }
       if (typeof sub !== "string" || !isAddress(sub))
         throw new HttpError(401, "invalid or expired session");
-      c.set("address", getAddress(sub));
+      c.set("address", sub);
       await next();
     },
   );
-  const admin = createMiddleware<{ Variables: { address: Address } }>(
+  const admin = createMiddleware<{ Variables: { address: string } }>(
     async (c, next) => {
-      const address = c.get("address");
-      if (!config.admins.some((a) => isAddressEqual(a, address)))
+      if (!config.admins.includes(c.get("address")))
         throw new HttpError(403, "admin only");
       await next();
     },
   );
-  app.use("/tickets", session);
-  app.use("/reports", session);
-  app.use("/aa", session);
   app.use("/admin/*", session, admin);
 
-  // --- Directory ---
+  app.put("/me/name", session, async (c) => {
+    const body = await jsonBody(c.req);
+    const name = typeof body.name === "string" ? body.name.trim() : "";
+    if (name === "" || !isName(name))
+      throw new HttpError(
+        400,
+        `name must be 1 to ${NAME_MAX_CODE_POINTS} characters, without control or format characters`,
+      );
+    await db.query(
+      `INSERT INTO character (address, name, updated_at) VALUES ($1, $2, $3)
+       ON CONFLICT (address) DO UPDATE SET name = EXCLUDED.name, updated_at = EXCLUDED.updated_at`,
+      [c.get("address"), name, seconds()],
+    );
+    return c.json({ name });
+  });
 
-  async function landRow(landId: number): Promise<DelegationRow | undefined> {
-    return (
-      await db.query<DelegationRow>(
-        "SELECT land_id, owner, x, y, mining_key, hidden FROM delegation WHERE land_id = $1",
-        [landId],
+  // --- Registering a Land (docs/protocols/map-server-hub-relay.md) ---
+
+  app.post("/map-servers", async (c) => {
+    if (!mapServerLimit(network(c), deps.now()))
+      throw new HttpError(429, "too many Map server statements");
+    const body = await jsonBody(c.req);
+    const { fields } = statementOf(body, "map-server", 400);
+    checkHubAndTime(fields);
+    // the newest statement per key wins; sending the same one again is fine
+    const saved = await db.query(
+      `INSERT INTO map_server (key, owner, statement, public_key, signature, issued_at)
+       VALUES ($1, $2, $3, $4, $5, $6)
+       ON CONFLICT (key) DO UPDATE SET owner = EXCLUDED.owner, statement = EXCLUDED.statement,
+         public_key = EXCLUDED.public_key, signature = EXCLUDED.signature, issued_at = EXCLUDED.issued_at
+       WHERE map_server.issued_at < EXCLUDED.issued_at OR map_server.statement = EXCLUDED.statement
+       RETURNING key`,
+      [
+        fields.mapServerKey,
+        fields.owner,
+        body.statement,
+        body.publicKey,
+        body.signature,
+        fields.issued,
+      ],
+    );
+    if (saved.rows.length === 0)
+      throw new HttpError(409, "a newer statement from this key exists");
+    return c.body(null, 204);
+  });
+
+  app.get("/map-servers", session, async (c) => {
+    if (c.req.query("owner") !== c.get("address"))
+      throw new HttpError(
+        403,
+        "you can list only the Map servers that named you",
+      );
+    const rows = (
+      await db.query<{ key: string; issued_at: number | string }>(
+        `SELECT key, issued_at FROM map_server m
+         WHERE owner = $1 AND NOT EXISTS (SELECT 1 FROM land WHERE map_server_key = m.key)
+         ORDER BY issued_at DESC`,
+        [c.get("address")],
+      )
+    ).rows;
+    return c.json({
+      mapServers: rows.map((r) => ({
+        mapServerKey: r.key,
+        issued: Number(r.issued_at),
+      })),
+    });
+  });
+
+  /** Adds one to the network's count of new Lands today unless it is at the limit. */
+  async function countLand(network: string, day: number) {
+    const { rows } = await db.query(
+      `INSERT INTO land_quota (network, day, count) VALUES ($1, $2, 1)
+       ON CONFLICT (network, day) DO UPDATE SET count = land_quota.count + 1
+       WHERE land_quota.count < $3
+       RETURNING count`,
+      [network, day, NEW_LANDS_PER_NETWORK_PER_DAY],
+    );
+    return rows.length > 0;
+  }
+
+  app.post("/lands", async (c) => {
+    const net = network(c);
+    if (!landLimit(net, deps.now()))
+      throw new HttpError(429, "too many Delegations");
+    const body = await jsonBody(c.req);
+    const { fields } = statementOf(body, "delegation", 400);
+    checkHubAndTime(fields);
+    const named = (
+      await db.query<{ owner: string }>(
+        "SELECT owner FROM map_server WHERE key = $1",
+        [fields.mapServerKey],
       )
     ).rows[0];
-  }
+    // the key's holder must have named this owner, so nobody can claim another's Map server
+    if (named?.owner !== fields.owner)
+      throw new HttpError(
+        403,
+        "this Map server key has not named this owner (POST /map-servers)",
+      );
+    const serving = (
+      await db.query<{ owner: string }>(
+        "SELECT owner FROM land WHERE map_server_key = $1",
+        [fields.mapServerKey],
+      )
+    ).rows[0];
+    if (serving && serving.owner !== fields.owner)
+      throw new HttpError(409, "this Map server key serves another Land");
+    const values = [
+      fields.owner,
+      fields.mapServerKey,
+      body.statement,
+      body.publicKey,
+      body.signature,
+      fields.issued,
+      seconds(),
+    ];
+    const conflict = "this owner or Map server key already has a Land";
+
+    const existing = (
+      await db.query("SELECT 1 FROM land WHERE owner = $1", [fields.owner])
+    ).rows.length;
+    if (existing) {
+      // A newer Delegation from the same owner replaces the key; it is not a new Land.
+      // The registered one sent again is answered the same way, so a retry is safe.
+      const { rows } = await unique(
+        () =>
+          db.query<{ id: number | string }>(
+            `UPDATE land SET map_server_key = $2, statement = $3, public_key = $4, signature = $5,
+               issued_at = $6, updated_at = $7
+             WHERE owner = $1 AND (issued_at < $6 OR statement = $3) RETURNING id`,
+            values,
+          ),
+        conflict,
+      );
+      if (rows.length === 0)
+        throw new HttpError(409, "a newer Delegation is already registered");
+      return c.json({ landId: Number(rows[0]!.id) });
+    }
+    const day = Math.floor(deps.now() / DAY_MS);
+    if (!(await countLand(net, day)))
+      throw new HttpError(
+        429,
+        `at most ${NEW_LANDS_PER_NETWORK_PER_DAY} new Lands per network address per day`,
+      );
+    try {
+      const { rows } = await unique(
+        () =>
+          db.query<{ id: number | string }>(
+            `INSERT INTO land (owner, map_server_key, statement, public_key, signature, issued_at,
+               created_at, updated_at)
+             VALUES ($1, $2, $3, $4, $5, $6, $7, $7) RETURNING id`,
+            values,
+          ),
+        conflict,
+      );
+      return c.json({ landId: Number(rows[0]!.id) }, 201);
+    } catch (err) {
+      // no Land was made: give the count back
+      await db.query(
+        "UPDATE land_quota SET count = count - 1 WHERE network = $1 AND day = $2",
+        [net, day],
+      );
+      throw err;
+    }
+  });
+
+  // --- Lands and the Directory ---
+
+  app.get("/lands/:landId", async (c) => {
+    const row = await landWhere("l.id = $1", landIdOf(c.req.param("landId")));
+    if (!row) throw new HttpError(404, "Land not found");
+    return c.json(landInfo(row, await onlineLands()));
+  });
+
+  app.get("/lands", async (c) => {
+    const { owner, mapServerKey } = c.req.query();
+    if ((owner === undefined) === (mapServerKey === undefined))
+      throw new HttpError(400, "give exactly one of owner and mapServerKey");
+    const address = owner ?? mapServerKey ?? "";
+    if (!isAddress(address)) throw new HttpError(400, "invalid address");
+    const row = await landWhere(
+      owner === undefined ? "l.map_server_key = $1" : "l.owner = $1",
+      address,
+    );
+    if (!row) throw new HttpError(404, "Land not found");
+    return c.json(landInfo(row, await onlineLands()));
+  });
 
   app.get("/directory", async (c) => {
     const rows = (
-      await db.query<DelegationRow>(
-        "SELECT land_id, owner, x, y, mining_key, hidden FROM delegation WHERE NOT hidden ORDER BY land_id",
+      await db.query<LandRow>(
+        `${LAND_COLUMNS} WHERE NOT l.hidden AND l.cell IS NOT NULL ORDER BY l.id`,
       )
     ).rows;
     const online = await onlineLands();
-    const directory: Directory = {
-      relayUrl: config.relayPublicUrl,
-      lands: rows.map((r) => toDirectoryLand(r, online)),
-    };
+    const directory = {
+      lands: rows.map((r) => landInfo(r, online)),
+    } as LandDirectory;
     c.header("Cache-Control", "public, s-maxage=5, stale-while-revalidate=30");
     return c.json(directory);
   });
 
-  app.get("/directory/:landId", async (c) => {
-    const row = await landRow(landIdOf(c.req.param("landId")));
-    if (!row || row.hidden) throw new HttpError(404, "Land not found");
-    return c.json(toDirectoryLand(row, await onlineLands()));
-  });
+  // --- Travel tickets (docs/protocols/gate-travel.md) ---
 
-  // --- Delegation ---
-
-  app.post("/lands/:landId/delegation", async (c) => {
-    const landId = landIdOf(c.req.param("landId"));
-    const nowMs = deps.now();
-    if (
-      !delegationLimit(String(landId), nowMs) ||
-      !delegationAllLimit("*", nowMs)
-    )
-      throw new HttpError(429, "too many Delegation attempts");
-    const body = await jsonBody(c.req);
-    if (
-      typeof body.miningKey !== "string" ||
-      !isAddress(body.miningKey, { strict: false })
-    )
-      throw new HttpError(400, "invalid miningKey");
-    const miningKey = getAddress(body.miningKey);
-    const issuedRaw = body.issuedAt;
-    const issuedAt =
-      typeof issuedRaw === "string" && /^\d{1,20}$/.test(issuedRaw)
-        ? BigInt(issuedRaw)
-        : typeof issuedRaw === "number" &&
-            Number.isSafeInteger(issuedRaw) &&
-            issuedRaw >= 0
-          ? BigInt(issuedRaw)
-          : undefined;
-    if (issuedAt === undefined || issuedAt > UINT64_MAX)
-      throw new HttpError(400, "invalid issuedAt");
-    const signature = signatureOf(body.signature);
-    const nowSeconds = Math.floor(deps.now() / 1000);
-    if (issuedAt > BigInt(nowSeconds + MAX_FUTURE_ISSUED_AT_SECONDS))
-      throw new HttpError(400, "issuedAt is in the future");
-
-    const owner = await chainRead(() => chain.ownerOf(BigInt(landId)));
-    if (!owner) throw new HttpError(404, "Land not found");
-    const valid = await chainRead(() =>
-      deps.verifyTypedData({
-        address: owner,
-        domain: HUB_EIP712_DOMAIN(config.chainId),
-        types: DelegationTypes,
-        primaryType: "Delegation",
-        message: { landId: BigInt(landId), miningKey, issuedAt },
-        signature,
-      }),
-    );
-    if (!valid)
-      throw new HttpError(403, "signature is not from the Land owner");
-    const coordinates = await chainRead(() =>
-      chain.coordinatesOf(BigInt(landId)),
-    );
-    if (!coordinates) throw new HttpError(404, "Land not found");
-
-    // The newest Delegation wins; the WHERE makes the comparison atomic. `hidden` is kept.
-    const saved = await db.query(
-      `INSERT INTO delegation (land_id, owner, x, y, mining_key, issued_at, signature, updated_at)
-       VALUES ($1, $2, $3, $4, $5, $6, $7, $8)
-       ON CONFLICT (land_id) DO UPDATE SET owner = EXCLUDED.owner, x = EXCLUDED.x, y = EXCLUDED.y,
-         mining_key = EXCLUDED.mining_key, issued_at = EXCLUDED.issued_at,
-         signature = EXCLUDED.signature, updated_at = EXCLUDED.updated_at
-       WHERE delegation.issued_at < EXCLUDED.issued_at
-       RETURNING land_id`,
-      [
-        landId,
-        owner,
-        coordinates.x,
-        coordinates.y,
-        miningKey,
-        issuedAt.toString(),
-        signature,
-        nowSeconds,
-      ],
-    );
-    if (saved.rows.length === 0)
-      throw new HttpError(409, "a newer Delegation is already registered");
-    return c.json({ landId, miningKey, issuedAt: issuedAt.toString() });
-  });
-
-  // --- Travel tickets ---
-
-  app.post("/tickets", async (c) => {
+  app.post("/tickets", session, async (c) => {
     const address = c.get("address");
-    if (!ticketLimit(address.toLowerCase(), deps.now()))
+    if (!ticketLimit(address, deps.now()))
       throw new HttpError(429, "too many ticket requests");
     const body = await jsonBody(c.req);
     const landId = landIdOf(body.landId);
@@ -511,201 +546,64 @@ export function createApp(deps: Deps) {
     if (from === landId)
       throw new HttpError(400, "from must differ from landId");
 
-    if (!(await chainRead(() => chain.hasCharacter(address))))
-      throw new HttpError(403, "create a Character first");
-    const row = await landRow(landId);
-    if (!row || row.hidden) throw new HttpError(404, "Land not found");
+    const target = await landWhere("l.id = $1", landId);
+    if (!target) throw new HttpError(404, "Land not found");
+    if (target.cell === null) throw new HttpError(409, "Land has no cell yet");
     if (!(await onlineLands()).has(landId))
       throw new HttpError(409, "Land is offline");
 
-    let gate = 0; // GATE_NONE: spawn at the Land's own spawn point
+    let gate = GATE_NONE;
     if (from !== undefined) {
-      const [here, there] = await chainRead(() =>
-        Promise.all([
-          chain.coordinatesOf(BigInt(from)),
-          chain.coordinatesOf(BigInt(landId)),
-        ]),
-      );
-      if (!here) throw new HttpError(404, "origin Land not found");
-      if (!there) throw new HttpError(404, "Land not found");
-      const direction = DIRECTIONS.find((d) => {
-        const n = neighbourOf(here.x, here.y, d);
-        return n.x === there.x && n.y === there.y;
-      });
-      if (!direction) throw new HttpError(403, "Lands are not adjacent");
+      const origin = (
+        await db.query<{ cell: number | null }>(
+          "SELECT cell FROM land WHERE id = $1",
+          [from],
+        )
+      ).rows[0];
+      if (!origin) throw new HttpError(404, "origin Land not found");
+      const there = spiralCoordinates(target.cell);
+      const here = origin.cell === null ? null : spiralCoordinates(origin.cell);
+      const direction =
+        here &&
+        DIRECTIONS.find((d) => {
+          const n = neighbourOf(here.x, here.y, d);
+          return n.x === there.x && n.y === there.y;
+        });
+      if (!direction) throw new HttpError(409, "Lands are not adjacent");
       gate = gateNumber(arrivalGate(direction));
     }
 
-    const ticket: TravelTicket = {
-      player: address,
-      landId: BigInt(landId),
-      gate,
-      expiresAt: BigInt(
-        Math.floor(deps.now() / 1000) + TRAVEL_TICKET_TTL_SECONDS,
-      ),
-      nonce: toHex(crypto.getRandomValues(new Uint8Array(32))),
-    };
-    const signature = await deps.ticketSigner.signTypedData({
-      domain: HUB_EIP712_DOMAIN(config.chainId),
-      types: TravelTicketTypes,
-      primaryType: "TravelTicket",
-      message: ticket,
-    });
-    return c.json({ ticket: ticketToWire(ticket), signature });
-  });
-
-  // --- Sponsored transactions: ERC-4337 user operations (ADR 0005) ---
-
-  /** Throws unless the user operation is the Player's own and makes only sponsored calls; true if one creates a Character. */
-  function checkUserOperation(
-    player: Address,
-    method: string,
-    params: unknown[],
-  ): boolean {
-    const [op, entryPoint, chainId] = params;
-    if (
-      typeof entryPoint !== "string" ||
-      !isAddress(entryPoint, { strict: false }) ||
-      !isAddressEqual(entryPoint, entryPoint06Address)
-    )
-      throw new HttpError(400, "only EntryPoint v0.6 is supported");
-    if (
-      method.startsWith("pm_") &&
-      !(isHex(chainId) && Number(chainId) === config.chainId)
-    )
-      throw new HttpError(400, "wrong chain id");
-    if (typeof op !== "object" || op === null)
-      throw new HttpError(400, "invalid user operation");
-    const { sender, initCode, callData } = op as Record<string, unknown>;
-    if (
-      typeof sender !== "string" ||
-      !isAddress(sender, { strict: false }) ||
-      !isAddressEqual(sender, player)
-    )
-      throw new HttpError(403, "user operations must come from your account");
-    // a sponsored deployment must be the account the client creates, not any contract at that address
-    if (
-      !isHex(initCode) ||
-      (initCode !== "0x" && !initCode.toLowerCase().startsWith(ACCOUNT_FACTORY))
-    )
-      throw new HttpError(403, "unsupported account factory");
-    if (!isHex(callData)) throw new HttpError(400, "invalid callData");
-    let calls: readonly { target: Address; value: bigint; data: Hex }[];
-    try {
-      const decoded = decodeFunctionData({ abi: accountAbi, data: callData });
-      calls =
-        decoded.functionName === "execute"
-          ? [
-              {
-                target: decoded.args[0],
-                value: decoded.args[1],
-                data: decoded.args[2],
-              },
-            ]
-          : decoded.args[0];
-    } catch {
-      throw new HttpError(403, "only game calls are sponsored");
-    }
-    if (calls.length === 0)
-      throw new HttpError(403, "only game calls are sponsored");
-    let createsCharacter = false;
-    for (const call of calls) {
-      const key = `${isAddressEqual(call.target, player) ? "account" : call.target.toLowerCase()}:${call.data.slice(0, 10).toLowerCase()}`;
-      if (call.value !== 0n || !sponsoredCalls.has(key))
-        throw new HttpError(403, "only game calls are sponsored");
-      if (key === createCharacterCall) createsCharacter = true;
-    }
-    return createsCharacter;
-  }
-
-  /** Adds one to a daily count unless it is at max; false when it is. */
-  async function countUp(identity: string, day: number, max: number) {
-    const { rows } = await db.query(
-      `INSERT INTO sponsorship (identity, day, count) VALUES ($1, $2, 1)
-       ON CONFLICT (identity, day) DO UPDATE SET count = sponsorship.count + 1
-       WHERE sponsorship.count < $3
-       RETURNING count`,
-      [identity, day, max],
-    );
-    return rows.length > 0;
-  }
-
-  /** Counts one Sponsored transaction against the Player's and the world's daily limits. */
-  async function sponsor(player: Address) {
-    const day = Math.floor(deps.now() / DAY_MS);
-    const identity = player.toLowerCase();
-    if (
-      !(await countUp(identity, day, SPONSORED_TRANSACTIONS_PER_PLAYER_PER_DAY))
-    )
-      throw new HttpError(
-        429,
-        `sponsored transaction limit reached (${SPONSORED_TRANSACTIONS_PER_PLAYER_PER_DAY} per day)`,
-      );
-    if (!(await countUp("*", day, SPONSORED_TRANSACTIONS_PER_DAY))) {
-      // the world's limit refused it: give the Player's count back
-      await db.query(
-        "UPDATE sponsorship SET count = count - 1 WHERE identity = $1 AND day = $2",
-        [identity, day],
-      );
-      if (budgetLoggedDay !== day)
-        deps.log(
-          `daily sponsorship budget (${SPONSORED_TRANSACTIONS_PER_DAY}) used up`,
-        );
-      budgetLoggedDay = day;
-      throw new HttpError(429, "the sponsorship budget for today is used up");
-    }
-  }
-
-  // JSON-RPC proxy to the bundler and paymaster, whose URL holds the API key (never sent to the client)
-  app.post("/aa", async (c) => {
-    const bundler = deps.bundler;
-    if (!bundler) throw new HttpError(503, "sponsorship is not configured");
-    const player = c.get("address");
-    if (!aaLimit(player.toLowerCase(), deps.now()))
-      throw new HttpError(429, "too many requests");
-    const body = await jsonBody(c.req);
-    const { method, params } = body;
-    if (typeof method !== "string" || !AA_METHODS.has(method))
-      throw new HttpError(400, "method not allowed");
-    if (!Array.isArray(params))
-      throw new HttpError(400, "params must be an array");
-    if (USER_OPERATION_METHODS.has(method)) {
-      const createsCharacter = checkUserOperation(player, method, params);
-      // createCharacter() reverts for a second Character; never pay for that
-      if (
-        createsCharacter &&
-        (await chainRead(() => chain.hasCharacter(player)))
+    const name = (
+      await db.query<{ name: string }>(
+        "SELECT name FROM character WHERE address = $1",
+        [address],
       )
-        throw new HttpError(409, "you already have a Character");
-    }
-    if (method === "pm_getPaymasterData") await sponsor(player);
-    let response: unknown;
-    try {
-      response = await bundler({
-        jsonrpc: "2.0",
-        id: body.id ?? null,
-        method,
-        params,
-      });
-    } catch (err) {
-      deps.log(`bundler call failed: ${logSafe(err)}`);
-      throw new HttpError(502, "bundler unavailable");
-    }
-    // ERC-7677: a stub marked final is used as is, so it is the sponsorship
-    if (
-      method === "pm_getPaymasterStubData" &&
-      (response as { result?: { isFinal?: unknown } } | null)?.result
-        ?.isFinal === true
-    )
-      await sponsor(player);
-    return c.json(response as object);
+    ).rows[0]?.name;
+    const issued = seconds();
+    const ticket = signStatement(
+      "travel-ticket",
+      {
+        hub: config.hubDomain,
+        character: address,
+        name: name ?? "",
+        land: landId,
+        gate,
+        issued,
+        expires: issued + TRAVEL_TICKET_TTL_SECONDS,
+        nonce: Buffer.from(crypto.getRandomValues(new Uint8Array(16))).toString(
+          "hex",
+        ),
+      },
+      deps.ticketKey,
+    );
+    return c.json(ticket);
   });
 
   // --- Reports and moderation ---
 
-  app.post("/reports", async (c) => {
+  app.post("/reports", session, async (c) => {
     const address = c.get("address");
-    if (!reportLimit(address.toLowerCase(), deps.now()))
+    if (!reportLimit(address, deps.now()))
       throw new HttpError(429, "too many reports");
     const body = await jsonBody(c.req);
     const landId = landIdOf(body.landId);
@@ -715,10 +613,13 @@ export function createApp(deps: Deps) {
         400,
         `reason must be 1 to ${MAX_REASON_LENGTH} characters`,
       );
-    if (!(await landRow(landId))) throw new HttpError(404, "Land not found");
+    const exists = (
+      await db.query("SELECT 1 FROM land WHERE id = $1", [landId])
+    ).rows.length;
+    if (!exists) throw new HttpError(404, "Land not found");
     await db.query(
       "INSERT INTO report (land_id, reporter, reason, created_at) VALUES ($1, $2, $3, $4)",
-      [landId, address, reason, Math.floor(deps.now() / 1000)],
+      [landId, address, reason, seconds()],
     );
     return c.json({ ok: true }, 201);
   });
@@ -728,7 +629,7 @@ export function createApp(deps: Deps) {
       await db.query<{
         id: number;
         land_id: string;
-        reporter: Address;
+        reporter: string;
         reason: string;
         created_at: string;
       }>(
@@ -752,8 +653,8 @@ export function createApp(deps: Deps) {
     if (typeof body.hidden !== "boolean")
       throw new HttpError(400, "hidden must be a boolean");
     const updated = await db.query(
-      "UPDATE delegation SET hidden = $2 WHERE land_id = $1 RETURNING land_id",
-      [landId, body.hidden],
+      "UPDATE land SET hidden = $2, updated_at = $3 WHERE id = $1 RETURNING id",
+      [landId, body.hidden, seconds()],
     );
     if (updated.rows.length === 0) throw new HttpError(404, "Land not found");
     deps.log(

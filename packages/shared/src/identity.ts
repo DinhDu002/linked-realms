@@ -142,9 +142,20 @@ const EDGE_SPACE = /^\p{White_Space}|\p{White_Space}$/u;
 const MESSAGE_CHARS =
   /^"(?:[\x20\x21\x23-\x5b\x5d-\x7e]|\\["\\]|\\u[0-9a-f]{4})*"$/;
 
-function isHost(value: string): boolean {
+/** A host as statements write it: lowercase ASCII labels and an optional port. */
+export function isHost(value: string): boolean {
   const match = HOST.exec(value);
   return match !== null && Number(match[1] ?? 1) <= 65535;
+}
+
+/** A Character name as the grammar allows it in a statement (the empty name included). */
+export function isName(value: string): boolean {
+  return (
+    !FORBIDDEN.test(value) &&
+    !EDGE_SPACE.test(value) &&
+    value.isWellFormed() &&
+    [...value].length <= NAME_MAX_CODE_POINTS
+  );
 }
 
 function decimal(value: string, min: number): number | undefined {
@@ -173,7 +184,7 @@ function parseValue(format: Format, value: string): unknown {
     case "address":
       return isAddress(value) ? value : undefined;
     case "name":
-      return [...value].length <= NAME_MAX_CODE_POINTS ? value : undefined;
+      return isName(value) ? value : undefined;
     case "land":
       return decimal(value, 1);
     case "gate":
