@@ -6,6 +6,8 @@ import {
   StatementError,
   buildStatement,
   fromBase64,
+  isHost,
+  isName,
   parseStatement,
   signStatement,
   toBase64,
@@ -61,6 +63,19 @@ describe("statement grammar", () => {
     expect(() =>
       buildStatement("travel-ticket", { ...fields, land: 1.5 }),
     ).toThrow(StatementError);
+  });
+});
+
+describe("isHost and isName", () => {
+  it("follow the grammar's value formats", () => {
+    for (const host of ["hub.example.org", "localhost:8787", "a-b.c:65535"])
+      expect(isHost(host)).toBe(true);
+    for (const host of ["Hub.example", "x.org:0", "x.org:65536", "-a.org", ""])
+      expect(isHost(host)).toBe(false);
+    for (const name of ["", "Mai Lan", "🌸".repeat(32)])
+      expect(isName(name)).toBe(true);
+    for (const name of [" Mai", "Mai\n", "a\u200bb", "\ud800", "a".repeat(33)])
+      expect(isName(name)).toBe(false);
   });
 });
 

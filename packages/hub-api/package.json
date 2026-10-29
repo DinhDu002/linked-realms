@@ -11,10 +11,10 @@
   },
   "dependencies": {
     "@hono/node-server": "1.19.5",
+    "@linked-realms/core": "workspace:*",
     "@linked-realms/shared": "workspace:*",
     "hono": "4.13.14",
-    "pg": "8.23.1",
-    "viem": "2.57.12"
+    "pg": "8.23.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.2.13",
