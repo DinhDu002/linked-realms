@@ -194,3 +194,21 @@ export interface Directory {
 export function relayLandUrl(relayUrl: string, landId: number): string {
   return `${relayUrl.replace(/\/+$/, "")}/land/${landId}`;
 }
+
+/** A registered Land as the Hub returns it (docs/protocols/map-server-hub-relay.md). */
+export interface LandInfo {
+  landId: number;
+  owner: string;
+  ownerName: string;
+  /** The Land's cell; null while it has none. */
+  x: number | null;
+  y: number | null;
+  url: string;
+  mapServerKey: string;
+  online: boolean;
+}
+
+/** `GET /directory`: the Lands that have a cell. */
+export interface LandDirectory {
+  lands: (LandInfo & { x: number; y: number })[];
+}

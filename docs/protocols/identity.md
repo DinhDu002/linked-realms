@@ -1,6 +1,6 @@
 # Identity: keys, addresses and signed statements
 
-Status: mandatory (ADR 0008, ADR 0009). Every Land, Shell, NPC runner and Hub implements this exactly. The reference implementation is `crates/core` (keys, signatures, addresses) and `packages/shared/src/identity.ts` (statements).
+Status: mandatory (ADR 0008, ADR 0009). Every Land, Shell, NPC runner and Hub implements this exactly. The reference implementation is `crates/core` (keys, signatures, addresses) and `packages/shared/src/identity.ts` (statements, exported as `@linked-realms/shared/identity`).
 
 ## Keys
 
@@ -62,13 +62,13 @@ A statement is UTF-8 text that one key signs. Its grammar is strict, so every im
 | `Name` | A Character's name: up to 32 code points, which may be empty |
 | `Land` | A Land id: a decimal integer from 1 to 2^53 − 1, with no leading zeros |
 | `Gate` | `0`, `1`, `2`, `3` or `4` (`gate-travel.md`) |
-| `Issued`, `Expires` | Unix time in seconds: a decimal integer with no leading zeros |
+| `Issued`, `Expires` | Unix time in seconds: a decimal integer from 0 to 2^53 − 1, with no leading zeros |
 | `Nonce`, `Ticket nonce` | 32 lowercase hexadecimal characters (16 random bytes) |
 | `Driven by AI` | `yes` or `no` |
 | `Land URL` | An origin: `https://` or `http://`, then a host, and an optional `:port`, with no path |
 | `Message` | A JSON string literal (RFC 8259), as described below |
 
-- **`Message`.** Every code point outside printable ASCII (U+0020 to U+007E) is written as a `\uXXXX` escape, using a surrogate pair above U+FFFF, so the line is plain ASCII. Rule 4 applies to that ASCII line, and the decoded text holds at most 1,000 code points.
+- **`Message`.** Every code point outside printable ASCII (U+0020 to U+007E) is written as a `\uXXXX` escape with lowercase hex digits, using a surrogate pair above U+FFFF, so the line is plain ASCII. `"` and `\` are written `\"` and `\\`; no other escape is used, and printable ASCII is never escaped. So each text has exactly one encoding: a reader decodes the value, encodes it again and refuses it if the result differs. The decoded text is valid Unicode (no unpaired surrogate) of at most 1,000 code points. Rule 4 applies to the ASCII line.
 - **Example.** A message containing a line break is still one line in the statement: `Message: "line one\u000aline two"`.
 
 ### Sending and checking a statement
@@ -85,15 +85,15 @@ A verifier:
 1. decodes `publicKey` and `signature` and checks their lengths;
 2. verifies the signature over the statement's UTF-8 bytes with the statement's context, and refuses on failure without parsing anything;
 3. parses the statement with the grammar above and refuses on any deviation;
-4. derives the address from `publicKey` and checks that it equals the address the statement says signed it:
-   - `Character` for sign-ins, arrivals and Land messages;
+4. derives the address from `publicKey`. Where the statement names its signer, that field must equal the address:
+   - `Character` for Land messages;
    - `Owner` for Delegations;
    - `Map server key` for Map server statements.
 
-   Travel tickets are checked against the Hub's published ticket key instead, and relay hellos against the Land's Delegation.
+   The other statements name no signer, so the protocol that uses them checks the address: a sign-in identifies the Character by it; an arrival's must be its ticket's `Character` (`arrival.md`); a Travel ticket's must be the Hub's ticket key; a relay hello's must be the Land's `mapServerKey`.
 5. checks the times, nonces and other rules of the protocol that uses the statement.
 
 ## Test vectors
 
 - `crates/core/test-vectors/identity.json`: words, the seed, `xi`, the public key and the address for several entropies and indexes, one signed statement per context, and one invalid address for each rule above.
-- `packages/shared/test-vectors/statements.json`: statements that must parse and statements that must be refused. Refused cases include a repeated key, a missing key, an extra line, a carriage return, U+2028 in a name, a bidi control in a name, a trailing space and an uppercase address.
+- `packages/shared/test-vectors/statements.json`: statements that must parse, with their fields, and statements that must be refused, each with the rule it breaks. Refused cases include a repeated key, a missing key, an extra line, a carriage return, U+2028 in a name, a bidi control in a name, a trailing space, an uppercase address and every non-canonical `Message`.

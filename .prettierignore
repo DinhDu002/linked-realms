@@ -6,5 +6,6 @@ crates/**/test-vectors/
 # Generated files (packages/shared/scripts).
 packages/shared/src/abi/
 packages/shared/test-vectors/
+packages/shared/src/gen/
 maps/empty-land.json
 packages/shared/src/deployments/*.json
