@@ -1,6 +1,6 @@
 # Arrival at a Land
 
-Status: mandatory (ADR 0008). Every Land checks arrivals this way, whatever language its Map server is written in. The reference implementation is `verifyTravelTicket` and `verifyArrival` in `packages/shared/src/hub.ts`, used by `packages/map-server`.
+Status: mandatory (ADR 0008). Every Land checks arrivals this way, whatever language its Map server is written in. The reference implementation is `verifyHandoff` in `packages/shared/src/identity.ts`, used by `packages/map-server`.
 
 ## What arrives
 
@@ -16,17 +16,16 @@ The ticket's nonce is the challenge: the Hub makes it fresh, a Land accepts it o
 
 ## The Hub's ticket key
 
-- A Land knows the address of the Hub's ticket key from its own configuration (`HUB_TICKET_SIGNER` in the reference kit).
-- At start it fetches `GET <hub>/keys`, which returns `{ "ticket": { "address": "tlr1…", "publicKey": "<base64>" } }`.
-- It uses that public key only if the key hashes to the configured address.
+- A Land knows the address of the Hub's ticket key from its own configuration (`HUB_TICKET_SIGNER` in the reference kit). `GET <hub>/keys` publishes it, so an operator can look it up: `{ "ticket": { "address": "tlr1…", "publicKey": "<base64>" } }`.
+- A ticket carries its `publicKey`. The Land accepts the ticket only if that key's address is the configured one and the signature verifies with it. An address is a hash of the key, so this is the same as pinning the key, without fetching it.
 - Replacing the Hub's ticket key means changing that setting.
 
 ## Checks, in order
 
 A Land refuses the arrival at the first failing check and reports the reason. The reasons below are the reference kit's error codes.
 
-1. **`bad-ticket`**: the ticket's signature does not verify with the Hub's ticket key under `linked-realms/travel-ticket/v1`, or the ticket does not parse.
-2. **`wrong-land`**: the ticket's `Land` is not this Land, or its `Gate` is not in 0–4.
+1. **`bad-ticket`**: the ticket's `publicKey` is not the Hub's ticket key, its signature does not verify under `linked-realms/travel-ticket/v1`, or it does not parse (which includes a `Gate` outside 0–4).
+2. **`wrong-land`**: the ticket's `Land` is not this Land.
 3. **`expired`**: `Expires` is not later than now.
 4. **`too-far-ahead`**: `Expires` is more than 120 seconds from now (tickets live 60 seconds).
 5. **`before-start`**: `Issued` is earlier than the moment the Map server started. A restarted Map server has forgotten the nonces it saw, so it must not accept tickets from before.

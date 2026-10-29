@@ -85,7 +85,7 @@ Decisions come from ADR 0007 (the world off the chain) and ADR 0008 (the Shell a
   - A value must not contain control, format, line-separator or paragraph-separator characters (Unicode Cc, Cf, Zl, Zp) or unpaired surrogates. This also covers names, so the Hub refuses such names.
   - Free text from a Land travels as the last line, `Message: <JSON string>`.
   - On the wire a statement is `{ statement, publicKey, signature }`, with the last two in base64.
-  - A verifier checks the signature first, then parses strictly, then checks that the address derived from `publicKey` is the one the statement names.
+  - A verifier checks the signature first, then parses strictly. Land messages, Delegations and Map server statements name their signer, so the verifier checks that the address derived from `publicKey` is that one; for the other statements the protocol checks the address (`identity.md`).
 
 | Statement | Signed by | Context | Lines after the first |
 |---|---|---|---|
@@ -115,7 +115,7 @@ Decisions come from ADR 0007 (the world off the chain) and ADR 0008 (the Shell a
     - `pay { id, amount, recipient, memo }`: reserved, refused with `unsupported` until 2C.
   - Unknown types are ignored, and messages over 64 KiB are dropped.
 - **`arrival.md`:** the checks a Land makes, in order:
-  1. the ticket's signature against the Hub's ticket key;
+  1. the ticket's signature, by a key whose address is the configured Hub ticket key (`HUB_TICKET_SIGNER`);
   2. `Land` is this Land, and `Gate` is between 0 and 4;
   3. `Expires` is in the future and at most 120 seconds ahead;
   4. `Issued` is not before the Map server started, so a restart that forgets nonces cannot accept a replayed ticket;
@@ -126,7 +126,7 @@ Decisions come from ADR 0007 (the world off the chain) and ADR 0008 (the Shell a
 
   It also covers where Gate 0 places the Character (the Land's own spawn), how a Land shows "driven by AI", and the error codes.
 - **`map-server-hub-relay.md`:**
-  - the Hub routes a Map server uses: `POST /map-servers`, `GET /keys`, `GET /lands?mapServerKey=`;
+  - the Hub routes a Map server uses: `POST /map-servers`, `GET /lands?mapServerKey=`, and `GET /keys`, which publishes the Hub's ticket key for operators;
   - the host link: the challenge, the `relay host` hello, control and data frames, HTTP stream frames (below) and pings;
   - Land URLs: `<landId>.<LAND_BASE_DOMAIN>` or the owner's own domain;
   - the headers the relay adds.
@@ -175,8 +175,8 @@ Decisions come from ADR 0007 (the world off the chain) and ADR 0008 (the Shell a
 - **`src/identity.ts`:** builds and strictly parses the seven statements.
   - `verifyStatement({ statement, publicKey, signature }, kind)` returns the fields or throws, using `@linked-realms/core`.
   - Its tests read `crates/core/test-vectors/identity.json`.
+  - `verifyHandoff` runs the checks of `arrival.md` in order.
 - **`src/hub.ts`:**
-  - `verifyTravelTicket` and `verifyArrival` follow `arrival.md`.
   - `LandInfo { landId, owner, ownerName, x, y, url, mapServerKey, online }` and `LandDirectory { lands }`, where `x` and `y` are null without a cell.
   - These new names sit beside the old `DirectoryLand`, `Directory`, `relayLandUrl` and EIP-712 types, so every commit typechecks. The old names go in item 7 of the order of work.
   - The Gate numbering and `TRAVEL_TICKET_TTL_SECONDS = 60` stay.
@@ -281,7 +281,7 @@ These go away:
 **Config.** These settings are added or kept:
 - `LAND_OWNER` (required);
 - `HUB_URL`;
-- `HUB_TICKET_SIGNER` (an address that the public key from `GET /keys` must hash to);
+- `HUB_TICKET_SIGNER` (the address that a ticket's `publicKey` must hash to);
 - `MAP_SERVER_KEY_FILE` (created with mode 0600 on first start);
 - `RELAY_URL`, `HOST`, `PORT`;
 - `LAND_UI_DIR` (the built `client`, by default the copy in the image).
@@ -290,9 +290,8 @@ These go away:
 
 **Start:**
 1. Load or create the Map server key, post the Map server statement, and print the key's address.
-2. Fetch the Hub's ticket key.
-3. Wait until `GET /lands?mapServerKey=` returns a Land owned by `LAND_OWNER`. That gives the Land id.
-4. Connect the relay agent.
+2. Wait until `GET /lands?mapServerKey=` returns a Land owned by `LAND_OWNER`. That gives the Land id.
+3. Connect the relay agent.
 
 **Server** (`ws` and `node:http`, replacing Colyseus):
 - `GET /` and the Land UI's static files. Hashed `/assets/*` are `immutable`; `index.html` is `no-cache` with an `etag`.

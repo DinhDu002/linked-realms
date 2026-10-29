@@ -1,0 +1,106 @@
+// The reference Land kit's game protocol between a Land UI and its Map server, over the
+// WebSocket at /play. It is a reference, not a mandatory protocol: another Land may speak
+// anything to its own UI. Code is generated with `pnpm --filter @linked-realms/shared proto`.
+syntax = "proto3";
+
+package linked_realms.land.v1;
+
+// A signed statement as docs/protocols/identity.md sends it: the text, then standard base64.
+message SignedStatement {
+  string statement = 1;
+  string public_key = 2;
+  string signature = 3;
+}
+
+message ClientMessage {
+  oneof message {
+    Hello hello = 1;
+    Input input = 2;
+  }
+  // Mining (step 2C).
+  reserved 20 to 29;
+}
+
+// The first message on a connection: the handoff from the Shell (docs/protocols/arrival.md).
+message Hello {
+  SignedStatement ticket = 1;
+  SignedStatement arrival = 2;
+}
+
+// Where the Character is walking: dx and dy are -1, 0 or 1. Sent whenever they change.
+message Input {
+  sint32 dx = 1;
+  sint32 dy = 2;
+  // Grows with every Input; Moved echoes the last one applied.
+  uint32 seq = 3;
+}
+
+message ServerMessage {
+  oneof message {
+    Welcome welcome = 1;
+    Character joined = 2;
+    Left left = 3;
+    Moved moved = 4;
+    Notice notice = 5;
+    Error error = 6;
+  }
+  // Mining (step 2C).
+  reserved 20 to 29;
+}
+
+// Sent once, after the handoff is accepted: everything a new Character needs.
+message Welcome {
+  // The receiving Character's id.
+  uint32 you = 1;
+  Land land = 2;
+  // The Land's Tiled JSON text. The Land UI validates it with parseLandMap (P6).
+  string map = 3;
+  repeated Character characters = 4;
+}
+
+message Land {
+  uint64 land_id = 1;
+  string owner = 2;
+  string owner_name = 3;
+}
+
+message Character {
+  // Unique among the Characters on this Map server while it runs.
+  uint32 id = 1;
+  string address = 2;
+  // The ticket's Name; may be empty.
+  string name = 3;
+  float x = 4;
+  float y = 5;
+  bool is_owner = 6;
+  // Self-declared in the arrival; the Land UI shows a marker (arrival.md).
+  bool driven_by_ai = 7;
+}
+
+message Left {
+  uint32 id = 1;
+}
+
+// Only the Characters that moved since the last tick.
+message Moved {
+  repeated Position positions = 1;
+  // The last Input seq applied for the receiving Character.
+  uint32 seq = 2;
+}
+
+message Position {
+  uint32 id = 1;
+  float x = 2;
+  float y = 3;
+}
+
+message Notice {
+  string text = 1;
+}
+
+// The Map server closes the connection after sending it.
+message Error {
+  // An arrival.md code, or "full", "duplicate", "rate-limited" or "bad-message".
+  string code = 1;
+  string message = 2;
+}
