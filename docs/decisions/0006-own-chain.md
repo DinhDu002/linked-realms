@@ -1,6 +1,6 @@
 # 0006 — Own Proof-of-Work chain
 
-Status: accepted, 2026-10-29 — by the project owner
+Status: accepted, 2026-10-29 — by the project owner. Partly superseded on 2026-10-30: point 11 no longer lets a Mine run without a Land. Each Land has one Mine, which mines for the Land owner and is switched in the Land (decided by the project owner in `docs/plans/phase-2c-the-chain.md`; ADR 0014 records it).
 
 Supersedes ADR 0003 and decisions D3, D8, D9 and D10 in ADR 0001. Parts of ADR 0002, 0004 and 0005 that rely on contracts are superseded too (see ADR 0007 and 0008).
 
