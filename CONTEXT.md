@@ -30,6 +30,20 @@ _Avoid_: portal, door
 A short-lived permit, signed by the Hub, that lets a Character enter another Land.
 _Avoid_: pass, visa
 
+### Wallets
+
+**Passkey wallet**:
+A Player's wallet that is a smart-contract account controlled by passkeys on the game's site. It needs no browser extension, and its game transactions are sponsored.
+_Avoid_: embedded wallet (on its own), smart account, passkey account
+
+**Backup passkey**:
+A further passkey added as an owner of a Passkey wallet, so the wallet survives the loss of the first. Without one, a lost passkey means a lost wallet.
+_Avoid_: recovery key, guardian
+
+**Sponsored transaction**:
+A game transaction whose fee the paymaster pays, within a per-Player and a world-wide daily limit.
+_Avoid_: gasless transaction, free transaction
+
 ### Network
 
 **Map server**:

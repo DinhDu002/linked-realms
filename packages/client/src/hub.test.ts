@@ -81,7 +81,7 @@ describe("createHub", () => {
         seen.push({ url: String(url), init });
         return String(url).endsWith("/auth/nonce")
           ? json({ nonce: "abcdefgh12" })
-          : json({ token: "tok", address: A, expiresAt: 9 });
+          : json({ token: "tok", address: A, expiresAt: 1900000000 });
       },
     });
     let signed = "";
@@ -91,6 +91,24 @@ describe("createHub", () => {
     expect(signed).toContain("URI: https://game.test");
     expect(seen[0]?.url).toBe("http://hub.test/auth/nonce");
     expect(hub.signedIn()).toBe(true);
+    expect(hub.authorization()).toBe("Bearer tok");
+  });
+
+  it("treats a session within a minute of expiry as signed out", async () => {
+    const soon = Math.floor(Date.now() / 1000) + 30;
+    const hub = createHub({
+      baseUrl: "http://hub.test",
+      chainId: 1,
+      domain: "game.test",
+      uri: "https://game.test",
+      fetch: async (url) =>
+        String(url).endsWith("/auth/nonce")
+          ? json({ nonce: "abcdefgh12" })
+          : json({ token: "tok", address: A, expiresAt: soon }),
+    });
+    await hub.signIn(A, async () => sig as `0x${string}`);
+    expect(hub.signedIn()).toBe(false);
+    expect(() => hub.authorization()).toThrow(/sign in to the Hub first/);
   });
 
   it("refuses authed calls before sign-in and surfaces Hub errors", async () => {

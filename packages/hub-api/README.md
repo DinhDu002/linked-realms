@@ -25,10 +25,11 @@ Migrations run at start-up (`src/db.ts`, plain SQL, tracked in the `migration` t
 | `HUB_SIWE_DOMAIN` | `localhost:5173` | The domain SIWE messages must name |
 | `HUB_ADMINS` | empty | Comma-separated addresses that may hide Lands |
 | `HUB_ALLOWED_ORIGINS` | empty | Comma-separated CORS origins |
+| `HUB_BUNDLER_URL` | unset | ERC-4337 bundler and ERC-7677 paymaster endpoint (CDP); a secret, since the URL holds the API key. Unset: `POST /aa` answers 503 |
 
 ## Routes
 
-`GET /health`, `GET /auth/nonce`, `POST /auth/verify`, `GET /directory`, `GET /directory/:landId`, `POST /lands/:landId/delegation`, `POST /tickets`, `POST /reports`, `GET /admin/reports`, `POST /admin/lands/:landId/hidden`. Errors are `{ "error": "..." }` with no stack traces or RPC details. Protected routes take `Authorization: Bearer <token>`.
+`GET /health`, `GET /auth/nonce`, `POST /auth/verify`, `GET /directory`, `GET /directory/:landId`, `POST /lands/:landId/delegation`, `POST /tickets`, `POST /reports`, `POST /aa`, `GET /admin/reports`, `POST /admin/lands/:landId/hidden`. Errors are `{ "error": "..." }` with no stack traces or RPC details. Protected routes take `Authorization: Bearer <token>`.
 
 Notes on behaviour:
 
@@ -36,7 +37,8 @@ Notes on behaviour:
 - `POST /lands/:landId/delegation` takes `{ miningKey, issuedAt, signature }` (`issuedAt` in unix seconds, decimal string or integer). Answers 403 if the signature is not the Land owner's, 409 if a Delegation with an equal or newer `issuedAt` exists, 404 for a Land that does not exist.
 - `POST /tickets` takes `{ landId, from? }` and answers `{ ticket, signature }` (ticket in wire format, see `ticketToWire`). 403 without a Character or for non-adjacent Lands, 404 for an unregistered or hidden Land, 409 when the Land is offline.
 - Hidden Lands answer 404 on `GET /directory/:landId`, which is how the relay refuses their link.
-- Rate limits per address: tickets 30 per minute, reports 5 per hour (every attempt counts, valid or not).
+- `POST /aa` (ADR 0005) is a JSON-RPC proxy to `HUB_BUNDLER_URL` for a signed-in Player's Passkey wallet. It forwards `eth_estimateUserOperationGas`, `eth_sendUserOperation`, `eth_getUserOperationReceipt`, `pm_getPaymasterStubData` and `pm_getPaymasterData`, and answers the bundler's JSON-RPC reply as is. A user operation is refused unless it uses EntryPoint v0.6, comes from the session's own address, deploys (if at all) through the Coinbase Smart Wallet v1.1 factory, and makes only the calls in `SPONSORED_CALLS` with no ETH value (403); `createCharacter()` is refused for a Player who has a Character (409). Sponsored transactions are counted in the `sponsorship` table when the paymaster signs: 20 per Player and 10,000 for the world per UTC day (429).
+- Rate limits per address: tickets 30 per minute, reports 5 per hour, `/aa` 120 per minute (every attempt counts, valid or not).
 
 ## Limits of this design
 
