@@ -1,25 +1,64 @@
-# One image for hub-api, relay and the Map servers. The default command is a self-hosted Map server
-# (docs/self-hosting.md); compose.yaml names the command for the other services.
-# Node 26 runs the TypeScript sources directly, so there is no build step.
-FROM node:26.12.1-alpine3.24
+# Two images:
+# - the default target: hub-api, the relay and the Map server. Its default command is a self-hosted
+#   Map server (docs/self-hosting.md); compose.yaml names the command for the other services.
+# - `shell` (docker build --target shell): the Shell's static pages behind Caddy with its headers.
+#   The Hub's URL is fixed when it is built: --build-arg VITE_HUB_URL=https://hub.example.org.
+# Node 26 runs the services' TypeScript directly; only the WebAssembly core and the two web pages
+# are built.
 
+# wasm-bindgen-cli, the version in crates/core/Cargo.toml, for the build machine's architecture.
+FROM scratch AS wasm-bindgen-amd64
+ADD --checksum=sha256:82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e \
+    https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-x86_64-unknown-linux-musl.tar.gz \
+    /wasm-bindgen.tar.gz
+FROM scratch AS wasm-bindgen-arm64
+ADD --checksum=sha256:1797c349a0f45d30946e8986b184135e12839ab576c9a04203e85febfc5dcb35 \
+    https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-aarch64-unknown-linux-gnu.tar.gz \
+    /wasm-bindgen.tar.gz
+FROM wasm-bindgen-${TARGETARCH} AS wasm-bindgen
+
+# packages/core/pkg: the WebAssembly build of crates/core (ADR 0009), as packages/core's `build`.
+FROM rust:1.99.1-slim-trixie AS wasm
+COPY --from=wasm-bindgen /wasm-bindgen.tar.gz /tmp/
+RUN tar -xzf /tmp/wasm-bindgen.tar.gz --strip-components=1 -C /usr/local/bin --wildcards '*/wasm-bindgen'
+WORKDIR /src
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates crates
+RUN cargo build --locked -p linked-realms-core --features wasm --target wasm32-unknown-unknown --profile wasm \
+ && wasm-bindgen --target web --out-dir /pkg target/wasm32-unknown-unknown/wasm/linked_realms_core.wasm
+
+# The Land UI (packages/client) and the Shell.
+FROM node:26.12.1-alpine3.24 AS build
 RUN npm install -g pnpm@11.3.0
-
 WORKDIR /app
-# /data/map-N: one volume per Map server (Mining key), writable by the unprivileged user.
-RUN mkdir -p /data/map-1 /data/map-2 /data/map-3 \
- && chown -R node:node /app /data
-USER node
+COPY . .
+COPY --from=wasm /pkg packages/core/pkg
+RUN pnpm install --frozen-lockfile
+ARG VITE_HUB_URL=http://localhost:8787
+RUN pnpm --filter @linked-realms/client build \
+ && pnpm --filter @linked-realms/shell build \
+ && node packages/shell/scripts/caddy-headers.ts > packages/shell/headers.caddy
 
+FROM caddy:2.11.7-alpine AS shell
+COPY packages/shell/Caddyfile /etc/caddy/Caddyfile
+COPY --from=build /app/packages/shell/headers.caddy /etc/caddy/headers.caddy
+COPY --from=build /app/packages/shell/dist /srv
+
+FROM node:26.12.1-alpine3.24
+RUN npm install -g pnpm@11.3.0
+WORKDIR /app
+# /data: the Map server key, one volume per Map server, writable by the unprivileged user.
+RUN mkdir -p /data && chown -R node:node /app /data
+USER node
 COPY --chown=node:node . .
-# Only what the three services and the seed script need: no contracts (they need git for forge-std),
-# no client (Phaser, Vite).
 RUN pnpm install --frozen-lockfile --prod \
     --filter @linked-realms/hub-api... \
     --filter @linked-realms/relay... \
     --filter @linked-realms/map-server...
+COPY --from=wasm --chown=node:node /pkg packages/core/pkg
+COPY --from=build --chown=node:node /app/packages/client/dist packages/client/dist
 
 ENV NODE_ENV=production
-# The Mining key lives in the /data volume, so it survives updates of the image.
-ENV MINING_KEY_FILE=/data/mining-key
+# The Map server key lives in the /data volume, so it survives updates of the image.
+ENV MAP_SERVER_KEY_FILE=/data/map-server-key
 CMD ["node", "packages/map-server/src/main.ts"]

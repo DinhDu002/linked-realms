@@ -42,6 +42,9 @@ export function createHubClient(
           ...(body === undefined ? {} : { "Content-Type": "application/json" }),
         },
         body: body === undefined ? undefined : JSON.stringify(body),
+        // The Directory's stale-while-revalidate is for shared caches; a browser honouring it
+        // would answer every poll with the one before. The Shell always asks the Hub.
+        cache: "no-cache",
       });
     } catch {
       throw new HubError(0, "The Hub cannot be reached");

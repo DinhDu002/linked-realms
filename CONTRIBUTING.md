@@ -6,6 +6,6 @@ Thanks for your interest in linked-realms.
 - Read [PLAN.md](PLAN.md) sections 2 (principles), 3 (architecture) and 5 (rules) first. A change that conflicts with a principle in section 2 will not be merged; open an issue to discuss it instead.
 - Use the terms defined in [CONTEXT.md](CONTEXT.md).
 - Everything in the repository is written in English: code, comments, documentation and commit messages ([Conventional Commits](https://www.conventionalcommits.org/)).
-- New code comes with tests. Before opening a pull request, run `pnpm test` and `forge test` (inside `contracts/`).
+- New code comes with tests. Before opening a pull request, run `pnpm test` and `cargo test`.
 - Never commit secrets or private keys. Sample environment variables go in `.env.example`.
 - Testnet only: do not add mainnet deployment configuration.

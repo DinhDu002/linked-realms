@@ -1,0 +1,120 @@
+# The public world: the Hub, the relay and the Shell behind Caddy, on one server
+# (docs/runbooks/public-world.md). Land owners run their Map servers on their own machines
+# (docs/self-hosting.md). Test network only (P7).
+#
+#   cp deploy/.env.example deploy/.env   # then fill it in
+#   docker compose -f deploy/compose.public.yaml up -d --build
+name: linked-realms-public
+
+x-node: &node
+  build: ..
+  image: linked-realms-node:public
+  restart: unless-stopped
+
+services:
+  postgres:
+    image: postgres:18.6-alpine3.24
+    restart: unless-stopped
+    environment:
+      POSTGRES_USER: linked_realms
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set it in deploy/.env}
+      POSTGRES_DB: linked_realms
+    volumes:
+      - postgres-data:/var/lib/postgresql
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U linked_realms -d linked_realms"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  hub-api:
+    <<: *node
+    command: ["node", "packages/hub-api/src/main.ts"]
+    environment:
+      DATABASE_URL: postgres://linked_realms:${POSTGRES_PASSWORD}@postgres:5432/linked_realms
+      HUB_DOMAIN: ${HUB_DOMAIN:?set it in deploy/.env}
+      HUB_TICKET_KEY: ${HUB_TICKET_KEY:?set it in deploy/.env}
+      HUB_SESSION_SECRET: ${HUB_SESSION_SECRET:?set it in deploy/.env}
+      HUB_ADMINS: ${HUB_ADMINS:-}
+      HUB_ALLOWED_ORIGINS: https://${SHELL_DOMAIN:?set it in deploy/.env}
+      # Caddy's address below: the Hub counts per-network limits by the X-Forwarded-For it writes.
+      HUB_TRUSTED_PROXIES: 172.30.0.10
+      RELAY_INTERNAL_URL: http://relay:8080
+      LAND_BASE_DOMAIN: ${LAND_BASE_DOMAIN:?set it in deploy/.env}
+      LAND_URL_SCHEME: https
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  relay:
+    <<: *node
+    command: ["node", "packages/relay/src/main.ts"]
+    environment:
+      HUB_URL: http://hub-api:8787
+      RELAY_HOST: ${RELAY_HOST:?set it in deploy/.env}
+      LAND_BASE_DOMAIN: ${LAND_BASE_DOMAIN}
+      SHELL_ORIGINS: https://${SHELL_DOMAIN}
+    depends_on:
+      hub-api:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8080/health"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  shell:
+    build:
+      context: ..
+      target: shell
+      args:
+        VITE_HUB_URL: https://${HUB_DOMAIN}
+    image: linked-realms-shell:public
+    restart: unless-stopped
+
+  caddy:
+    # Caddy with the DNS provider module the wildcard certificate needs (Caddyfile).
+    build:
+      dockerfile_inline: |
+        FROM caddy:2.11.7-builder-alpine AS builder
+        RUN xcaddy build v2.11.7 --with github.com/caddy-dns/cloudflare@v0.2.4
+        FROM caddy:2.11.7-alpine
+        COPY --from=builder /usr/bin/caddy /usr/bin/caddy
+    image: linked-realms-caddy:public
+    restart: unless-stopped
+    environment:
+      ACME_EMAIL: ${ACME_EMAIL:?set it in deploy/.env}
+      SHELL_DOMAIN: ${SHELL_DOMAIN}
+      HUB_DOMAIN: ${HUB_DOMAIN}
+      RELAY_HOST: ${RELAY_HOST}
+      LAND_BASE_DOMAIN: ${LAND_BASE_DOMAIN}
+      CLOUDFLARE_API_TOKEN: ${CLOUDFLARE_API_TOKEN:?set it in deploy/.env}
+    ports:
+      - "80:80"
+      - "443:443"
+      - "443:443/udp"
+    volumes:
+      - ./Caddyfile:/etc/caddy/Caddyfile:ro
+      - caddy-data:/data
+      - caddy-config:/config
+    networks:
+      default:
+        ipv4_address: 172.30.0.10
+
+networks:
+  default:
+    # Fixed, so HUB_TRUSTED_PROXIES can name Caddy. If it collides with a network on the server,
+    # change the subnet, Caddy's address and HUB_TRUSTED_PROXIES together.
+    ipam:
+      config:
+        - subnet: 172.30.0.0/24
+
+volumes:
+  postgres-data:
+  caddy-data:
+  caddy-config:

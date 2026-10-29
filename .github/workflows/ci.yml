@@ -91,5 +91,6 @@ jobs:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Build only: publishing the image is the project owner's step (docs/self-hosting.md).
+      # Build only: publishing the images is the project owner's step (docs/self-hosting.md).
       - run: docker build -t linked-realms-node:ci .
+      - run: docker build --target shell -t linked-realms-shell:ci .

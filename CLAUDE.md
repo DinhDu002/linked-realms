@@ -26,9 +26,9 @@ Summary; details in `PLAN.md` section 2.
 ## Conventions
 
 - All repository content is in English: code, comments, documentation, ADRs and commit messages.
-- pnpm + Turborepo, TypeScript strict, Vitest. The chain is a Cargo workspace in `crates/` (Rust pinned in `rust-toolchain.toml`), formatted with `cargo fmt` and linted with `cargo clippy`. `contracts/` (Foundry) is the old EVM design and is deleted in step 2B.
+- pnpm + Turborepo, TypeScript strict, Vitest. The chain is a Cargo workspace in `crates/` (Rust pinned in `rust-toolchain.toml`), formatted with `cargo fmt` and linted with `cargo clippy`. `packages/core` is the WebAssembly build of `crates/core` (`wasm-bindgen`), built by Turbo before any `typecheck` or `test` that needs it.
 - Docker: `compose.yaml` file, `docker compose` command, PostgreSQL `-alpine` images, every image pinned to a version.
-- New code must have tests. Run `pnpm test` and `cargo test` before reporting that work is done (`forge test` while `contracts/` exists).
+- New code must have tests. Run `pnpm test` and `cargo test` before reporting that work is done.
 - Do not commit secrets; put sample environment variables in `.env.example`.
 - Do not merge into `main` yourself, do not push to the remote, and do not deploy unless asked.
 - New architecture decisions: write an ADR in `docs/decisions/`.
@@ -36,13 +36,12 @@ Summary; details in `PLAN.md` section 2.
 
 ## Common commands
 
-Node.js 26 (`.nvmrc`), pnpm 11.3, Rust per `rust-toolchain.toml` (from step 2B), Foundry 1.8.6 (until step 2B).
+Node.js 26 (`.nvmrc`), pnpm 11.3, Rust per `rust-toolchain.toml`, `wasm-bindgen-cli` 0.2.129.
 
 ```bash
 pnpm install
 pnpm format:check && pnpm lint && pnpm typecheck && pnpm test
 cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
-cd contracts && forge fmt --check && forge test
-cd contracts && uvx --from slither-analyzer==0.11.6 slither .
+pnpm --filter @linked-realms/core build   # the WebAssembly build alone
 docker compose up -d
 ```
