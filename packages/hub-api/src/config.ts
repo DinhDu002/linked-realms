@@ -7,6 +7,8 @@ export interface Config {
   port: number;
   databaseUrl: string;
   relayInternalUrl: string;
+  /** The relay as Map servers dial it, published by GET /keys; null when this world has none. */
+  relayPublicUrl: string | null;
   /** The `Hub:` line of every statement: this Hub's host. */
   hubDomain: string;
   /** Seed of the key that signs Travel tickets: it grants entry only and holds no assets. */
@@ -54,6 +56,26 @@ function url(env: NodeJS.ProcessEnv, name: string, fallback: string): string {
   return value.replace(/\/+$/, "");
 }
 
+function wsUrl(env: NodeJS.ProcessEnv, name: string): string | null {
+  const value = env[name];
+  if (!value) return null;
+  let url: URL;
+  try {
+    url = new URL(value);
+  } catch {
+    throw new Error(`${name} is not a valid URL`);
+  }
+  // as the relay agent requires (parseRelayUrl in @linked-realms/relay/agent)
+  if (
+    (url.protocol !== "ws:" && url.protocol !== "wss:") ||
+    url.pathname.replace(/\/+$/, "") !== "" ||
+    url.search ||
+    url.hash
+  )
+    throw new Error(`${name} must be a ws:// or wss:// URL with no path`);
+  return value.replace(/\/+$/, "");
+}
+
 function host(env: NodeJS.ProcessEnv, name: string, fallback: string) {
   const value = env[name] || fallback;
   if (!isHost(value))
@@ -90,6 +112,7 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     port: integer(env, "PORT", 8787, 1, 65535),
     databaseUrl: required(env, "DATABASE_URL"),
     relayInternalUrl: url(env, "RELAY_INTERNAL_URL", "http://127.0.0.1:8080"),
+    relayPublicUrl: wsUrl(env, "RELAY_PUBLIC_URL"),
     hubDomain: host(env, "HUB_DOMAIN", "localhost:8787"),
     ticketSeed: Uint8Array.from(Buffer.from(ticketKey, "hex")),
     sessionSecret,

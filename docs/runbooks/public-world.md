@@ -36,17 +36,17 @@ chmod 600 deploy/.env
 Fill in `deploy/.env`: the four names, `ACME_EMAIL`, `CLOUDFLARE_API_TOKEN`, and three secrets made with `openssl rand -hex 32`:
 
 - `POSTGRES_PASSWORD`: the Hub's database.
-- `HUB_TICKET_KEY`: the seed of the key that signs Travel tickets. It lets a Character into a Land and holds no assets. Every Map server trusts its address (`HUB_TICKET_SIGNER`), so keep a copy: a new key means every Land owner changes that setting.
+- `HUB_TICKET_KEY`: the seed of the key that signs Travel tickets. It lets a Character into a Land and holds no assets. Every Map server trusts its address, which it reads from `GET /keys` at start, so keep a copy: a new key means every Land owner restarts their Map server, and those who pinned `HUB_TICKET_SIGNER` change it.
 - `HUB_SESSION_SECRET`: signs the Hub's session tokens. Changing it only ends every session, and the Shell signs in again by itself.
 
-Leave `HUB_ADMINS` empty for now.
+Leave `HUB_ADMINS` empty for now. `LAND_IMAGE` is the Map server image the Shell's "Your Land" command runs; leave it unset for the project's image (`.github/workflows/image.yml`).
 
 ## 4. Start
 
 ```bash
 docker compose -f deploy/compose.public.yaml up -d --build
 docker compose -f deploy/compose.public.yaml ps   # hub-api and relay become healthy
-curl -s https://hub.example.org/keys             # the ticket signer to publish
+curl -s https://hub.example.org/keys             # the ticket signer, and relayUrl wss://relay.example.org
 curl -s https://relay.example.org/health         # ok
 ```
 

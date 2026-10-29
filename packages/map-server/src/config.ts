@@ -1,5 +1,6 @@
 import { fileURLToPath } from "node:url";
 import { isAddress } from "@linked-realms/core";
+import { parseRelayUrl } from "@linked-realms/relay/agent";
 import { isHost } from "@linked-realms/shared/identity";
 
 export interface Config {
@@ -8,13 +9,13 @@ export interface Config {
   hubUrl: string;
   /** The Hub's host as statements name it (it can differ from `hubUrl` inside compose). */
   hubDomain: string;
-  /** The address of the Hub's ticket key: a ticket's publicKey must hash to it. */
-  hubTicketSigner: string;
+  /** The address of the Hub's ticket key: a ticket's publicKey must hash to it. Unset: read from GET /keys. */
+  hubTicketSigner: string | undefined;
   mapServerKeyFile: string;
   port: number;
   /** Interface to listen on: loopback by default, because the relay agent connects locally. */
   host: string;
-  /** Without it the Land is reachable only directly (development). */
+  /** Unset: the relay the Hub publishes at GET /keys, if any. Without a relay the Land is reachable only directly. */
   relayUrl: string | undefined;
   mapFile: string;
   /** The built Land UI (`packages/client/dist`). */
@@ -49,10 +50,28 @@ function integer(
   return value;
 }
 
+/** What the relay agent accepts (`parseRelayUrl`), checked at start instead of after registration. */
+export function isRelayUrl(value: string): boolean {
+  try {
+    parseRelayUrl(value);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 function address(env: NodeJS.ProcessEnv, name: string): string {
-  const value = env[name];
+  const value = optionalAddress(env, name);
   if (!value) throw new Error(`${name} is required`);
-  if (!isAddress(value))
+  return value;
+}
+
+function optionalAddress(
+  env: NodeJS.ProcessEnv,
+  name: string,
+): string | undefined {
+  const value = env[name] || undefined;
+  if (value !== undefined && !isAddress(value))
     throw new Error(`${name} is not an address: "${value}"`);
   return value;
 }
@@ -72,13 +91,15 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   if (!isHost(hubDomain))
     throw new Error(`HUB_DOMAIN is not a host: "${hubDomain}"`);
   const relayUrl = env.RELAY_URL || undefined;
-  if (relayUrl !== undefined && !/^wss?:\/\//.test(relayUrl))
-    throw new Error(`RELAY_URL must be a ws:// or wss:// URL: "${relayUrl}"`);
+  if (relayUrl !== undefined && !isRelayUrl(relayUrl))
+    throw new Error(
+      `RELAY_URL must be a ws:// or wss:// URL with no path: "${relayUrl}"`,
+    );
   return {
     landOwner: address(env, "LAND_OWNER"),
     hubUrl,
     hubDomain,
-    hubTicketSigner: address(env, "HUB_TICKET_SIGNER"),
+    hubTicketSigner: optionalAddress(env, "HUB_TICKET_SIGNER"),
     mapServerKeyFile: env.MAP_SERVER_KEY_FILE || DEFAULT_KEY_FILE,
     port: integer(env, "PORT", 2567, 1, 65535),
     host: env.HOST || "127.0.0.1",

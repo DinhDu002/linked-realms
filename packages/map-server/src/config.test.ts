@@ -53,13 +53,15 @@ describe("loadConfig", () => {
     });
   });
 
-  it("requires LAND_OWNER and HUB_TICKET_SIGNER, as addresses", () => {
+  it("requires LAND_OWNER only, and checks both addresses", () => {
     expect(() => loadConfig({ HUB_TICKET_SIGNER: SIGNER })).toThrow(
       /LAND_OWNER is required/,
     );
-    expect(() => loadConfig({ LAND_OWNER: OWNER })).toThrow(
-      /HUB_TICKET_SIGNER is required/,
-    );
+    // the ticket signer and the relay then come from the Hub's GET /keys
+    expect(loadConfig({ LAND_OWNER: OWNER })).toMatchObject({
+      hubTicketSigner: undefined,
+      relayUrl: undefined,
+    });
     expect(() => loadConfig({ ...base, LAND_OWNER: "0xabc" })).toThrow(
       /LAND_OWNER is not an address/,
     );
@@ -78,16 +80,32 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ ...base, HUB_DOMAIN: "Hub Example" })).toThrow(
       /HUB_DOMAIN is not a host/,
     );
-    expect(() => loadConfig({ ...base, RELAY_URL: "http://relay" })).toThrow(
-      /ws:\/\/ or wss:\/\//,
-    );
+    for (const RELAY_URL of [
+      "http://relay",
+      "wss://relay/host",
+      "wss://relay?a",
+    ])
+      expect(() => loadConfig({ ...base, RELAY_URL })).toThrow(
+        /RELAY_URL must be a ws:\/\/ or wss:\/\/ URL with no path/,
+      );
     for (const PORT of ["0", "65536", "1.5", "abc"])
       expect(() => loadConfig({ ...base, PORT })).toThrow(/PORT must be/);
   });
 
   it("treats empty variables as unset", () => {
     expect(
-      loadConfig({ ...base, HUB_URL: "", RELAY_URL: "", PORT: "" }),
-    ).toMatchObject({ hubUrl: "http://localhost:8787", port: 2567 });
+      loadConfig({
+        ...base,
+        HUB_URL: "",
+        HUB_TICKET_SIGNER: "",
+        RELAY_URL: "",
+        PORT: "",
+      }),
+    ).toMatchObject({
+      hubUrl: "http://localhost:8787",
+      hubTicketSigner: undefined,
+      relayUrl: undefined,
+      port: 2567,
+    });
   });
 });

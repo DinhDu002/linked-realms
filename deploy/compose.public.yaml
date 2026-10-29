@@ -40,6 +40,8 @@ services:
       # Caddy's address below: the Hub counts per-network limits by the X-Forwarded-For it writes.
       HUB_TRUSTED_PROXIES: 172.30.0.10
       RELAY_INTERNAL_URL: http://relay:8080
+      # Published at GET /keys: Land owners' Map servers dial the relay here.
+      RELAY_PUBLIC_URL: wss://${RELAY_HOST:?set it in deploy/.env}
       LAND_BASE_DOMAIN: ${LAND_BASE_DOMAIN:?set it in deploy/.env}
       LAND_URL_SCHEME: https
     depends_on:
@@ -74,6 +76,8 @@ services:
       target: shell
       args:
         VITE_HUB_URL: https://${HUB_DOMAIN}
+        # The Map server image the Shell's "Your Land" command runs.
+        VITE_LAND_IMAGE: ${LAND_IMAGE:-ghcr.io/dinhdu002/linked-realms-node:latest}
     image: linked-realms-shell:public
     restart: unless-stopped
 

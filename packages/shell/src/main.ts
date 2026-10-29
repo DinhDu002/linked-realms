@@ -2,7 +2,7 @@ import { ready } from "@linked-realms/core";
 import { shortAddress, type LandInfo } from "@linked-realms/shared";
 import { isName, signStatement } from "@linked-realms/shared/identity";
 import { createAccount } from "./account.ts";
-import { hubHost, hubUrl } from "./config.ts";
+import { hubHost, hubUrl, landCommand, landImage } from "./config.ts";
 import { el, make } from "./dom.ts";
 import { createFrameHost, type FrameHost } from "./frame.ts";
 import { prepareHandoff } from "./handoff.ts";
@@ -258,19 +258,20 @@ async function main() {
   const address = record.address;
   el("character-address").textContent = address;
   el("character-short").textContent = shortAddress(address);
-  el("owner-address").textContent = address;
+  const command = landCommand(address, hubUrl, landImage);
+  el("land-command").textContent = command;
 
-  function copyButton(id: string) {
+  function copyButton(id: string, text: string) {
     const button = el(id);
     const label = button.textContent;
     button.addEventListener("click", async () => {
-      await navigator.clipboard.writeText(address);
+      await navigator.clipboard.writeText(text);
       button.textContent = "Copied";
       setTimeout(() => (button.textContent = label), 1500);
     });
   }
-  copyButton("copy-address");
-  copyButton("copy-owner-address");
+  copyButton("copy-address", address);
+  copyButton("copy-land-command", command);
 
   el("name-form").addEventListener("submit", async (event) => {
     event.preventDefault();
@@ -410,7 +411,7 @@ async function main() {
         list.append(
           make(
             "li",
-            "No Map server is waiting. Start one with LAND_OWNER set to your address.",
+            "No Map server is waiting. Run the command above; its Map server appears here once it has started.",
           ),
         );
       for (const offer of offers.mapServers) {

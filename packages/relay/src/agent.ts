@@ -50,7 +50,8 @@ interface LocalStream {
   queued: number;
 }
 
-function parseRelayUrl(relayUrl: string): URL {
+/** The relay's base URL: ws:// or wss://, with no path, query or fragment. Throws otherwise. */
+export function parseRelayUrl(relayUrl: string): URL {
   const url = new URL(relayUrl);
   if (
     (url.protocol !== "ws:" && url.protocol !== "wss:") ||

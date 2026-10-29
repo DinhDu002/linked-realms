@@ -2,9 +2,11 @@
 # - the default target: hub-api, the relay and the Map server. Its default command is a self-hosted
 #   Map server (docs/self-hosting.md); compose.yaml names the command for the other services.
 # - `shell` (docker build --target shell): the Shell's static pages behind Caddy with its headers.
-#   The Hub's URL is fixed when it is built: --build-arg VITE_HUB_URL=https://hub.example.org.
+#   The Hub's URL is fixed when it is built: --build-arg VITE_HUB_URL=https://hub.example.org, and
+#   so is the Map server image its "Your Land" command runs: --build-arg VITE_LAND_IMAGE=<image>.
 # Node 26 runs the services' TypeScript directly; only the WebAssembly core and the two web pages
-# are built.
+# are built, on the build machine's platform, so a multi-platform build (image.yml) emulates only
+# the last stage.
 
 # wasm-bindgen-cli, the version in crates/core/Cargo.toml, for the build machine's architecture.
 FROM scratch AS wasm-bindgen-amd64
@@ -15,10 +17,10 @@ FROM scratch AS wasm-bindgen-arm64
 ADD --checksum=sha256:1797c349a0f45d30946e8986b184135e12839ab576c9a04203e85febfc5dcb35 \
     https://github.com/wasm-bindgen/wasm-bindgen/releases/download/0.2.129/wasm-bindgen-0.2.129-aarch64-unknown-linux-gnu.tar.gz \
     /wasm-bindgen.tar.gz
-FROM wasm-bindgen-${TARGETARCH} AS wasm-bindgen
+FROM wasm-bindgen-${BUILDARCH} AS wasm-bindgen
 
 # packages/core/pkg: the WebAssembly build of crates/core (ADR 0009), as packages/core's `build`.
-FROM rust:1.99.1-slim-trixie AS wasm
+FROM --platform=$BUILDPLATFORM rust:1.99.1-slim-trixie AS wasm
 COPY --from=wasm-bindgen /wasm-bindgen.tar.gz /tmp/
 RUN tar -xzf /tmp/wasm-bindgen.tar.gz --strip-components=1 -C /usr/local/bin --wildcards '*/wasm-bindgen'
 WORKDIR /src
@@ -28,13 +30,14 @@ RUN cargo build --locked -p linked-realms-core --features wasm --target wasm32-u
  && wasm-bindgen --target web --out-dir /pkg target/wasm32-unknown-unknown/wasm/linked_realms_core.wasm
 
 # The Land UI (packages/client) and the Shell.
-FROM node:26.12.1-alpine3.24 AS build
+FROM --platform=$BUILDPLATFORM node:26.12.1-alpine3.24 AS build
 RUN npm install -g pnpm@11.3.0
 WORKDIR /app
 COPY . .
 COPY --from=wasm /pkg packages/core/pkg
 RUN pnpm install --frozen-lockfile
 ARG VITE_HUB_URL=http://localhost:8787
+ARG VITE_LAND_IMAGE
 RUN pnpm --filter @linked-realms/client build \
  && pnpm --filter @linked-realms/shell build \
  && node packages/shell/scripts/caddy-headers.ts > packages/shell/headers.caddy

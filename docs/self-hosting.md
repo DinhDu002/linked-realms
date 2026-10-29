@@ -1,47 +1,23 @@
 # Hosting your Land
 
-Your Land is a Map server running on your machine. It links out to the world's relay, so you do not open any port. This guide uses Docker; it takes one command once the image is built.
+Your Land is a Map server running on your machine. It links out to the world's relay, so you do not open any port. It takes one command, which the Shell writes for you.
 
 Test network only (P7). There is no Gold yet: the chain, the Node and the Mine arrive in step 2C.
 
 ## What you need
 
-- Docker (Docker Desktop on macOS and Windows, Docker Engine on Linux), on a 64-bit machine that can stay on and whose clock is right: the Hub refuses statements more than 5 minutes off.
-- A Character, made in the world's Shell. The Shell shows its address (`tlr1…`) under "Character" and again under "Your Land".
-- The world's settings, published by whoever runs it: the Hub's URL and the relay's URL. The Hub publishes its ticket signer itself:
+- Docker (Docker Desktop on macOS and Windows, Docker Engine on Linux), running, on a 64-bit machine (x86-64 or ARM) that can stay on and whose clock is right: the Hub refuses statements more than 5 minutes off.
+- A Character, made in the world's Shell (the project's test world is <https://play.linkedrealms.com>).
 
-  ```bash
-  curl -s https://hub.example.org/keys   # {"ticket":{"address":"tlr1…","publicKey":"…"}}
-  ```
+## 1. Run the command from the Shell
 
-## 1. Build the image
-
-Until the project publishes the image, build it from the public repository; no clone is needed. The first build compiles the Rust core to WebAssembly and takes a few minutes.
+In the Shell, unlock your Character and find "Your Land". It shows one command with your Character's address and the world's Hub in it. Choose "Copy command", paste it into a terminal (Terminal on macOS and Linux, PowerShell on Windows) and run it. It looks like this:
 
 ```bash
-docker build -t linked-realms-node https://github.com/DinhDu002/linked-realms.git#main
+docker run -d --name linked-realms-land --restart unless-stopped -v linked-realms-land:/data -e LAND_OWNER=tlr1… -e HUB_URL=https://hub.example.org ghcr.io/dinhdu002/linked-realms-node:latest
 ```
 
-## 2. Write `land.env`
-
-```bash
-# Your Character's address, from the Shell
-LAND_OWNER=tlr1…
-# From the world's published settings
-HUB_URL=https://hub.example.org
-RELAY_URL=wss://relay.example.org
-# ticket.address from GET <HUB_URL>/keys
-HUB_TICKET_SIGNER=tlr1…
-```
-
-Nothing in this file is secret. The Map server key is created inside the container on first start and never leaves the `/data` volume.
-
-## 3. Start your Land
-
-```bash
-docker run -d --name linked-realms-land --restart unless-stopped \
-  --env-file land.env -v linked-realms-land:/data linked-realms-node
-```
+The first run downloads the image, a few hundred megabytes. The Map server then reads the Hub's ticket signer and the relay's URL from the Hub (`GET <HUB_URL>/keys`), so you set nothing else. Nothing in the command is secret. The Map server key is created inside the container on first start and never leaves the `linked-realms-land` volume.
 
 Read the start-up log:
 
@@ -51,14 +27,14 @@ docker logs linked-realms-land
 
 ```
 Map server listening on http://127.0.0.1:2567
-Accepting Travel tickets signed by tlr1…
+Accepting Travel tickets signed by tlr1… (from the Hub)
 
 Map server key created: tlr1qqqa3mt0…
 Next, the Land owner (tlr1…) signs a Delegation for this Map server key under "Your Land" in the Shell.
 Waiting for the Hub to create the Land...
 ```
 
-## 4. Register your Map server
+## 2. Register your Map server
 
 The Map server key is your Map server's identity. It holds no assets and is not your Character's key (P2). You tell the Hub that this key may serve your Land:
 
@@ -68,11 +44,11 @@ The Map server key is your Map server's identity. It holds no assets and is not 
 
 A Character has one Land. Register only a key your own server printed: whoever runs that key serves your Land.
 
-## 5. Play
+## 3. Play
 
 Your Land is in the Directory. Choose "Enter" to walk around it; walking onto a Gate at its edge takes your Character into the neighbouring Land, if there is one.
 
-## 6. Your own domain (optional)
+## 4. Your own domain (optional)
 
 Your Land is always at `<landId>.<the world's Land domain>`. It can also be served at a domain you own, such as `play.example.com`:
 
@@ -89,7 +65,7 @@ The Directory then shows your Land at `https://play.example.com`. Its certificat
 | Watch the log | `docker logs -f linked-realms-land` |
 | Stop your Land (it shows offline within about 15 seconds) | `docker stop linked-realms-land` |
 | Start it again | `docker start linked-realms-land` |
-| Update | Build the image again (step 1), then `docker rm -f linked-realms-land` and run step 3 again. The volume keeps the Map server key, so you do not register again. |
+| Update | `docker pull ghcr.io/dinhdu002/linked-realms-node:latest` (the image in your command), then `docker rm -f linked-realms-land` and run the command again. The volume keeps the Map server key, so you do not register again. |
 | Remove everything | `docker rm -f linked-realms-land && docker volume rm linked-realms-land`. This deletes the Map server key. The Land stays yours: a new Map server shows up under "Waiting Map servers", and "Use this one" moves your Land to it. |
 
 **Moving to another machine.** Either copy the volume and run the same command, or start fresh and choose "Use this one" for the new key in the Shell. The newest Delegation wins; the relay cuts the old machine off within 30 seconds.
@@ -100,14 +76,25 @@ The Directory then shows your Land at `https://play.example.com`. Its certificat
 
 | Log line | Meaning and fix |
 |---|---|
+| `docker: … Conflict. The container name "/linked-realms-land" is already in use` | Your Land already runs on this machine: `docker start linked-realms-land` starts it if it is stopped. To run the command again, `docker rm -f linked-realms-land` first; the volume keeps the Map server key. |
+| `Unable to find image …` then `manifest unknown` or `denied` | The image in the command is not published, or not public yet. Tell the world's operator. |
+| `Cannot connect to the Docker daemon` (`… docker_engine …` on Windows) | Docker is not running: start Docker Desktop, wait until it says it is running, and run the command again. |
+| `could not read GET /keys from the Hub at … (…); retrying in … s` | The Hub cannot be reached: check `HUB_URL` in the command, or wait for the Hub to come back. |
 | `could not register with the Hub (…); retrying in … s` | The Hub cannot be reached, or refused the statement: check `HUB_URL` and your clock. |
 | `Land … is owned by …, not by LAND_OWNER …: not serving it` | This key serves another Character's Land. Set `LAND_OWNER` to your own address, or start with a new volume. |
-| `relay link closed (4401 …)` | The relay refused the link: `RELAY_URL` is not the world's relay, your Land now uses another Map server key, or the Land was hidden after an abuse report. |
+| `relay link closed (4401 …)` | The relay refused the link: a `RELAY_URL` you set is not the world's relay, your Land now uses another Map server key, or the Land was hidden after an abuse report. |
 | `relay link closed (4403 Map server key changed or Land hidden)` | You chose another Map server key for this Land, or it was hidden. |
 | `relay link closed (4409 replaced by a newer link)` | Another machine serves the same Land with the same key. Stop one of them. |
 | `relay link closed (1013 …)` | The Hub is down or the relay is full; your server keeps retrying. |
-| `/data/map-server-key is readable by others` or `must hold a 32-byte hex seed` | The key file was changed by hand. Restore it, or remove the volume to start with a new key (step 4 again). |
-| `LAND_OWNER …`, `HUB_TICKET_SIGNER …`, `RELAY_URL …` errors | Fix that line in `land.env`, then `docker rm -f linked-realms-land` and run step 3 again. |
+| `/data/map-server-key is readable by others` or `must hold a 32-byte hex seed` | The key file was changed by hand. Restore it, or remove the volume to start with a new key (step 2 again). |
+| `LAND_OWNER …`, `HUB_URL …`, `HUB_TICKET_SIGNER …`, `RELAY_URL …` errors | Copy the command from the Shell again, then `docker rm -f linked-realms-land` and run it. |
+
+## Other settings
+
+The command sets only `LAND_OWNER` and `HUB_URL`. Add `-e NAME=value` before the image for any other setting of the Map server (`packages/map-server/README.md`), for example:
+
+- `-e HUB_TICKET_SIGNER=tlr1…` and `-e RELAY_URL=wss://…` pin the ticket signer and the relay instead of reading them from the Hub.
+- To run your own build of the image, `docker build -t linked-realms-node https://github.com/DinhDu002/linked-realms.git#main` (no clone needed; it compiles the Rust core and takes a few minutes), then use `linked-realms-node` as the image in the command.
 
 ## What your machine does and does not do
 

@@ -72,6 +72,7 @@ beforeEach(async () => {
       allowedOrigins: ["https://shell.test"],
       landBaseDomain: "lands.test",
       landUrlScheme: "https",
+      relayPublicUrl: "wss://relay.test",
     },
     db,
     async online() {
@@ -224,6 +225,7 @@ describe("config", () => {
     expect(c.hubDomain).toBe("localhost:8787");
     expect(c.landBaseDomain).toBe("localhost:8080");
     expect(c.landUrlScheme).toBe("http");
+    expect(c.relayPublicUrl).toBeNull();
     expect(c.ticketSeed).toEqual(new Uint8Array(32).fill(0xab));
   });
   it("rejects bad input with clear messages", () => {
@@ -239,6 +241,13 @@ describe("config", () => {
     bad({ LAND_URL_SCHEME: "ftp" }, /LAND_URL_SCHEME/);
     bad({ HUB_TRUSTED_PROXIES: "10.0.0.0/33" }, /HUB_TRUSTED_PROXIES/);
     bad({ RELAY_INTERNAL_URL: "not a url" }, /RELAY_INTERNAL_URL/);
+    bad({ RELAY_PUBLIC_URL: "https://relay.test" }, /RELAY_PUBLIC_URL/);
+    bad({ RELAY_PUBLIC_URL: "relay.test" }, /RELAY_PUBLIC_URL/);
+    bad({ RELAY_PUBLIC_URL: "wss://relay.test/host" }, /with no path/);
+  });
+  it("keeps the relay's public URL without a trailing slash", () => {
+    const c = loadConfig({ ...good, RELAY_PUBLIC_URL: "wss://relay.test/" });
+    expect(c.relayPublicUrl).toBe("wss://relay.test");
   });
   it("never echoes the ticket key", () => {
     const secret = "secret".repeat(10);
@@ -297,12 +306,13 @@ describe("health and errors", () => {
 });
 
 describe("GET /keys", () => {
-  it("publishes the Hub's ticket key", async () => {
+  it("publishes the Hub's ticket key and the relay Map servers dial", async () => {
     const r = await req("GET", "/keys");
     expect(r.json.ticket.address).toBe(hubKey.address);
     expect(Buffer.from(r.json.ticket.publicKey, "base64")).toEqual(
       Buffer.from(hubKey.publicKey),
     );
+    expect(r.json.relayUrl).toBe("wss://relay.test");
   });
 });
 
