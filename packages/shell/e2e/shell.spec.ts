@@ -733,6 +733,41 @@ test.describe("the Shell's own controls", () => {
     );
   });
 
+  test("goes full screen with the whole page and back", async ({ page }) => {
+    await openShell(page);
+    await expect(page.locator("#fullscreen-hint")).toBeHidden();
+    await enterLand(page, 1);
+    await page.getByRole("button", { name: "Full screen" }).click();
+    // The whole page, not the frame: the Shell's prompts stay in view.
+    await expect
+      .poll(() =>
+        page.evaluate(
+          () => document.fullscreenElement === document.documentElement,
+        ),
+      )
+      .toBe(true);
+    await page.getByRole("button", { name: "Exit full screen" }).click();
+    await expect
+      .poll(() => page.evaluate(() => document.fullscreenElement))
+      .toBeNull();
+    await expect(
+      page.getByRole("button", { name: "Full screen" }),
+    ).toBeVisible();
+  });
+
+  test("links the web app manifest for the Home Screen", async ({ page }) => {
+    await page.goto("/");
+    const href = await page
+      .locator('link[rel="manifest"]')
+      .getAttribute("href");
+    const response = await page.request.get(href!);
+    expect(response.ok()).toBe(true);
+    expect(await response.json()).toMatchObject({
+      start_url: "/",
+      display: "standalone",
+    });
+  });
+
   test("serves the Shell with the CSP and COOP headers", async ({ page }) => {
     const response = (await page.goto("/"))!;
     const headers = response.headers();
@@ -743,5 +778,25 @@ test.describe("the Shell's own controls", () => {
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("base-uri 'none'");
+  });
+});
+
+test.describe("on a touch screen without full screen", () => {
+  // `pointer: coarse` comes from Chromium's touch emulation; Firefox has no isMobile.
+  test.skip(({ browserName }) => browserName !== "chromium");
+  test.use({ hasTouch: true, isMobile: true });
+
+  test("hides the button and tells how to drop the bars", async ({ page }) => {
+    // As on an iPhone, where Safari has no full screen for pages.
+    await page.addInitScript(() =>
+      Object.defineProperty(Document.prototype, "fullscreenEnabled", {
+        get: () => false,
+      }),
+    );
+    await openShell(page);
+    await expect(page.locator("#fullscreen-hint")).toContainText(
+      "add the Shell to your Home Screen",
+    );
+    await expect(page.locator("#fullscreen")).toBeHidden();
   });
 });

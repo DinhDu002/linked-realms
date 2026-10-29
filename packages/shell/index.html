@@ -5,6 +5,8 @@
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
     <title>linked-realms Shell</title>
     <link rel="stylesheet" href="/src/shell.css" />
+    <!-- Add to Home Screen opens the Shell without the browser's bars (iPhone has no full screen). -->
+    <link rel="manifest" href="/manifest.json" />
   </head>
   <body>
     <header id="bar">
@@ -16,6 +18,7 @@
       <span id="status" role="status"></span>
       <button id="retry" type="button" hidden>Try again</button>
       <span class="spacer"></span>
+      <button id="fullscreen" type="button" hidden>Full screen</button>
       <button id="report" type="button" hidden>Report this Land</button>
       <button id="leave" type="button" hidden>Leave Land</button>
       <button id="lock" type="button" hidden>Lock</button>
@@ -40,6 +43,12 @@
       </section>
 
       <div id="view-home" hidden>
+        <p id="fullscreen-hint" hidden>
+          This browser has no full screen. To play without its bars, add the
+          Shell to your Home Screen (on iPhone: Share, then Add to Home Screen)
+          and open it from there. It keeps its own storage, so restore your
+          Character there with your 24 words.
+        </p>
         <section aria-labelledby="character-title">
           <h2 id="character-title">Character</h2>
           <p>

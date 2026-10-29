@@ -197,6 +197,26 @@ async function main() {
   el("lock").addEventListener("click", () => vault.lock());
   el("unlock-button").addEventListener("click", () => void ensureUnlocked());
   el("leave").addEventListener("click", leave);
+
+  // Full screen takes the whole Shell page, so its prompts stay in view over the frame (P6).
+  const fullscreen = el("fullscreen");
+  fullscreen.hidden = !document.fullscreenEnabled;
+  fullscreen.addEventListener("click", () => {
+    const change = document.fullscreenElement
+      ? document.exitFullscreen()
+      : document.documentElement.requestFullscreen();
+    change.catch((e) => notice(`Full screen failed: ${errorText(e)}`));
+  });
+  document.addEventListener("fullscreenchange", () => {
+    fullscreen.textContent = document.fullscreenElement
+      ? "Exit full screen"
+      : "Full screen";
+  });
+  // A touch screen without full screen (iPhone) can still drop the bars from the Home Screen.
+  el("fullscreen-hint").hidden =
+    document.fullscreenEnabled ||
+    !matchMedia("(pointer: coarse)").matches ||
+    matchMedia("(display-mode: standalone)").matches;
   vault.onChange(() => {
     render();
     if (vault.unlocked) {
