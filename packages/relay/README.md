@@ -33,7 +33,9 @@ Both hosts must be lowercase host names with an optional port; `SHELL_ORIGINS` e
 - `<landId>.<LAND_BASE_DOMAIN>` (any letter case; the id is decimal without leading zeros) is that Land.
   Every path is forwarded to its Map server, and a WebSocket upgrade on any path becomes a Player stream.
   A Land with no live link gets a short `503` HTML page that names nothing about it.
-- Every other `Host` gets the relay's own routes, and nothing else (`404`):
+- `RELAY_HOST`, and any host with a port, get the relay's own routes and nothing else (`404`). A port is
+  how the Hub and health checks reach the relay inside the operator's network (`relay:8080`); own
+  domains never have one, and the public front must send Land hosts without one (`deploy/Caddyfile`).
 
 | Path                | Purpose                                                                    |
 | ------------------- | -------------------------------------------------------------------------- |
@@ -42,8 +44,14 @@ Both hosts must be lowercase host names with an optional port; `SHELL_ORIGINS` e
 | `GET /stats`        | Bytes and messages per Land and per session (`In` = Player to Land)        |
 | `GET /health`       | `ok`                                                                       |
 
-`/stats` and `/online` are for operators and hub-api: do not expose them on the public listener.
-Own domains for Land owners (`GET /lands?domain=` on the Hub) are not served yet (step 2B item 10).
+`/stats` and `/online` are for operators and hub-api: do not expose them on the public listener. They
+also refuse (`404`) any request that carries `X-Forwarded-For` or `Forwarded`, so nothing a proxy in
+front of the relay forwards reaches them, whatever `Host` it sends.
+
+- Any other host is a Land owner's own domain if the Hub's `GET /lands?domain=<host>` names a Land:
+  it is served like `<landId>.<LAND_BASE_DOMAIN>`. Each answer, failures included, is kept for 30
+  seconds (at most 10,000 hosts). A host that names no Land gets a short `404` HTML page, and one the
+  Hub could not be asked about a `503`.
 
 ## Rules the relay enforces
 

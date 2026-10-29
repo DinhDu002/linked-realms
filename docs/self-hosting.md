@@ -72,6 +72,16 @@ A Character has one Land. Register only a key your own server printed: whoever r
 
 Your Land is in the Directory. Choose "Enter" to walk around it; walking onto a Gate at its edge takes your Character into the neighbouring Land, if there is one.
 
+## 6. Your own domain (optional)
+
+Your Land is always at `<landId>.<the world's Land domain>`. It can also be served at a domain you own, such as `play.example.com`:
+
+1. At your DNS provider, point the domain at the world's relay: a `CNAME` record to the name the world's operator publishes for own domains, or the addresses they publish for a domain that cannot have a `CNAME`.
+2. Add a `TXT` record named `_linked-realms.play.example.com` with the value `land=<your Land id>`. "Your Land" in the Shell shows that value.
+3. In the Shell, under "Your Land", enter the domain and choose "Save domain". The Hub reads the `TXT` record; if your DNS provider has not published it yet, the Hub names the record it is missing, so try again a few minutes later.
+
+The Directory then shows your Land at `https://play.example.com`. Its certificate is made on the first visit, once your Land has a cell, so that visit takes a few seconds longer. Keep the `TXT` record: the Hub reads it again once a day and removes the domain when the record no longer names your Land. "Remove domain" takes it off at once.
+
 ## Everyday tasks
 
 | Task | Command |

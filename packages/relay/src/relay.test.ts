@@ -51,17 +51,27 @@ async function freePort(): Promise<number> {
   return port;
 }
 
-/** A fake Hub: GET /lands/<id> answers from `lands` (id -> Map server key); a missing id is 404. */
+/**
+ * A fake Hub: GET /lands/<id> answers from `lands` (id -> Map server key), and
+ * GET /lands?domain= from `domains` (own domain -> id); anything missing is 404.
+ */
 async function startHub() {
   const lands = new Map<number, string>();
-  const state = { down: false };
+  const domains = new Map<string, number>();
+  const state = { down: false, domainLookups: [] as string[] };
   const server = createServer((req, res) => {
     if (state.down) {
       res.writeHead(500).end();
       return;
     }
-    const id = Number(/^\/lands\/(\d+)$/.exec(req.url ?? "")?.[1]);
-    const mapServerKey = lands.get(id);
+    const url = new URL(req.url ?? "/", "http://hub");
+    const domain = url.searchParams.get("domain");
+    if (domain !== null) state.domainLookups.push(domain);
+    const id =
+      domain === null
+        ? Number(/^\/lands\/(\d+)$/.exec(url.pathname)?.[1])
+        : domains.get(domain);
+    const mapServerKey = id === undefined ? undefined : lands.get(id);
     if (!mapServerKey) {
       res.writeHead(404).end();
       return;
@@ -74,15 +84,16 @@ async function startHub() {
         ownerName: "",
         x: 0,
         y: 0,
-        url: `http://${id}.${LAND_BASE}`,
+        url: `http://${domain ?? `${id}.${LAND_BASE}`}`,
         mapServerKey,
         online: true,
+        domain,
       }),
     );
   });
   const port = await listen(server);
   cleanups.push(closeServer(server));
-  return { url: `http://127.0.0.1:${port}`, lands, state };
+  return { url: `http://127.0.0.1:${port}`, lands, domains, state };
 }
 
 interface Seen {
@@ -403,15 +414,20 @@ describe("routing by Host", () => {
     expect(map.requests.map((r) => r.url)).toEqual(["/matchmake?x=1", "/y"]);
   });
 
-  it("gives every other host the relay's own routes only", async () => {
+  it("keeps its own routes to RELAY_HOST and to hosts with a port", async () => {
     const { map, relay } = await setup();
     expect((await http(relay.url, "/health")).body).toBe("ok");
     expect(await online(relay.url)).toEqual([1]);
     expect((await http(relay.url, "/matchmake")).status).toBe(404);
     expect((await http(relay.url, "/land/1/x")).status).toBe(404);
-    const other = { headers: { host: "other.example" } };
-    expect((await http(relay.url, "/x", other)).status).toBe(404);
-    expect((await http(relay.url, "/online", other)).status).toBe(200);
+    // How the Hub and health checks reach it inside the operator's network
+    const internal = { headers: { host: "relay:8080" } };
+    expect((await http(relay.url, "/online", internal)).status).toBe(200);
+    // Whatever Host a proxy in front of the relay ends up sending, it marks the request as public.
+    const proxied = { headers: { "x-forwarded-for": "203.0.113.9" } };
+    expect((await http(relay.url, "/online", proxied)).status).toBe(404);
+    expect((await http(relay.url, "/stats", proxied)).status).toBe(404);
+    expect((await http(relay.url, "/health", proxied)).body).toBe("ok");
     // Not shadowed by the Land: a Land host forwards /online, /stats and /health to the Land.
     for (const path of ["/online", "/stats", "/health"])
       expect((await land(relay, 1, path)).status).toBe(201);
@@ -472,6 +488,64 @@ describe("routing by Host", () => {
         await rejectedStatus(new WebSocket(`${relay.wsUrl}${path}`)),
         path,
       ).toBe(404);
+  });
+});
+
+describe("own domains", () => {
+  const PLAY = "play.example";
+
+  it("serve their Land, every path forwarded, looked up once per 30 seconds", async () => {
+    const { hub, map, relay } = await setup();
+    hub.domains.set(PLAY, 1);
+    for (const path of ["/x", "/stats", "/online"]) {
+      const reply = await http(relay.url, path, {
+        headers: { host: "Play.Example" },
+      });
+      expect(reply.status, path).toBe(201);
+      expectLandHeaders(reply);
+    }
+    expect(map.requests.map((r) => r.url)).toEqual(["/x", "/stats", "/online"]);
+    expect(hub.state.domainLookups).toEqual([PLAY]);
+  });
+
+  it("answer 404 for a host that is no Land's own domain, and 503 while the Hub is down", async () => {
+    const { hub, relay } = await setup({ domainCacheMs: 50 });
+    const other = { headers: { host: "other.example" } };
+    const unknown = await http(relay.url, "/online", other);
+    expect(unknown.status).toBe(404);
+    expect(unknown.headers["content-type"]).toContain("text/html");
+    expectLandHeaders(unknown);
+    // the answer is kept, so a second request does not ask again
+    expect((await http(relay.url, "/x", other)).status).toBe(404);
+    // a name under LAND_BASE_DOMAIN that is not a Land id is never asked about
+    const junk = { headers: { host: `www.${LAND_BASE}` } };
+    expect((await http(relay.url, "/x", junk)).status).toBe(404);
+    expect(hub.state.domainLookups).toEqual(["other.example"]);
+    hub.state.down = true;
+    await sleep(60);
+    expect((await http(relay.url, "/x", other)).status).toBe(503);
+    hub.state.down = false;
+    hub.domains.set("other.example", 1);
+    expect((await http(relay.url, "/x", other)).status).toBe(503);
+    await sleep(60);
+    expect((await http(relay.url, "/x", other)).status).toBe(201);
+  });
+
+  it("turn a WebSocket upgrade into a Player stream, and refuse one for an unknown host", async () => {
+    const { hub, map, relay } = await setup();
+    hub.domains.set(PLAY, 1);
+    const ws = new WebSocket(`${relay.wsUrl}/play`, {
+      headers: { host: PLAY },
+    });
+    await opened(ws);
+    ws.send("hi");
+    expect((await nextMessage(ws)).data.toString()).toBe("hi");
+    expect(map.wsUrls).toEqual(["/play"]);
+    ws.terminate();
+    const unknown = new WebSocket(`${relay.wsUrl}/play`, {
+      headers: { host: "other.example" },
+    });
+    expect(await rejectedStatus(unknown)).toBe(404);
   });
 });
 

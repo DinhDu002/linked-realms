@@ -13,6 +13,7 @@ const land = (landId: number, x: number, y: number, online = true) => ({
   url: `http://${landId}.localhost`,
   mapServerKey: "k",
   online,
+  domain: null,
 });
 const directory: LandDirectory = {
   lands: [land(1, 0, 0), land(2, 1, 0), land(3, 0, 1, false)],

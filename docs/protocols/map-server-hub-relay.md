@@ -105,9 +105,16 @@ Status: mandatory (ADR 0008). A Map server, in any language, uses these to regis
 ## Land URLs
 
 - **The default.** A Land is served at `<landId>.<LAND_BASE_DOMAIN>`, for example `https://7.lands.example`.
-- **Own domain.** A Land owner may also verify a domain of their own (`PUT /lands/<landId>/domain` with a DNS TXT record `_linked-realms.<domain>` = `land=<landId>`). The relay then serves the Land there too, and the Directory's `url` uses it.
+- **Own domain.** A Land owner may also serve their Land at a domain of their own:
+  1. They point the domain at the world's relay, as its operator publishes, and add a DNS TXT record `_linked-realms.<domain>` with the value `land=<landId>`.
+  2. They send `PUT /lands/<landId>/domain` with `{ "domain": "<domain>" }`, signed in as the Land's owner. The Hub stores the name trimmed, in lowercase ASCII (IDNA) and without its trailing dot, and refuses ports, wildcards, IP addresses and names without a dot (`400`). It then reads the TXT record: one of its values, its strings joined, must be `land=<landId>` (`409` otherwise, `503` when DNS does not answer).
+  3. A domain belongs to one Land. It moves to another Land only once its TXT record no longer names the first one.
+  4. The Hub reads the record again once a day. It drops the domain when the record no longer names the Land, and keeps it while DNS does not answer, asking again an hour later. `{ "domain": null }` removes it.
+  5. While a domain is set, the Land's `url` (in `GET /lands/<landId>` and the Directory) is `<scheme>://<domain>`, and `domain` holds it. The `<landId>.<LAND_BASE_DOMAIN>` host keeps working.
+  6. The relay serves a Land at any host that `GET /lands?domain=<host>` names. It keeps each answer, failures included, for 30 seconds, and answers a host that names no Land with a short `404` HTML page.
+  7. A certificate for an own domain is issued only while `GET /tls/allowed?domain=<domain>` answers `200`: the domain is set on a visible Land that has a cell.
 - **What the relay adds to every Land response:**
   - `Content-Security-Policy: frame-ancestors <Shell origins>`. Land UIs load only inside the Shells the relay's operator lists.
   - `X-Content-Type-Options: nosniff`.
 - **Errors.** While the Land is offline, its pages get a short HTML page with status `503`.
-- **Relay-only routes.** `/online`, `/stats` and `/health` exist only on the relay's own host, never on a Land's.
+- **Relay-only routes.** `/online`, `/stats` and `/health` exist only on the relay's own host (and on hosts with a port, which is how the Hub reaches it inside the operator's network), never on a Land's host or own domain. `/online` and `/stats` also refuse requests that came through a proxy (`X-Forwarded-For` or `Forwarded`).

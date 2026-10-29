@@ -1,3 +1,4 @@
+import { domainToASCII } from "node:url";
 import { Hono, type Context } from "hono";
 import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
@@ -48,6 +49,8 @@ export interface Deps {
   /** Milliseconds since the epoch. */
   now(): number;
   log(message: string): void;
+  /** DNS TXT lookup as `node:dns/promises` does it: chunks per record; errors carry a `code`. */
+  resolveTxt(name: string): Promise<string[][]>;
 }
 
 const SESSION_SECONDS = 3600;
@@ -66,7 +69,7 @@ const MAX_BODY_BYTES = 16 * 1024;
 const DAY_MS = 86_400_000;
 
 class HttpError extends Error {
-  status: 400 | 401 | 403 | 404 | 409 | 429;
+  status: 400 | 401 | 403 | 404 | 409 | 429 | 503;
   constructor(status: HttpError["status"], message: string) {
     super(message);
     this.status = status;
@@ -111,6 +114,43 @@ function statementOf<K extends StatementKind>(
   }
 }
 
+// Lowercase ASCII labels of 1 to 63 characters, no hyphen at either end, at least two labels.
+const HOST_NAME =
+  /^(?=.{1,253}$)(?:[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?\.)+[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/;
+
+/** A Land owner's own domain as stored: trimmed, without its trailing dot, in lowercase ASCII (IDNA). */
+function ownDomainOf(value: unknown): string {
+  const raw = typeof value === "string" ? value.trim().replace(/\.$/, "") : "";
+  // domainToASCII would keep a port or a wildcard out of the name rules below, so refuse them first
+  const domain = /[:*]/.test(raw) ? "" : domainToASCII(raw);
+  // a numeric last label is an IP address, not a name
+  if (!HOST_NAME.test(domain) || /\.\d+$/.test(domain))
+    throw new HttpError(
+      400,
+      "domain must be a host name such as play.example.com, without a port or wildcard",
+    );
+  return domain;
+}
+
+/** The Land ids that the TXT record `_linked-realms.<domain>` names; undefined when DNS does not answer. */
+export async function landsNamedBy(
+  resolveTxt: Deps["resolveTxt"],
+  domain: string,
+): Promise<Set<number> | undefined> {
+  try {
+    const records = await resolveTxt(`_linked-realms.${domain}`);
+    const ids = records.map(
+      (chunks) => /^land=([1-9]\d{0,15})$/.exec(chunks.join("").trim())?.[1],
+    );
+    return new Set(ids.filter((id) => id !== undefined).map(Number));
+  } catch (err) {
+    const code = (err as { code?: unknown }).code;
+    // no such name, or no TXT record at it: an answer that names no Land
+    if (code === "ENOTFOUND" || code === "ENODATA") return new Set();
+    return undefined;
+  }
+}
+
 /** A unique index refused the write: someone else holds that owner, key or cell. */
 async function unique<T>(write: () => Promise<T>, message: string) {
   try {
@@ -146,11 +186,12 @@ interface LandRow {
   owner: string;
   map_server_key: string;
   cell: number | null;
+  domain: string | null;
   name: string | null;
 }
 
 const LAND_COLUMNS =
-  "SELECT l.id, l.owner, l.map_server_key, l.cell, c.name FROM land l LEFT JOIN character c ON c.address = l.owner";
+  "SELECT l.id, l.owner, l.map_server_key, l.cell, l.domain, c.name FROM land l LEFT JOIN character c ON c.address = l.owner";
 
 export function createApp(deps: Deps) {
   const { config, db } = deps;
@@ -163,6 +204,7 @@ export function createApp(deps: Deps) {
   const landLimit = rateLimiter(10, 60_000);
   const ticketLimit = rateLimiter(30, 60_000);
   const reportLimit = rateLimiter(5, 3_600_000);
+  const domainLimit = rateLimiter(10, 60_000);
   const ticketKey = {
     address: deps.ticketKey.address,
     publicKey: toBase64(deps.ticketKey.publicKey),
@@ -206,9 +248,10 @@ export function createApp(deps: Deps) {
       ownerName: row.name ?? "",
       x: cell?.x ?? null,
       y: cell?.y ?? null,
-      url: `${config.landUrlScheme}://${landId}.${config.landBaseDomain}`,
+      url: `${config.landUrlScheme}://${row.domain ?? `${landId}.${config.landBaseDomain}`}`,
       mapServerKey: row.map_server_key,
       online: online.has(landId),
+      domain: row.domain,
     };
   }
 
@@ -507,17 +550,85 @@ export function createApp(deps: Deps) {
   });
 
   app.get("/lands", async (c) => {
-    const { owner, mapServerKey } = c.req.query();
-    if ((owner === undefined) === (mapServerKey === undefined))
-      throw new HttpError(400, "give exactly one of owner and mapServerKey");
-    const address = owner ?? mapServerKey ?? "";
-    if (!isAddress(address)) throw new HttpError(400, "invalid address");
-    const row = await landWhere(
-      owner === undefined ? "l.map_server_key = $1" : "l.owner = $1",
-      address,
-    );
+    const { owner, mapServerKey, domain } = c.req.query();
+    const given = [owner, mapServerKey, domain].filter((v) => v !== undefined);
+    if (given.length !== 1)
+      throw new HttpError(
+        400,
+        "give exactly one of owner, mapServerKey and domain",
+      );
+    let row: LandRow | undefined;
+    if (domain !== undefined)
+      row = await landWhere("l.domain = $1", ownDomainOf(domain));
+    else {
+      const address = given[0]!;
+      if (!isAddress(address)) throw new HttpError(400, "invalid address");
+      row = await landWhere(
+        owner === undefined ? "l.map_server_key = $1" : "l.owner = $1",
+        address,
+      );
+    }
     if (!row) throw new HttpError(404, "Land not found");
     return c.json(landInfo(row, await onlineLands()));
+  });
+
+  // --- Own domains (docs/protocols/map-server-hub-relay.md, Land URLs) ---
+
+  app.put("/lands/:landId/domain", session, async (c) => {
+    const address = c.get("address");
+    const landId = landIdOf(c.req.param("landId"));
+    const body = await jsonBody(c.req);
+    const domain = body.domain === null ? null : ownDomainOf(body.domain);
+    // counts the requests that may reach DNS, not the malformed ones
+    if (!domainLimit(address, deps.now()))
+      throw new HttpError(429, "too many domain changes");
+    const row = await landWhere("l.id = $1", landId);
+    if (!row) throw new HttpError(404, "Land not found");
+    if (row.owner !== address)
+      throw new HttpError(403, "only the Land's owner sets its domain");
+    if (domain === null) {
+      await db.query(
+        "UPDATE land SET domain = NULL, domain_checked_at = NULL, updated_at = $2 WHERE id = $1",
+        [landId, seconds()],
+      );
+      return c.json({ domain: null });
+    }
+    const named = await landsNamedBy(deps.resolveTxt, domain);
+    if (!named)
+      throw new HttpError(
+        503,
+        `DNS did not answer for _linked-realms.${domain}; try again`,
+      );
+    if (!named.has(landId))
+      throw new HttpError(
+        409,
+        `add the DNS TXT record _linked-realms.${domain} with the value land=${landId}, then try again`,
+      );
+    // A Land the record no longer names gives the domain up; one it still names keeps it.
+    await db.query(
+      `UPDATE land SET domain = NULL, domain_checked_at = NULL, updated_at = $3
+       WHERE domain = $1 AND NOT (id = ANY($2::bigint[]))`,
+      [domain, [...named], seconds()],
+    );
+    await unique(
+      () =>
+        db.query(
+          "UPDATE land SET domain = $2, domain_checked_at = $3, updated_at = $3 WHERE id = $1",
+          [landId, domain, seconds()],
+        ),
+      "another Land uses this domain",
+    );
+    return c.json({ domain });
+  });
+
+  // Caddy's on-demand TLS `ask` (deploy/Caddyfile): any answer but 2xx refuses the certificate.
+  app.get("/tls/allowed", async (c) => {
+    const row = await landWhere(
+      "l.domain = $1 AND l.cell IS NOT NULL",
+      ownDomainOf(c.req.query("domain")),
+    );
+    if (!row) throw new HttpError(404, "not the own domain of a Land");
+    return c.text("ok");
   });
 
   app.get("/directory", async (c) => {

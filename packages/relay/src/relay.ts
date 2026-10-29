@@ -46,6 +46,7 @@ export interface RelayOptions {
   maxClientsPerLand?: number;
   maxHosts?: number;
   /** Timings, overridable for tests. */
+  domainCacheMs?: number;
   pingIntervalMs?: number;
   recheckIntervalMs?: number;
   httpTimeoutMs?: number;
@@ -58,6 +59,8 @@ const HOST_BUFFER_LIMIT = 4 * 1024 * 1024;
 const HTTP_BODY_LIMIT = 64 * 1024;
 const HELLO_TIMEOUT_MS = 10_000;
 const HUB_TIMEOUT_MS = 5_000;
+// ponytail: the oldest own-domain answer goes first when full; an LRU if one relay serves more own domains
+const DOMAIN_CACHE_MAX = 10_000;
 /** Host links that have connected but not yet authenticated. */
 const MAX_UNAUTHENTICATED_HOSTS = 100;
 const MAX_PENDING_REQUESTS = 256;
@@ -186,6 +189,7 @@ function forwardedHeaders(req: IncomingMessage): HttpHeaders | undefined {
 export function createRelay(options: RelayOptions): Server {
   const hubUrl = options.hubUrl.replace(/\/+$/, "");
   const relayHost = options.relayHost ?? "localhost:8080";
+  const domainCacheMs = options.domainCacheMs ?? 30_000;
   const landSuffix = `.${options.landBaseDomain ?? "localhost:8080"}`;
   const maxClientsPerLand = options.maxClientsPerLand ?? 64;
   const maxHosts = options.maxHosts ?? 1000;
@@ -195,6 +199,11 @@ export function createRelay(options: RelayOptions): Server {
   const landHeaders = `Content-Security-Policy: ${frameAncestors}\r\nX-Content-Type-Options: nosniff\r\n`;
 
   const hosts = new Map<number, Host>();
+  /** Own domain -> its Land's id: null for no Land, undefined while the Hub could not be reached. */
+  const domains = new Map<
+    string,
+    { landId: Promise<number | null | undefined>; until: number }
+  >();
   const landCounters = new Map<number, Counters>();
   let unauthenticated = 0;
 
@@ -209,10 +218,12 @@ export function createRelay(options: RelayOptions): Server {
     maxPayload: options.playerMaxFrame ?? 16 * 1024,
   });
 
-  /** The Land the request's Host names: `<landId>.<landBaseDomain>`, decimal without leading zeros. */
-  function landOf(req: IncomingMessage): number | undefined {
-    const host = req.headers.host?.toLowerCase();
-    if (!host?.endsWith(landSuffix)) return undefined;
+  const hostOf = (req: IncomingMessage) =>
+    req.headers.host?.toLowerCase() ?? "";
+
+  /** The Land a host names: `<landId>.<landBaseDomain>`, decimal without leading zeros. */
+  function landOf(host: string): number | undefined {
+    if (!host.endsWith(landSuffix)) return undefined;
     const label = host.slice(0, -landSuffix.length);
     if (!LAND_ID.test(label)) return undefined;
     const id = Number(label);
@@ -231,23 +242,56 @@ export function createRelay(options: RelayOptions): Server {
     res.end(body);
   }
 
-  /** The Land from the Hub; null when unknown or hidden; undefined when the Hub cannot be reached. */
-  async function lookupLand(
-    landId: number,
-  ): Promise<LandInfo | null | undefined> {
+  /**
+   * The relay's own routes answer on RELAY_HOST, and on a host with a port, which is how the Hub
+   * and health checks reach it inside the operator's network. Own domains never have a port.
+   */
+  const isRelayHost = (host: string) =>
+    host === relayHost.toLowerCase() || host.includes(":");
+
+  /** A Land from the Hub; null when unknown or hidden; undefined when the Hub cannot be reached. */
+  async function hubLand(path: string): Promise<LandInfo | null | undefined> {
     try {
-      const res = await fetch(`${hubUrl}/lands/${landId}`, {
+      const res = await fetch(`${hubUrl}${path}`, {
         signal: AbortSignal.timeout(HUB_TIMEOUT_MS),
       });
-      if (res.status === 404) return null;
+      // 400 is a host the Hub would never accept as an own domain
+      if (res.status === 404 || res.status === 400) return null;
       if (!res.ok) return undefined;
       const body = (await res.json()) as Partial<LandInfo>;
-      if (body.landId !== landId || !isAddress(String(body.mapServerKey)))
+      if (
+        !Number.isSafeInteger(body.landId) ||
+        !isAddress(String(body.mapServerKey))
+      )
         return undefined;
       return body as LandInfo;
     } catch {
       return undefined;
     }
+  }
+
+  async function lookupLand(
+    landId: number,
+  ): Promise<LandInfo | null | undefined> {
+    const land = await hubLand(`/lands/${landId}`);
+    return land && land.landId !== landId ? undefined : land;
+  }
+
+  /** The Land whose own domain a host is. Answers, failures included, are kept for 30 seconds. */
+  function landOfDomain(host: string): Promise<number | null | undefined> {
+    // Under LAND_BASE_DOMAIN only Land ids are Lands: an own domain's TXT record cannot sit there.
+    if (host.endsWith(landSuffix)) return Promise.resolve(null);
+    const now = Date.now();
+    const cached = domains.get(host);
+    if (cached && cached.until > now) return cached.landId;
+    domains.delete(host);
+    if (domains.size >= DOMAIN_CACHE_MAX)
+      domains.delete(domains.keys().next().value!);
+    const landId = hubLand(`/lands?domain=${encodeURIComponent(host)}`).then(
+      (land) => (land ? land.landId : land),
+    );
+    domains.set(host, { landId, until: now + domainCacheMs });
+    return landId;
   }
 
   function sendControl(host: Host, message: ControlMessage): void {
@@ -672,39 +716,62 @@ export function createRelay(options: RelayOptions): Server {
   }
 
   const server = createServer((req, res) => {
-    const landId = landOf(req);
-    let work: Promise<void> | undefined;
-    if (landId !== undefined) work = forward(req, res, landId);
-    else {
+    const host = hostOf(req);
+    const landId = landOf(host);
+    if (landId === undefined && isRelayHost(host)) {
       const { pathname } = splitTarget(req.url ?? "/");
+      // /online and /stats are for the operator's network. A proxy in front of the relay writes
+      // X-Forwarded-For (Caddy always does), so whatever Host it forwarded, its requests are public.
+      const internal =
+        req.headers["x-forwarded-for"] === undefined &&
+        req.headers.forwarded === undefined;
       if (req.method === "GET" && pathname === "/health") {
         res.writeHead(200, { "content-type": "text/plain" });
         res.end("ok");
-      } else if (req.method === "GET" && pathname === "/online")
+      } else if (internal && req.method === "GET" && pathname === "/online")
         sendJson(res, 200, { lands: [...hosts.keys()].sort((a, b) => a - b) });
-      else if (req.method === "GET" && pathname === "/stats")
+      else if (internal && req.method === "GET" && pathname === "/stats")
         sendJson(res, 200, stats());
       else sendJson(res, 404, { error: "not found" });
+      return;
     }
-    Promise.resolve(work).catch(() => {
-      if (res.headersSent) res.destroy();
-      else if (landId !== undefined) landPage(res, 500, "Internal error.");
-      else sendJson(res, 500, { error: "internal error" });
-    });
+    void (landId === undefined ? landOfDomain(host) : Promise.resolve(landId))
+      .then((id) => {
+        if (id === null) landPage(res, 404, "There is no Land here.");
+        else if (id === undefined)
+          landPage(res, 503, "This Land cannot be found right now.");
+        else return forward(req, res, id);
+      })
+      .catch(() => {
+        if (res.headersSent) res.destroy();
+        else landPage(res, 500, "Internal error.");
+      });
   });
 
   server.on("upgrade", (req, socket, head) => {
     socket.on("error", () => {});
-    const landId = landOf(req);
+    const host = hostOf(req);
+    const landId = landOf(host);
     if (landId !== undefined) return acceptPlayer(req, socket, head, landId);
-    const parts = splitTarget(req.url ?? "/").pathname.split("/"); // ["", "host", "<id>"]
-    if (
-      parts[1] === "host" &&
-      parts.length === 3 &&
-      LAND_ID.test(parts[2] ?? "")
-    )
-      return acceptHost(req, socket, head, Number(parts[2]));
-    rejectUpgrade(socket, 404, "not found");
+    if (isRelayHost(host)) {
+      const parts = splitTarget(req.url ?? "/").pathname.split("/"); // ["", "host", "<id>"]
+      if (
+        parts[1] === "host" &&
+        parts.length === 3 &&
+        LAND_ID.test(parts[2] ?? "")
+      )
+        return acceptHost(req, socket, head, Number(parts[2]));
+      return rejectUpgrade(socket, 404, "not found");
+    }
+    void landOfDomain(host)
+      .then((id) => {
+        if (id === null)
+          rejectUpgrade(socket, 404, "no Land here", landHeaders);
+        else if (id === undefined)
+          rejectUpgrade(socket, 503, "Land cannot be found", landHeaders);
+        else acceptPlayer(req, socket, head, id);
+      })
+      .catch(() => socket.destroy());
   });
 
   // Pings every host link and every Player; two unanswered pings close it.

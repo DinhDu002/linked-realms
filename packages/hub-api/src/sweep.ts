@@ -1,12 +1,18 @@
 // The Hub's periodic sweep (docs/plans/phase-2b-world-without-chain.md, flows 6 and 9): main.ts
 // runs it every 15 seconds; tests call it directly.
-import type { Deps } from "./app.ts";
+import { landsNamedBy, type Deps } from "./app.ts";
 
 const DAY_SECONDS = 86_400;
 /** A Land not seen online for this long loses its cell (PLAN.md section 5.1). */
 export const CELL_KEPT_OFFLINE_SECONDS = 30 * DAY_SECONDS;
 /** A Map server statement that serves no Land is forgotten after this long. */
 const MAP_SERVER_KEPT_SECONDS = 7 * DAY_SECONDS;
+/** An own domain's TXT record is read again this long after the last answer. */
+const DOMAIN_CHECKED_SECONDS = DAY_SECONDS;
+/** ...or this long after DNS did not answer. */
+const DOMAIN_RETRY_SECONDS = 3600;
+// ponytail: 50 own domains per 15-second sweep is 12,000 an hour; page faster if a world has more
+const DOMAINS_PER_SWEEP = 50;
 
 // The lowest free spiral index: with n cells in use, one of 0..n is free.
 const LOWEST_FREE_CELL = `(SELECT min(i) FROM generate_series(0, (SELECT count(cell) FROM land)::int) AS i
@@ -15,7 +21,7 @@ const LOWEST_FREE_CELL = `(SELECT min(i) FROM generate_series(0, (SELECT count(c
 const EDGE_CELL = "(SELECT coalesce(max(cell), -1) + 1 FROM land)";
 
 export async function sweep(
-  deps: Pick<Deps, "db" | "online" | "now" | "log">,
+  deps: Pick<Deps, "db" | "online" | "now" | "log" | "resolveTxt">,
 ): Promise<void> {
   const { db } = deps;
   const now = Math.floor(deps.now() / 1000);
@@ -71,4 +77,40 @@ export async function sweep(
        AND NOT EXISTS (SELECT 1 FROM land WHERE map_server_key = m.key)`,
     [now - MAP_SERVER_KEPT_SECONDS],
   );
+
+  // An own domain stays only while its TXT record still names its Land.
+  const due = (
+    await db.query<{ id: number | string; domain: string }>(
+      `SELECT id, domain FROM land WHERE domain IS NOT NULL AND domain_checked_at <= $1
+       ORDER BY domain_checked_at LIMIT ${DOMAINS_PER_SWEEP}`,
+      [now - DOMAIN_CHECKED_SECONDS],
+    )
+  ).rows;
+  const answers = await Promise.all(
+    due.map(({ domain }) => landsNamedBy(deps.resolveTxt, domain)),
+  );
+  for (const [i, { id, domain }] of due.entries()) {
+    const named = answers[i];
+    if (!named) {
+      deps.log(`sweep: could not check the own domain ${domain} of Land ${id}`);
+      await db.query("UPDATE land SET domain_checked_at = $2 WHERE id = $1", [
+        id,
+        now - DOMAIN_CHECKED_SECONDS + DOMAIN_RETRY_SECONDS,
+      ]);
+    } else if (named.has(Number(id))) {
+      await db.query("UPDATE land SET domain_checked_at = $2 WHERE id = $1", [
+        id,
+        now,
+      ]);
+    } else {
+      deps.log(
+        `sweep: Land ${id} lost its own domain ${domain}: its TXT record no longer names it`,
+      );
+      await db.query(
+        `UPDATE land SET domain = NULL, domain_checked_at = NULL, updated_at = $2
+         WHERE id = $1 AND domain = $3`,
+        [id, now, domain],
+      );
+    }
+  }
 }

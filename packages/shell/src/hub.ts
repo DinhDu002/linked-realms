@@ -93,6 +93,12 @@ export function createHubClient(
         throw e;
       }
     },
+    /** Sets or removes the Land's own domain; the Hub first reads its DNS TXT record. */
+    setDomain: (token: string, landId: number, domain: string | null) =>
+      call<{ domain: string | null }>("PUT", `/lands/${landId}/domain`, {
+        token,
+        body: { domain },
+      }),
     report: (token: string, landId: number, reason: string) =>
       call<{ ok: true }>("POST", "/reports", {
         token,

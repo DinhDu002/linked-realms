@@ -75,6 +75,26 @@
             <button id="copy-owner-address" type="button">Copy address</button>
           </p>
           <p id="land-status"></p>
+          <form id="domain-form" hidden>
+            <h3>Own domain</h3>
+            <p>
+              Optional: serve your Land at a domain you own. Point the domain at
+              this world's relay as its operator explains, add a DNS TXT record
+              named <code>_linked-realms.</code> followed by your domain, with
+              the value <code id="domain-txt"></code>, then save the domain
+              here. The Hub checks the record again once a day.
+            </p>
+            <label for="domain">Domain</label>
+            <input
+              id="domain"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="play.example.com"
+            />
+            <button type="submit">Save domain</button>
+            <button id="remove-domain" type="button">Remove domain</button>
+            <p id="domain-status" role="status"></p>
+          </form>
           <h3>Waiting Map servers</h3>
           <ul id="map-servers" aria-label="Waiting Map servers"></ul>
           <p id="register-status" role="alert"></p>

@@ -39,15 +39,17 @@ Errors are `{ "error": "..." }`. Session routes take `Authorization: Bearer <tok
 | `POST /map-servers` | signature | A Map server statement within 5 minutes of the Hub's clock. `204`; `409` if a newer one from the key exists |
 | `GET /map-servers?owner=` | session (that owner) | `{ mapServers: [{ mapServerKey, issued }] }`: keys that named this Character and serve no Land |
 | `POST /lands` | signature | A Delegation. Creates the Land (`201 { landId }`) or, for an owner who has one, replaces its Map server key with a newer Delegation (`200`; the registered one sent again gets the same answer). `403` unless that key's Map server statement names this owner; `409` if the key serves another Land or a newer Delegation exists; `429` past 3 new Lands per network address per day |
-| `GET /lands/:landId`, `GET /lands?owner=` or `?mapServerKey=` | — | A visible Land's `LandInfo`, with or without a cell; `404` otherwise |
+| `GET /lands/:landId`, `GET /lands?owner=`, `?mapServerKey=` or `?domain=` | — | A visible Land's `LandInfo`, with or without a cell; `404` otherwise. `url` is the own domain when one is set |
+| `PUT /lands/:landId/domain` | session (the owner) | `{ domain }` sets the Land's own domain once its DNS TXT record `_linked-realms.<domain>` is `land=<landId>`; `{ domain: null }` removes it. `400` for a port, a wildcard, an IP address or a name without a dot; `409` when the record does not name the Land or another Land it still names uses the domain; `503` when DNS does not answer (`docs/protocols/map-server-hub-relay.md`, Land URLs) |
+| `GET /tls/allowed?domain=` | — | `200` only for the own domain of a visible Land with a cell; Caddy's on-demand TLS `ask` (`deploy/Caddyfile`) |
 | `GET /directory` | — | `{ lands }`: the visible Lands that have a cell |
 | `POST /tickets` | session | `{ landId, from? }` returns a signed Travel ticket. `404` for an unknown or hidden Land; `409` when it has no cell, is offline or is not adjacent to `from` |
 | `POST /reports` | session | `{ landId, reason }` |
 | `GET /admin/reports`, `POST /admin/lands/:landId/hidden` | admin | |
 
-**The sweep** runs every 15 seconds (`src/sweep.ts`): it records which Lands the relay has online, gives online Lands without a cell one (a new Land takes the lowest free spiral index, a Land that lost its cell the edge), takes the cell of a Land not seen online for 30 days, and forgets quota rows after 2 days and Map server statements that serve no Land after 7.
+**The sweep** runs every 15 seconds (`src/sweep.ts`): it records which Lands the relay has online, gives online Lands without a cell one (a new Land takes the lowest free spiral index, a Land that lost its cell the edge), takes the cell of a Land not seen online for 30 days, forgets quota rows after 2 days and Map server statements that serve no Land after 7, and reads each own domain's TXT record again once a day (50 per sweep). A domain whose record no longer names its Land is dropped; one whose DNS does not answer is kept and asked again an hour later.
 
-**Limits:** sign-ins 30 per minute and Map server statements and Delegations 10 per minute per network address (IPv4, or IPv6 /64); tickets 30 per minute and reports 5 per hour per Character.
+**Limits:** sign-ins 30 per minute and Map server statements and Delegations 10 per minute per network address (IPv4, or IPv6 /64); tickets 30 per minute, own domain changes 10 per minute and reports 5 per hour per Character.
 
 ## Limits of this design
 
@@ -56,4 +58,4 @@ Errors are `{ "error": "..." }`. Session routes take `Authorization: Bearer <tok
 
 ## Tests
 
-`pnpm --filter @linked-realms/hub-api test`: every route and the sweep against PGlite (in-process PostgreSQL) with a fake relay, clock and network address.
+`pnpm --filter @linked-realms/hub-api test`: every route and the sweep against PGlite (in-process PostgreSQL) with a fake relay, clock, network address and DNS.
