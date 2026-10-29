@@ -13,7 +13,7 @@ USER node
 
 COPY --chown=node:node . .
 # Only what the three services and the seed script need: no contracts (they need git for forge-std),
-# no client (Phaser, Vite), no indexer (Ponder).
+# no client (Phaser, Vite).
 RUN pnpm install --frozen-lockfile --prod \
     --filter @linked-realms/hub-api... \
     --filter @linked-realms/relay... \

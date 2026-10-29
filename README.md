@@ -29,7 +29,6 @@ Run the game locally (each command in its own terminal):
 pnpm --filter @linked-realms/contracts deploy:local   # deploy to anvil; writes packages/shared/src/deployments/31337.json
 LAND_ID=1 pnpm --filter @linked-realms/map-server dev  # the Map server for Land 1 on ws://127.0.0.1:2567
 pnpm --filter @linked-realms/client dev                # the game on http://127.0.0.1:5173
-pnpm --filter @linked-realms/indexer dev               # optional: GraphQL on http://127.0.0.1:42069
 ```
 
 In the game, choose "Use dev wallet" (anvil only), create a Character, then enter Land 1. Open a second browser profile to see two Players on the same Land.
