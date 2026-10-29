@@ -38,6 +38,7 @@ export interface Deps {
     | "allowedOrigins"
     | "landBaseDomain"
     | "landUrlScheme"
+    | "relayPublicUrl"
   >;
   db: Db;
   /** Ids of Lands whose Map server link to the relay is open; rejects when the relay is unreachable. */
@@ -303,7 +304,9 @@ export function createApp(deps: Deps) {
 
   app.get("/health", (c) => c.text("ok"));
 
-  app.get("/keys", (c) => c.json({ ticket: ticketKey }));
+  app.get("/keys", (c) =>
+    c.json({ ticket: ticketKey, relayUrl: config.relayPublicUrl }),
+  );
 
   // --- Sign-in (docs/plans/phase-2b-world-without-chain.md, flow 2) ---
 

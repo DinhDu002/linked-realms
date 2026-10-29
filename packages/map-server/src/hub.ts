@@ -1,8 +1,8 @@
 // The Map server's calls to the Hub (docs/protocols/map-server-hub-relay.md).
-import type { Key } from "@linked-realms/core";
+import { isAddress, type Key } from "@linked-realms/core";
 import type { LandInfo } from "@linked-realms/shared";
 import { signStatement } from "@linked-realms/shared/identity";
-import type { Config } from "./config.ts";
+import { isRelayUrl, type Config } from "./config.ts";
 
 const REQUEST_TIMEOUT_MS = 10_000;
 const POLL_MS = 10_000;
@@ -56,25 +56,58 @@ export async function postStatement(
     throw new Error(`the Hub answered ${response.status} to POST /map-servers`);
 }
 
-/** Posts until it works, backing off while the Hub is unreachable. Returns early on abort. */
-export async function registerMapServer(
-  post: () => Promise<void>,
+/** Runs `task` until it works, backing off while the Hub is unreachable; undefined if aborted first. */
+export async function retry<T>(
+  task: () => Promise<T>,
+  what: string,
   log: (message: string) => void,
   signal: AbortSignal,
-): Promise<void> {
+): Promise<T | undefined> {
   let backoff = INITIAL_BACKOFF_MS;
   while (!signal.aborted) {
     try {
-      await post();
-      return;
+      return await task();
     } catch (error) {
       log(
-        `could not register with the Hub (${(error as Error).message}); retrying in ${backoff / 1000} s`,
+        `could not ${what} (${(error as Error).message}); retrying in ${backoff / 1000} s`,
       );
       await sleep(backoff, signal);
       backoff = Math.min(backoff * 2, MAX_BACKOFF_MS);
     }
   }
+  return undefined;
+}
+
+export interface World {
+  /** The address of the Hub's ticket key. */
+  ticketSigner: string;
+  /** The relay the Hub publishes for Map servers; undefined when it has none. */
+  relayUrl: string | undefined;
+}
+
+/** What GET /keys publishes: the Hub's ticket signer and its relay. */
+export async function fetchWorld(
+  config: Pick<Config, "hubUrl">,
+): Promise<World> {
+  const response = await fetch(new URL("/keys", config.hubUrl), {
+    signal: AbortSignal.timeout(REQUEST_TIMEOUT_MS),
+  });
+  if (!response.ok)
+    throw new Error(`the Hub answered ${response.status} to GET /keys`);
+  const keys = (await response.json()) as {
+    ticket?: { address?: unknown };
+    relayUrl?: unknown;
+  } | null;
+  const ticketSigner = keys?.ticket?.address;
+  const relayUrl = keys?.relayUrl ?? undefined;
+  if (
+    typeof ticketSigner !== "string" ||
+    !isAddress(ticketSigner) ||
+    (relayUrl !== undefined &&
+      (typeof relayUrl !== "string" || !isRelayUrl(relayUrl)))
+  )
+    throw new Error("the Hub sent malformed keys");
+  return { ticketSigner, relayUrl };
 }
 
 /** The Land this key serves, or undefined if the Hub has none (404). */

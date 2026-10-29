@@ -16,11 +16,12 @@ Migrations run at start-up (`src/db.ts`, plain SQL, tracked in the `migration` t
 | Variable | Default | Meaning |
 |---|---|---|
 | `DATABASE_URL` | required | PostgreSQL connection string |
-| `HUB_TICKET_KEY` | required | 32-byte ML-DSA-44 seed in hex that signs Travel tickets; it grants entry only and holds no assets. Map servers set `HUB_TICKET_SIGNER` to its address, printed at start and published at `GET /keys` |
+| `HUB_TICKET_KEY` | required | 32-byte ML-DSA-44 seed in hex that signs Travel tickets; it grants entry only and holds no assets. Its address is printed at start and published at `GET /keys`, where Map servers read it |
 | `HUB_SESSION_SECRET` | required | HS256 secret for session tokens, at least 32 characters |
 | `PORT` | 8787 | |
 | `HUB_DOMAIN` | `localhost:8787` | This Hub's host: the `Hub:` line every statement must carry |
 | `RELAY_INTERNAL_URL` | `http://127.0.0.1:8080` | Read for `GET /online` |
+| `RELAY_PUBLIC_URL` | unset | `ws://` or `wss://` URL of the relay as Map servers dial it, published at `GET /keys`; unset publishes `null` |
 | `LAND_BASE_DOMAIN` / `LAND_URL_SCHEME` | `localhost:8080` / `http` | Land URLs: `<scheme>://<landId>.<base domain>` |
 | `HUB_ADMINS` | empty | Comma-separated `tlr1…` addresses that may hide Lands |
 | `HUB_ALLOWED_ORIGINS` | empty | Comma-separated CORS origins (the Shell's) |
@@ -33,7 +34,7 @@ Errors are `{ "error": "..." }`. Session routes take `Authorization: Bearer <tok
 | Method and path | Auth | |
 |---|---|---|
 | `GET /health` | — | `ok` |
-| `GET /keys` | — | `{ ticket: { address, publicKey } }` |
+| `GET /keys` | — | `{ ticket: { address, publicKey }, relayUrl }`: Map servers take the ticket signer and the relay from it unless they pin them (ADR 0010) |
 | `POST /auth/verify` | — | A sign-in statement with `Issued` within 60 s of the Hub's clock, used once. Returns `{ token, address, name, expiresAt }` (1 hour) |
 | `PUT /me/name` | session | `{ name }`: trimmed, 1–32 code points, no control or format characters |
 | `POST /map-servers` | signature | A Map server statement within 5 minutes of the Hub's clock. `204`; `409` if a newer one from the key exists |

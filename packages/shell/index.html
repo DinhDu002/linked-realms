@@ -67,12 +67,13 @@
         <section aria-labelledby="your-land-title">
           <h2 id="your-land-title">Your Land</h2>
           <p>
-            To host a Land, set this address as <code>LAND_OWNER</code> in your
-            Map server, start it, then register it here.
+            To host a Land, install Docker on the computer that will serve it
+            and run this command there. Its Map server then appears below under
+            "Waiting Map servers": register it.
           </p>
+          <pre id="land-command"></pre>
           <p>
-            <code id="owner-address"></code>
-            <button id="copy-owner-address" type="button">Copy address</button>
+            <button id="copy-land-command" type="button">Copy command</button>
           </p>
           <p id="land-status"></p>
           <form id="domain-form" hidden>

@@ -10,6 +10,10 @@ A game made of many Lands. Each player hosts their own Land, and the Lands join 
 - Gold is mined by Proof of Work on the game's own chain. Every Node checks every Block, and Gold is created only on a fixed schedule, with no premine.
 - A Player's key never leaves the Shell. A Land's UI runs in an isolated frame, and the Shell shows the Player every signature a Land asks for.
 
+## Play
+
+The test world runs at <https://play.linkedrealms.com>. Open it, make a Character, and walk into the Lands in the Directory. To host a Land of your own, install Docker and run the one command the Shell shows under "Your Land" ([docs/self-hosting.md](docs/self-hosting.md)). For now this test world serves Lands 1 to 4.
+
 ## Development
 
 Requirements: Node.js 26 (see `.nvmrc`), pnpm 11.3, Rust through `rustup` (the version is pinned in `rust-toolchain.toml`) with `wasm-bindgen-cli` 0.2.129, and Docker.
@@ -55,7 +59,7 @@ To play by hand, open the Shell at <http://localhost:8788>, choose "Restore from
 
 **All keys here are public development keys:** these Characters, the Hub's ticket key and session secret in `compose.yaml`. They exist for local development only; never reuse them anywhere else.
 
-To host a Land of your own against this world, follow [docs/self-hosting.md](docs/self-hosting.md) on the world's network: add `--network linked-realms-world_default` and use `HUB_URL=http://hub-api:8787`, `HUB_DOMAIN=localhost:8787`, `RELAY_URL=ws://relay:8080`, and `HUB_TICKET_SIGNER` from `compose.yaml`.
+To host a Land of your own against this world, follow [docs/self-hosting.md](docs/self-hosting.md) on the world's network: add `--network linked-realms-world_default` and use `HUB_URL=http://hub-api:8787`, `HUB_DOMAIN=localhost:8787` and `RELAY_URL=ws://relay:8080`.
 
 ## Documents
 

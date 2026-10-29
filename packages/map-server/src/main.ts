@@ -4,11 +4,12 @@ import { parseLandMap } from "@linked-realms/shared";
 import { loadConfig } from "./config.ts";
 import {
   awaitLand,
+  fetchWorld,
   findLand,
   postStatement,
-  registerMapServer,
+  retry,
 } from "./hub.ts";
-import { createLandServer } from "./land.ts";
+import { createLandServer, type LandServer } from "./land.ts";
 import { loadOrCreateMapServerKey } from "./mapServerKey.ts";
 
 async function main(): Promise<void> {
@@ -21,20 +22,15 @@ async function main(): Promise<void> {
       `WARNING: LAND_UI_DIR ${config.landUiDir} does not exist: the Land UI will answer 503 (build it with "pnpm --filter @linked-realms/client build")`,
     );
 
-  const server = createLandServer({
-    map,
-    mapText,
-    hubTicketSigner: config.hubTicketSigner,
-    landUiDir: config.landUiDir,
-  });
   const stop = new AbortController();
+  let server: LandServer | undefined = undefined; // set once the Hub has answered
   let host: { close(): Promise<void> } | undefined;
   let stopping: Promise<void> | undefined;
   const shutdown = () => {
     stopping ??= (async () => {
       stop.abort();
       await host?.close();
-      await server.close();
+      await server?.close();
     })();
     return stopping;
   };
@@ -50,12 +46,34 @@ async function main(): Promise<void> {
       );
     });
 
+  // Unset HUB_TICKET_SIGNER or RELAY_URL: take what the Hub publishes (ADR 0010).
+  const world =
+    config.hubTicketSigner && config.relayUrl
+      ? undefined
+      : await retry(
+          () => fetchWorld(config),
+          `read GET /keys from the Hub at ${config.hubUrl}`,
+          console.log,
+          stop.signal,
+        );
+  if (stop.signal.aborted) return;
+  const hubTicketSigner = config.hubTicketSigner ?? world!.ticketSigner;
+  const relayUrl = config.relayUrl ?? world?.relayUrl;
+
+  server = createLandServer({
+    map,
+    mapText,
+    hubTicketSigner,
+    landUiDir: config.landUiDir,
+  });
   await server.listen(config.port, config.host);
   console.log(`Map server listening on http://${config.host}:${config.port}`);
-  console.log(`Accepting Travel tickets signed by ${config.hubTicketSigner}`);
+  console.log(
+    `Accepting Travel tickets signed by ${hubTicketSigner} (${config.hubTicketSigner ? "HUB_TICKET_SIGNER" : "from the Hub"})`,
+  );
 
   const repost = () => postStatement(config, key, console.log);
-  await registerMapServer(repost, console.log, stop.signal);
+  await retry(repost, "register with the Hub", console.log, stop.signal);
   console.log(
     [
       "",
@@ -77,20 +95,20 @@ async function main(): Promise<void> {
   server.setLand(land);
   console.log(`Serving Land ${land.landId} (owner ${land.owner})`);
 
-  if (config.relayUrl) {
+  if (relayUrl) {
     host = connectHost({
-      relayUrl: config.relayUrl,
+      relayUrl,
       landId: land.landId,
       mapServerKey: key,
       localPort: config.port,
       log: console.log,
     });
     console.log(
-      `Reachable through the relay at ${config.relayUrl} at ${land.url}, and directly on ${config.host}:${config.port}`,
+      `Reachable through the relay at ${relayUrl} at ${land.url}, and directly on ${config.host}:${config.port}`,
     );
   } else {
     console.log(
-      "RELAY_URL is not set: reachable only directly, not through the relay",
+      `No relay (RELAY_URL is not set and the Hub publishes none): reachable only directly on ${config.host}:${config.port}`,
     );
   }
 }

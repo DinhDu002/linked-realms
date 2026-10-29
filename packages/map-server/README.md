@@ -6,22 +6,22 @@ It does three things:
 
 - serves the Land UI (the built `packages/client`) over HTTP;
 - runs the game at `WS /play`, a binary protobuf protocol (`packages/shared/proto/linked_realms/land/v1/land.proto`);
-- registers with the Hub and, with `RELAY_URL`, opens the host link to the relay (`docs/protocols/map-server-hub-relay.md`).
+- registers with the Hub and opens the host link to the relay the Hub publishes (`docs/protocols/map-server-hub-relay.md`).
 
 ## Run
 
 ```bash
-LAND_OWNER=tlr1… HUB_TICKET_SIGNER=tlr1… pnpm --filter @linked-realms/map-server start
+LAND_OWNER=tlr1… pnpm --filter @linked-realms/map-server start
 ```
 
 | Variable              | Default                                | Meaning                                                                                        |
 | --------------------- | -------------------------------------- | ---------------------------------------------------------------------------------------------- |
 | `LAND_OWNER`          | required                               | The Land owner's Character address                                                             |
-| `HUB_TICKET_SIGNER`   | required                               | Address of the Hub's ticket key: a ticket's `publicKey` must hash to it (`GET <hub>/keys`)     |
+| `HUB_TICKET_SIGNER`   | from `GET <hub>/keys`                  | Address of the Hub's ticket key: a ticket's `publicKey` must hash to it                        |
 | `HUB_URL`             | `http://localhost:8787`                | Where this server reaches the Hub                                                              |
 | `HUB_DOMAIN`          | host of `HUB_URL`                      | The Hub's host as statements name it; set it when `HUB_URL` uses an internal name              |
 | `MAP_SERVER_KEY_FILE` | `.data/map-server-key` (this package)  | The Map server key's seed (see below)                                                          |
-| `RELAY_URL`           | unset                                  | `ws://` or `wss://` base URL of the relay; unset means direct access only                      |
+| `RELAY_URL`           | from `GET <hub>/keys`                  | `ws://` or `wss://` base URL of the relay; none from either means direct access only           |
 | `HOST`                | `127.0.0.1`                            | Interface to listen on; loopback because the relay agent connects locally                      |
 | `PORT`                | `2567`                                 | HTTP and WebSocket port                                                                        |
 | `MAP_FILE`            | `maps/empty-land.json`                 | Tiled map, validated at start                                                                  |
@@ -31,10 +31,10 @@ LAND_OWNER=tlr1… HUB_TICKET_SIGNER=tlr1… pnpm --filter @linked-realms/map-se
 
 ## Start-up
 
-1. **Key and statement.** The server loads the Map server key, or creates it on first start, starts listening, and posts a fresh `Map server` statement (`Hub`, `Owner`, `Map server key`, `Issued`) to `POST /map-servers`, retrying with backoff from 1 to 30 seconds while the Hub is unreachable. It prints the key's address.
+1. **Key and statement.** The server loads the Map server key, or creates it on first start. If `HUB_TICKET_SIGNER` or `RELAY_URL` is unset, it reads `GET /keys` from the Hub, retrying with the same backoff while the Hub is unreachable, and takes the missing values from it (ADR 0010). It then starts listening and posts a fresh `Map server` statement (`Hub`, `Owner`, `Map server key`, `Issued`) to `POST /map-servers`, retrying with backoff from 1 to 30 seconds while the Hub is unreachable. It prints the key's address.
 2. **Delegation.** The Land owner signs a Delegation for that key under "Your Land" in the Shell. The Hub then creates the Land.
 3. **The Land.** Every 10 seconds the server asks `GET /lands?mapServerKey=<address>`. It serves the Land only if its `owner` is `LAND_OWNER`; otherwise it logs that once and keeps polling. While it waits, it posts a fresh statement every 24 hours, because the Hub forgets one that serves no Land after 7 days.
-4. **Relay.** With `RELAY_URL`, it connects the relay agent (`connectHost` from `@linked-realms/relay/agent`) as that Land. Without it, the Land is reachable only directly.
+4. **Relay.** With a relay URL (`RELAY_URL`, or the one the Hub publishes), it connects the relay agent (`connectHost` from `@linked-realms/relay/agent`) as that Land. Without one, the Land is reachable only directly.
 
 SIGINT and SIGTERM close the host link, the sockets and the HTTP server.
 

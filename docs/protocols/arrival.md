@@ -16,9 +16,9 @@ The ticket's nonce is the challenge: the Hub makes it fresh, a Land accepts it o
 
 ## The Hub's ticket key
 
-- A Land knows the address of the Hub's ticket key from its own configuration (`HUB_TICKET_SIGNER` in the reference kit). `GET <hub>/keys` publishes it, so an operator can look it up: `{ "ticket": { "address": "tlr1…", "publicKey": "<base64>" } }`.
+- A Land knows the address of the Hub's ticket key. `GET <hub>/keys` publishes it: `{ "ticket": { "address": "tlr1…", "publicKey": "<base64>" }, … }`. The reference kit reads it from there at start, over the same connection it trusts to register its Land, unless `HUB_TICKET_SIGNER` pins it (ADR 0010).
 - A ticket carries its `publicKey`. The Land accepts the ticket only if that key's address is the configured one and the signature verifies with it. An address is a hash of the key, so this is the same as pinning the key, without fetching it.
-- Replacing the Hub's ticket key means changing that setting.
+- Replacing the Hub's ticket key means restarting the Map servers that read it, and changing the setting of those that pin it.
 
 ## Checks, in order
 

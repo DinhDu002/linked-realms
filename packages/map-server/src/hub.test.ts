@@ -10,9 +10,10 @@ import { verifyStatement } from "@linked-realms/shared/identity";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import {
   awaitLand,
+  fetchWorld,
   findLand,
   postStatement,
-  registerMapServer,
+  retry,
 } from "./hub.ts";
 
 const key = Key.fromSeed(new Uint8Array(32).fill(3));
@@ -101,8 +102,8 @@ describe("postStatement", () => {
   });
 });
 
-describe("registerMapServer", () => {
-  it("retries with a growing backoff until the post works", async () => {
+describe("retry", () => {
+  it("retries with a growing backoff until the task works", async () => {
     vi.useFakeTimers();
     const post = vi
       .fn<() => Promise<void>>()
@@ -110,7 +111,12 @@ describe("registerMapServer", () => {
       .mockRejectedValueOnce(new Error("down"))
       .mockResolvedValue(undefined);
     const log = vi.fn();
-    const done = registerMapServer(post, log, new AbortController().signal);
+    const done = retry(
+      post,
+      "register with the Hub",
+      log,
+      new AbortController().signal,
+    );
     await vi.advanceTimersByTimeAsync(0);
     expect(post).toHaveBeenCalledTimes(1);
     await vi.advanceTimersByTimeAsync(1_000);
@@ -121,17 +127,67 @@ describe("registerMapServer", () => {
     await done;
     expect(post).toHaveBeenCalledTimes(3);
     expect(log).toHaveBeenCalledTimes(2);
+    expect(log).toHaveBeenLastCalledWith(
+      "could not register with the Hub (down); retrying in 2 s",
+    );
   });
 
-  it("stops when aborted", async () => {
+  it("returns the task's result, or undefined when aborted", async () => {
     vi.useFakeTimers();
+    const signal = new AbortController().signal;
+    await expect(
+      retry(
+        async () => 5,
+        "count",
+        () => {},
+        signal,
+      ),
+    ).resolves.toBe(5);
     const stop = new AbortController();
     const post = vi.fn().mockRejectedValue(new Error("down"));
-    const done = registerMapServer(post, () => {}, stop.signal);
+    const done = retry(post, "register with the Hub", () => {}, stop.signal);
     await vi.advanceTimersByTimeAsync(0);
     stop.abort();
-    await done;
+    await expect(done).resolves.toBeUndefined();
     expect(post).toHaveBeenCalledTimes(1);
+  });
+});
+
+describe("fetchWorld", () => {
+  const ticket = { address: owner, publicKey: "AAAA" };
+
+  it("reads the ticket signer and the relay from GET /keys", async () => {
+    let reply: unknown = { ticket, relayUrl: "wss://relay.test" };
+    const { hubUrl, requests } = await stubHub((_req, res) =>
+      res.end(JSON.stringify(reply)),
+    );
+    await expect(fetchWorld({ hubUrl })).resolves.toEqual({
+      ticketSigner: owner,
+      relayUrl: "wss://relay.test",
+    });
+    expect(requests[0]).toMatchObject({ method: "GET", url: "/keys" });
+    reply = { ticket, relayUrl: null };
+    await expect(fetchWorld({ hubUrl })).resolves.toEqual({
+      ticketSigner: owner,
+      relayUrl: undefined,
+    });
+  });
+
+  it("rejects a malformed answer or a server error", async () => {
+    let reply: [number, unknown] = [200, { ticket: { address: "nope" } }];
+    const { hubUrl } = await stubHub((_req, res) => {
+      res.statusCode = reply[0];
+      res.end(JSON.stringify(reply[1]));
+    });
+    await expect(fetchWorld({ hubUrl })).rejects.toThrow(/malformed keys/);
+    for (const relayUrl of ["https://relay.test", "wss://relay.test/host"]) {
+      reply = [200, { ticket, relayUrl }];
+      await expect(fetchWorld({ hubUrl })).rejects.toThrow(/malformed keys/);
+    }
+    reply = [200, null];
+    await expect(fetchWorld({ hubUrl })).rejects.toThrow(/malformed keys/);
+    reply = [404, { error: "not found" }];
+    await expect(fetchWorld({ hubUrl })).rejects.toThrow(/404 to GET \/keys/);
   });
 });
 

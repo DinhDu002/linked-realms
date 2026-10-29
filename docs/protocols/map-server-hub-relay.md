@@ -24,7 +24,7 @@ Status: mandatory (ADR 0008). A Map server, in any language, uses these to regis
 - `409` if a newer statement from this key exists.
 - `429` if one network address sends too many.
 
-**`GET /keys`** returns `{ "ticket": { "address": "tlr1…", "publicKey": "<base64>" } }`, the Hub's ticket key (`arrival.md`).
+**`GET /keys`** returns `{ "ticket": { "address": "tlr1…", "publicKey": "<base64>" }, "relayUrl": "wss://relay.example" }`: the Hub's ticket key (`arrival.md`) and the relay's `ws://` or `wss://` URL as Map servers dial it, or `null` when the world has no relay. The reference kit's Map server reads both at start unless it pins them (`HUB_TICKET_SIGNER`, `RELAY_URL`; ADR 0010).
 
 **`GET /lands?mapServerKey=<address>`** and **`GET /lands/<landId>`** return a `LandInfo`, or `404` if the Land is unknown or hidden:
 

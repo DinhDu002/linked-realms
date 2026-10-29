@@ -682,7 +682,9 @@ test.describe("the Shell's own controls", () => {
       method: "POST",
     });
     await openShell(page);
-    await expect(page.locator("#owner-address")).toHaveText(character.address);
+    await expect(page.locator("#land-command")).toHaveText(
+      `docker run -d --name linked-realms-land --restart unless-stopped -v linked-realms-land:/data -e LAND_OWNER=${character.address} -e HUB_URL=${HUB_URL} ghcr.io/dinhdu002/linked-realms-node:latest`,
+    );
     await expect(page.locator("#land-status")).toHaveText(
       "You have no Land yet.",
     );

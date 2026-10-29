@@ -24,6 +24,15 @@ textarea {
 code {
   overflow-wrap: anywhere;
 }
+#land-command {
+  margin: 0;
+  padding: 8px;
+  background: #000;
+  border: 1px solid #888;
+  white-space: pre-wrap;
+  overflow-wrap: anywhere;
+  user-select: all;
+}
 [hidden] {
   display: none !important;
 }

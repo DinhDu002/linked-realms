@@ -21,8 +21,8 @@ x-map: &map
     HUB_URL: http://hub-api:8787
     # The Hub's host as statements name it: the one the Shell uses.
     HUB_DOMAIN: localhost:${HUB_PORT:-8787}
-    # The address of HUB_TICKET_KEY below.
-    HUB_TICKET_SIGNER: tlr1qqqmkrz7wdckqgrm76sjdmyhslmd8r33gf4s3y4d7qqwwrrpgscdmrcgw5jya
+    # The ticket signer comes from the Hub's GET /keys. The relay is pinned: the Hub publishes the
+    # address a Map server on this machine dials, and inside compose the relay is relay:8080.
     RELAY_URL: ws://relay:8080
   depends_on:
     relay:
@@ -63,6 +63,7 @@ services:
       HUB_ADMINS: tlr1qqqllx6mk2aqte7cu6qlpkdrdr4xt2g34dfy663wp8va0h23nrnwpdsq4rn2n
       HUB_ALLOWED_ORIGINS: http://localhost:${SHELL_PORT:-8788}
       RELAY_INTERNAL_URL: http://relay:8080
+      RELAY_PUBLIC_URL: ws://localhost:${RELAY_PORT:-8080}
       LAND_BASE_DOMAIN: localhost:${RELAY_PORT:-8080}
     ports:
       - "127.0.0.1:${HUB_PORT:-8787}:8787"
