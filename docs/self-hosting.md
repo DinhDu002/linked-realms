@@ -1,20 +1,22 @@
 # Hosting your Land
 
-Your Land is a Map server running on your machine. It links out to the Hub's relay, so you do not open any port, and it runs the miner, which mines only after you switch it on in the game. This guide uses Docker; it takes one command once the image is built.
+Your Land is a Map server running on your machine. It links out to the world's relay, so you do not open any port. This guide uses Docker; it takes one command once the image is built.
 
-Testnet only (P7): Base Sepolia, chain id 84532. `GOLD` has no value.
+Test network only (P7). There is no Gold yet: the chain, the Node and the Mine arrive in step 2C.
 
 ## What you need
 
-- Docker (Docker Desktop on macOS and Windows, Docker Engine on Linux). Any 64-bit machine that can stay on; mining uses as many CPU threads as you allow, nothing else is heavy.
-- A Character, made in the game client. Making a Character gives you your Land: the client shows `Your Land: <id> at (x, y)`. Your Land cannot be transferred, because it lives on your machine.
-- The world's settings, published by the project with the testnet world: the relay URL and the Hub's ticket signer address.
-- An RPC endpoint for Base Sepolia. The public `https://sepolia.base.org` is rate-limited; the miner reads the chain every second, so a free key from an RPC provider is more reliable.
-- A little Base Sepolia ETH for your Mining key (below), from a faucet. Rewards never go to the Mining key: they go to your wallet, the Land owner.
+- Docker (Docker Desktop on macOS and Windows, Docker Engine on Linux), on a 64-bit machine that can stay on and whose clock is right: the Hub refuses statements more than 5 minutes off.
+- A Character, made in the world's Shell. The Shell shows its address (`tlr1…`) under "Character" and again under "Your Land".
+- The world's settings, published by whoever runs it: the Hub's URL and the relay's URL. The Hub publishes its ticket signer itself:
+
+  ```bash
+  curl -s https://hub.example.org/keys   # {"ticket":{"address":"tlr1…","publicKey":"…"}}
+  ```
 
 ## 1. Build the image
 
-Until the project publishes the image, build it from the public repository; no clone is needed:
+Until the project publishes the image, build it from the public repository; no clone is needed. The first build compiles the Rust core to WebAssembly and takes a few minutes.
 
 ```bash
 docker build -t linked-realms-node https://github.com/DinhDu002/linked-realms.git#main
@@ -23,27 +25,23 @@ docker build -t linked-realms-node https://github.com/DinhDu002/linked-realms.gi
 ## 2. Write `land.env`
 
 ```bash
-# Your Land, from the game client: "Your Land: <id>"
-LAND_ID=12
-CHAIN_ID=84532
-RPC_URL=https://sepolia.base.org
-# From the testnet world's published settings
-RELAY_URL=wss://relay.example
-HUB_TICKET_SIGNER=0x0000000000000000000000000000000000000000
-# The most threads you can choose in the game when you switch mining on (default: all but one)
-MINING_MAX_THREADS=2
+# Your Character's address, from the Shell
+LAND_OWNER=tlr1…
+# From the world's published settings
+HUB_URL=https://hub.example.org
+RELAY_URL=wss://relay.example.org
+# ticket.address from GET <HUB_URL>/keys
+HUB_TICKET_SIGNER=tlr1…
 ```
 
-Nothing in this file is secret. The Mining key is generated inside the container and never leaves the `/data` volume.
+Nothing in this file is secret. The Map server key is created inside the container on first start and never leaves the `/data` volume.
 
 ## 3. Start your Land
 
 ```bash
 docker run -d --name linked-realms-land --restart unless-stopped \
-  --env-file land.env -v linked-realms-land:/data --cpus 2 linked-realms-node
+  --env-file land.env -v linked-realms-land:/data linked-realms-node
 ```
-
-`--cpus 2` is a hard limit Docker enforces on top of `MINING_MAX_THREADS`; set both to what you are happy to give.
 
 Read the start-up log:
 
@@ -52,55 +50,58 @@ docker logs linked-realms-land
 ```
 
 ```
-Mining key created: 0x4B6F…dcBB, balance 0 ETH. Mining is off until the Land owner switches it on.
-WARNING: Mining key has no ETH: fund 0x4B6F…dcBB from a faucet to pay fees for submitting Solutions
-Map server for Land 12 (owner 0x…) at ws://127.0.0.1:2567
-Reachable through the relay at wss://relay.example (once the Land owner registers the Mining key with the Hub), …
-relay link closed (4404 Land is not in the Directory (unknown or hidden)); retrying in 1 s
-```
+Map server listening on http://127.0.0.1:2567
+Accepting Travel tickets signed by tlr1…
 
-The `4404` lines are expected until step 4.
+Map server key created: tlr1qqqa3mt0…
+Next, the Land owner (tlr1…) signs a Delegation for this Map server key under "Your Land" in the Shell.
+Waiting for the Hub to create the Land...
+```
 
 ## 4. Register your Map server
 
-The Mining key is your Map server's identity. It holds only fees, never your assets (P2). You tell the Hub that this key may host your Land:
+The Map server key is your Map server's identity. It holds no assets and is not your Character's key (P2). You tell the Hub that this key may serve your Land:
 
-1. Send a little Base Sepolia ETH to the Mining key address from the log. It pays the fee each time your miner submits a Solution.
-2. In the game client, connect the wallet that owns the Land and sign in to the Hub.
-3. Under `Your Land`, paste the Mining key address into "Register Map server" and sign. Your wallet shows a Delegation for your Land id and that address; sign only an address your own server printed.
-4. Within 30 seconds the log stops showing `4404`, and the Directory lists your Land as online.
+1. In the Shell, unlock your Character and find "Your Land". Under "Waiting Map servers" it lists every Map server key that named you as its owner.
+2. Check that the key matches the `Map server key created:` line of your log, then choose "Register". The Shell signs a Delegation for that key with your Character's key, which never leaves the Shell, and the Hub creates your Land.
+3. Within 10 seconds the log shows `Serving Land <id>` and `linked to the relay as Land <id>`. Within about 15 seconds more, the Hub gives your Land a cell next to the others, and "Your Land" shows `Its cell is (x, y). It is online.`
 
-## 5. Mine
+A Character has one Land. Register only a key your own server printed: whoever runs that key serves your Land.
 
-Enter your Land from the Directory. As the owner you see "Turn mining on" and a thread count; nobody else can switch it. Mining stops when you switch it off, and does not start by itself after a restart. Rewards go to your wallet; the client shows your `GOLD` balance and Rounds won.
+## 5. Play
+
+Your Land is in the Directory. Choose "Enter" to walk around it; walking onto a Gate at its edge takes your Character into the neighbouring Land, if there is one.
 
 ## Everyday tasks
 
 | Task | Command |
 |---|---|
 | Watch the log | `docker logs -f linked-realms-land` |
-| Stop your Land (it shows offline within seconds) | `docker stop linked-realms-land` |
+| Stop your Land (it shows offline within about 15 seconds) | `docker stop linked-realms-land` |
 | Start it again | `docker start linked-realms-land` |
-| Update | Build the image again (step 1), then `docker rm -f linked-realms-land` and run step 3 again. The volume keeps the Mining key, so you do not register again. |
-| Remove everything | `docker rm -f linked-realms-land && docker volume rm linked-realms-land`. This deletes the Mining key; move its ETH out first if you care about it. |
+| Update | Build the image again (step 1), then `docker rm -f linked-realms-land` and run step 3 again. The volume keeps the Map server key, so you do not register again. |
+| Remove everything | `docker rm -f linked-realms-land && docker volume rm linked-realms-land`. This deletes the Map server key. The Land stays yours: a new Map server shows up under "Waiting Map servers", and "Use this one" moves your Land to it. |
 
-**Moving to another machine.** Either copy the volume and run the same command, or start fresh and register the new Mining key (step 4). The newest registration wins; the old machine is cut off within 30 seconds.
+**Moving to another machine.** Either copy the volume and run the same command, or start fresh and choose "Use this one" for the new key in the Shell. The newest Delegation wins; the relay cuts the old machine off within 30 seconds.
+
+**Offline for long.** A Land keeps its cell while offline. After 30 days offline it loses the cell, and when it comes back it gets a new one at the edge of the world.
 
 ## When something is wrong
 
 | Log line | Meaning and fix |
 |---|---|
-| `relay link closed (4404 Land is not in the Directory …)` | Not registered yet (step 4), or the Land was hidden after an abuse report. |
-| `relay link closed (4403 signer is not the Land's delegated Mining key)` | The Hub has a different Mining key for this Land, for example after you registered another machine. Register this one again. |
-| `relay link closed (4409 replaced by a newer link)` | Another machine is hosting the same Land with the same key. Stop one of them. |
-| `relay link closed (1013 Hub unavailable, retry later)` | The Hub is down; your server keeps retrying. |
-| `WARNING: Mining key has no ETH` | Fund the Mining key address (step 4.1). |
-| `RPC is chain … but CHAIN_ID is …: refusing to start` | `RPC_URL` points at another network than `CHAIN_ID`. |
-| `no deployment for chain 84532` | The image predates the testnet deployment. Build it again. |
-| `LAND_ID …`, `HUB_TICKET_SIGNER …`, `RELAY_URL …` errors | Fix that line in `land.env`, then `docker rm -f linked-realms-land` and run step 3 again. |
+| `could not register with the Hub (…); retrying in … s` | The Hub cannot be reached, or refused the statement: check `HUB_URL` and your clock. |
+| `Land … is owned by …, not by LAND_OWNER …: not serving it` | This key serves another Character's Land. Set `LAND_OWNER` to your own address, or start with a new volume. |
+| `relay link closed (4401 …)` | The relay refused the link: `RELAY_URL` is not the world's relay, your Land now uses another Map server key, or the Land was hidden after an abuse report. |
+| `relay link closed (4403 Map server key changed or Land hidden)` | You chose another Map server key for this Land, or it was hidden. |
+| `relay link closed (4409 replaced by a newer link)` | Another machine serves the same Land with the same key. Stop one of them. |
+| `relay link closed (1013 …)` | The Hub is down or the relay is full; your server keeps retrying. |
+| `/data/map-server-key is readable by others` or `must hold a 32-byte hex seed` | The key file was changed by hand. Restore it, or remove the volume to start with a new key (step 4 again). |
+| `LAND_OWNER …`, `HUB_TICKET_SIGNER …`, `RELAY_URL …` errors | Fix that line in `land.env`, then `docker rm -f linked-realms-land` and run step 3 again. |
 
 ## What your machine does and does not do
 
-- It runs the Land's simulation for visitors and, when you switch it on, the miner. It opens no inbound port.
-- It never runs code sent by other players or servers (P6), and it never holds your wallet's key (P2).
-- Everything that matters to other players is decided by the contracts (P1): a modified server cannot mint `GOLD` or take anyone's Land.
+- It runs your Land for its visitors and opens no inbound port.
+- It checks every arriving Character's Travel ticket, signed by the Hub, and arrival statement, signed by the Character.
+- It never runs code sent by other players or servers (P6) and never holds a Player's key (P2): only its own Map server key.
+- It cannot change another Land or the Hub's records (P1). From step 2C, Gold is decided by chain rules that every Node checks.

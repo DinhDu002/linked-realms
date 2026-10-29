@@ -27,7 +27,7 @@ LAND_OWNER=tlr1… HUB_TICKET_SIGNER=tlr1… pnpm --filter @linked-realms/map-se
 | `MAP_FILE`            | `maps/empty-land.json`                 | Tiled map, validated at start                                                                  |
 | `LAND_UI_DIR`         | `packages/client/dist`                 | The built Land UI. If it is missing, pages answer 503 and the start logs a warning             |
 
-`.env.example` lists the development values. The development ticket signer is the address of the seed `0x48` repeated 32 times.
+`.env.example` lists the development values. The repository's Docker image runs this server by default, with `MAP_SERVER_KEY_FILE=/data/map-server-key` so the key lives in a volume (`docs/self-hosting.md`). The development ticket signer is the address of the seed `0x48` repeated 32 times.
 
 ## Start-up
 

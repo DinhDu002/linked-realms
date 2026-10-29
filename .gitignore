@@ -10,7 +10,7 @@ packages/core/pkg/
 .DS_Store
 .playwright-mcp/
 
-# Map server Mining keys
+# Map server keys
 .data/
 
 # Playwright output
