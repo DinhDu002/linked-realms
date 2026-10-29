@@ -3,4 +3,5 @@
 
 export * from "./character.ts";
 export * from "./mining.ts";
+export * from "./sponsorship.ts";
 export * from "./world.ts";

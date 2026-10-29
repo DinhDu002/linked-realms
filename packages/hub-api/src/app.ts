@@ -5,24 +5,32 @@ import { createMiddleware } from "hono/factory";
 import { sign, verify } from "hono/jwt";
 import {
   BaseError,
+  decodeFunctionData,
   getAddress,
   isAddress,
   isAddressEqual,
   isHex,
+  parseAbi,
+  toFunctionSelector,
   toHex,
   type Address,
   type Hex,
   type LocalAccount,
   type TypedDataDefinition,
 } from "viem";
+import { entryPoint06Address } from "viem/account-abstraction";
 import { generateSiweNonce, parseSiweMessage } from "viem/siwe";
 import {
   DIRECTIONS,
   DelegationTypes,
   HUB_EIP712_DOMAIN,
+  SPONSORED_CALLS,
+  SPONSORED_TRANSACTIONS_PER_DAY,
+  SPONSORED_TRANSACTIONS_PER_PLAYER_PER_DAY,
   TRAVEL_TICKET_TTL_SECONDS,
   TravelTicketTypes,
   arrivalGate,
+  deploymentFor,
   gateNumber,
   neighbourOf,
   ticketToWire,
@@ -68,6 +76,13 @@ export interface Deps {
   /** Ids of Lands whose Map server link to the relay is open; rejects when the relay is unreachable. */
   online(): Promise<number[]>;
   ticketSigner: Pick<LocalAccount, "address" | "signTypedData">;
+  /** Forwards one JSON-RPC request to the bundler and paymaster (CDP); undefined turns sponsorship off. */
+  bundler?: (request: {
+    jsonrpc: "2.0";
+    id: unknown;
+    method: string;
+    params: unknown[];
+  }) => Promise<unknown>;
   /** Milliseconds since the epoch. */
   now(): number;
   log(message: string): void;
@@ -88,9 +103,29 @@ const DELEGATION_PER_MINUTE = 200;
 // uint32 is the room state type of landId in the Map server
 const MAX_LAND_ID = 2 ** 32 - 1;
 const UINT64_MAX = 2n ** 64n - 1n;
+const DAY_MS = 86_400_000;
+// sponsored or not, each request is a call on the bundler's quota; receipt polling needs the headroom
+const AA_PER_MINUTE = 120;
+// Coinbase Smart Wallet v1.1: the version the client passes to viem's toCoinbaseSmartAccount
+const ACCOUNT_FACTORY = "0xba5ed110efdba3d005bfc882d75358acbbb85842";
+const accountAbi = parseAbi([
+  "function execute(address target, uint256 value, bytes data)",
+  "function executeBatch((address target, uint256 value, bytes data)[] calls)",
+]);
+// What the client's viem bundler client calls: ERC-4337 bundler and ERC-7677 paymaster methods
+const USER_OPERATION_METHODS = new Set([
+  "eth_estimateUserOperationGas",
+  "eth_sendUserOperation",
+  "pm_getPaymasterStubData",
+  "pm_getPaymasterData",
+]);
+const AA_METHODS = new Set([
+  ...USER_OPERATION_METHODS,
+  "eth_getUserOperationReceipt",
+]);
 
 class HttpError extends Error {
-  status: 400 | 401 | 403 | 404 | 409 | 429 | 502;
+  status: 400 | 401 | 403 | 404 | 409 | 429 | 502 | 503;
   constructor(status: HttpError["status"], message: string) {
     super(message);
     this.status = status;
@@ -188,6 +223,25 @@ export function createApp(deps: Deps) {
   // unauthenticated and costs chain reads: limited per Land and overall
   const delegationLimit = rateLimiter(DELEGATION_PER_LAND_PER_MINUTE, 60_000);
   const delegationAllLimit = rateLimiter(DELEGATION_PER_MINUTE, 60_000);
+  const aaLimit = rateLimiter(AA_PER_MINUTE, 60_000);
+
+  // "<to>:<selector>" for each sponsored call; to is a lowercase address, or "account" for the sender itself
+  const deployment = deploymentFor(config.chainId);
+  const callKey = (to: string, signature: string) =>
+    `${to}:${toFunctionSelector(signature)}`;
+  const sponsoredCalls = new Set(
+    SPONSORED_CALLS.map(({ to, signature }) =>
+      callKey(
+        to === "account" ? to : deployment[to].address.toLowerCase(),
+        signature,
+      ),
+    ),
+  );
+  const createCharacterCall = callKey(
+    deployment.PlayerRegistry.address.toLowerCase(),
+    "createCharacter()",
+  );
+  let budgetLoggedDay: number | undefined;
 
   // Relay presence, cached 2 s. A failure counts as "all offline" and is logged once per burst.
   let presence: { at: number; lands: Promise<Set<number>> } | undefined;
@@ -333,6 +387,7 @@ export function createApp(deps: Deps) {
   );
   app.use("/tickets", session);
   app.use("/reports", session);
+  app.use("/aa", session);
   app.use("/admin/*", session, admin);
 
   // --- Directory ---
@@ -497,6 +552,153 @@ export function createApp(deps: Deps) {
       message: ticket,
     });
     return c.json({ ticket: ticketToWire(ticket), signature });
+  });
+
+  // --- Sponsored transactions: ERC-4337 user operations (ADR 0005) ---
+
+  /** Throws unless the user operation is the Player's own and makes only sponsored calls; true if one creates a Character. */
+  function checkUserOperation(
+    player: Address,
+    method: string,
+    params: unknown[],
+  ): boolean {
+    const [op, entryPoint, chainId] = params;
+    if (
+      typeof entryPoint !== "string" ||
+      !isAddress(entryPoint, { strict: false }) ||
+      !isAddressEqual(entryPoint, entryPoint06Address)
+    )
+      throw new HttpError(400, "only EntryPoint v0.6 is supported");
+    if (
+      method.startsWith("pm_") &&
+      !(isHex(chainId) && Number(chainId) === config.chainId)
+    )
+      throw new HttpError(400, "wrong chain id");
+    if (typeof op !== "object" || op === null)
+      throw new HttpError(400, "invalid user operation");
+    const { sender, initCode, callData } = op as Record<string, unknown>;
+    if (
+      typeof sender !== "string" ||
+      !isAddress(sender, { strict: false }) ||
+      !isAddressEqual(sender, player)
+    )
+      throw new HttpError(403, "user operations must come from your account");
+    // a sponsored deployment must be the account the client creates, not any contract at that address
+    if (
+      !isHex(initCode) ||
+      (initCode !== "0x" && !initCode.toLowerCase().startsWith(ACCOUNT_FACTORY))
+    )
+      throw new HttpError(403, "unsupported account factory");
+    if (!isHex(callData)) throw new HttpError(400, "invalid callData");
+    let calls: readonly { target: Address; value: bigint; data: Hex }[];
+    try {
+      const decoded = decodeFunctionData({ abi: accountAbi, data: callData });
+      calls =
+        decoded.functionName === "execute"
+          ? [
+              {
+                target: decoded.args[0],
+                value: decoded.args[1],
+                data: decoded.args[2],
+              },
+            ]
+          : decoded.args[0];
+    } catch {
+      throw new HttpError(403, "only game calls are sponsored");
+    }
+    if (calls.length === 0)
+      throw new HttpError(403, "only game calls are sponsored");
+    let createsCharacter = false;
+    for (const call of calls) {
+      const key = `${isAddressEqual(call.target, player) ? "account" : call.target.toLowerCase()}:${call.data.slice(0, 10).toLowerCase()}`;
+      if (call.value !== 0n || !sponsoredCalls.has(key))
+        throw new HttpError(403, "only game calls are sponsored");
+      if (key === createCharacterCall) createsCharacter = true;
+    }
+    return createsCharacter;
+  }
+
+  /** Adds one to a daily count unless it is at max; false when it is. */
+  async function countUp(identity: string, day: number, max: number) {
+    const { rows } = await db.query(
+      `INSERT INTO sponsorship (identity, day, count) VALUES ($1, $2, 1)
+       ON CONFLICT (identity, day) DO UPDATE SET count = sponsorship.count + 1
+       WHERE sponsorship.count < $3
+       RETURNING count`,
+      [identity, day, max],
+    );
+    return rows.length > 0;
+  }
+
+  /** Counts one Sponsored transaction against the Player's and the world's daily limits. */
+  async function sponsor(player: Address) {
+    const day = Math.floor(deps.now() / DAY_MS);
+    const identity = player.toLowerCase();
+    if (
+      !(await countUp(identity, day, SPONSORED_TRANSACTIONS_PER_PLAYER_PER_DAY))
+    )
+      throw new HttpError(
+        429,
+        `sponsored transaction limit reached (${SPONSORED_TRANSACTIONS_PER_PLAYER_PER_DAY} per day)`,
+      );
+    if (!(await countUp("*", day, SPONSORED_TRANSACTIONS_PER_DAY))) {
+      // the world's limit refused it: give the Player's count back
+      await db.query(
+        "UPDATE sponsorship SET count = count - 1 WHERE identity = $1 AND day = $2",
+        [identity, day],
+      );
+      if (budgetLoggedDay !== day)
+        deps.log(
+          `daily sponsorship budget (${SPONSORED_TRANSACTIONS_PER_DAY}) used up`,
+        );
+      budgetLoggedDay = day;
+      throw new HttpError(429, "the sponsorship budget for today is used up");
+    }
+  }
+
+  // JSON-RPC proxy to the bundler and paymaster, whose URL holds the API key (never sent to the client)
+  app.post("/aa", async (c) => {
+    const bundler = deps.bundler;
+    if (!bundler) throw new HttpError(503, "sponsorship is not configured");
+    const player = c.get("address");
+    if (!aaLimit(player.toLowerCase(), deps.now()))
+      throw new HttpError(429, "too many requests");
+    const body = await jsonBody(c.req);
+    const { method, params } = body;
+    if (typeof method !== "string" || !AA_METHODS.has(method))
+      throw new HttpError(400, "method not allowed");
+    if (!Array.isArray(params))
+      throw new HttpError(400, "params must be an array");
+    if (USER_OPERATION_METHODS.has(method)) {
+      const createsCharacter = checkUserOperation(player, method, params);
+      // createCharacter() reverts for a second Character; never pay for that
+      if (
+        createsCharacter &&
+        (await chainRead(() => chain.hasCharacter(player)))
+      )
+        throw new HttpError(409, "you already have a Character");
+    }
+    if (method === "pm_getPaymasterData") await sponsor(player);
+    let response: unknown;
+    try {
+      response = await bundler({
+        jsonrpc: "2.0",
+        id: body.id ?? null,
+        method,
+        params,
+      });
+    } catch (err) {
+      deps.log(`bundler call failed: ${logSafe(err)}`);
+      throw new HttpError(502, "bundler unavailable");
+    }
+    // ERC-7677: a stub marked final is used as is, so it is the sponsorship
+    if (
+      method === "pm_getPaymasterStubData" &&
+      (response as { result?: { isFinal?: unknown } } | null)?.result
+        ?.isFinal === true
+    )
+      await sponsor(player);
+    return c.json(response as object);
   });
 
   // --- Reports and moderation ---
