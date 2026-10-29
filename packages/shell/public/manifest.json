@@ -1,0 +1,8 @@
+{
+  "name": "linked-realms",
+  "short_name": "linked-realms",
+  "start_url": "/",
+  "display": "standalone",
+  "background_color": "#15161a",
+  "theme_color": "#23252c"
+}
