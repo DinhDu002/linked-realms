@@ -12,7 +12,7 @@
   "scripts": {
     "build": "cargo build -p linked-realms-core --features wasm --target wasm32-unknown-unknown --profile wasm && wasm-bindgen --target web --out-dir pkg ../../target/wasm32-unknown-unknown/wasm/linked_realms_core.wasm",
     "typecheck": "tsc",
-    "test": "vitest run"
+    "test": "vitest run --fsModuleCachePath node_modules/.vitest-cache"
   },
   "devDependencies": {
     "@types/node": "26.6.5",

@@ -11,7 +11,7 @@
     "dev": "node --watch src/main.ts",
     "start": "node src/main.ts",
     "typecheck": "tsc",
-    "test": "vitest run",
+    "test": "vitest run --fsModuleCachePath node_modules/.vitest-cache",
     "load-host": "node scripts/load-host.ts"
   },
   "dependencies": {
