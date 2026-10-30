@@ -75,6 +75,55 @@ impl U256 {
             _ => U256::MAX,
         }
     }
+
+    fn wrapping_sub(self, other: U256) -> U256 {
+        let mut difference = [0u64; 4];
+        let mut borrow = false;
+        for i in (0..4).rev() {
+            let (d, b1) = self.0[i].overflowing_sub(other.0[i]);
+            let (d, b2) = d.overflowing_sub(u64::from(borrow));
+            difference[i] = d;
+            borrow = b1 || b2;
+        }
+        U256(difference)
+    }
+}
+
+impl std::ops::Div for U256 {
+    type Output = U256;
+
+    /// `floor(self / div)`, one bit at a time. Panics if `div` is 0.
+    fn div(self, div: U256) -> U256 {
+        assert!(div != U256::ZERO, "division by zero");
+        let (mut quotient, mut rest) = (U256::ZERO, U256::ZERO);
+        for i in 0..256 {
+            // `rest` stays below `div`, so doubling it passes 2^256 only for a `div` above 2^255,
+            // and is then above `div` too: the subtraction below wraps back into range.
+            let carry = rest.0[0] >> 63;
+            let next_bit = (self.0[i / 64] >> (63 - i % 64)) & 1;
+            for j in 0..4 {
+                let low = if j == 3 {
+                    next_bit
+                } else {
+                    rest.0[j + 1] >> 63
+                };
+                rest.0[j] = rest.0[j] << 1 | low;
+            }
+            if carry == 1 || rest >= div {
+                rest = rest.wrapping_sub(div);
+                quotient.0[i / 64] |= 1 << (63 - i % 64);
+            }
+        }
+        quotient
+    }
+}
+
+impl std::ops::Not for U256 {
+    type Output = U256;
+
+    fn not(self) -> U256 {
+        U256(self.0.map(|limb| !limb))
+    }
 }
 
 #[cfg(test)]
@@ -175,5 +224,45 @@ mod tests {
             U256([1 << 63, 0, 0, 2])
         );
         assert_eq!(U256::MAX.mul_div(u64::MAX, 1), U256::MAX);
+    }
+
+    #[test]
+    fn div_matches_u128() {
+        let values = [
+            0u128,
+            1,
+            2,
+            3,
+            60,
+            1 << 63,
+            u64::MAX.into(),
+            1 << 100,
+            u128::MAX,
+        ];
+        for &v in &values {
+            for &d in &values[1..] {
+                assert_eq!(small(v) / small(d), small(v / d), "{v} / {d}");
+            }
+        }
+    }
+
+    #[test]
+    fn div_past_128_bits() {
+        assert_eq!(U256::MAX / U256::ONE, U256::MAX);
+        assert_eq!(U256::MAX / U256::MAX, U256::ONE);
+        assert_eq!(U256::ones(255) / U256::MAX, U256::ZERO);
+        // A divisor above 2^255, where doubling the rest passes 2^256.
+        let big = U256([1 << 63, 0, 0, 1]);
+        assert_eq!(U256::MAX / big, U256::ONE);
+        // (2^256 - 1) / (2^128 - 1) = 2^128 + 1.
+        assert_eq!(U256::MAX / U256::ones(128), U256([0, 1, 0, 1]));
+        // (2^240 - 1) / (2^16 - 1) = 2^224 + 2^208 + ... + 1, a 1 every 16 bits.
+        let every_16 = 0x0001_0001_0001_0001;
+        assert_eq!(
+            U256::ones(240) / U256::ones(16),
+            U256([every_16 >> 16, every_16, every_16, every_16])
+        );
+        assert_eq!(!U256::ZERO, U256::MAX);
+        assert_eq!(!U256::ones(240), U256([0xffff << 48, 0, 0, 0]));
     }
 }
