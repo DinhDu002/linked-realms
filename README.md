@@ -1,13 +1,13 @@
 # linked-realms
 
-A game made of many Lands. Each player hosts their own Land, and the Lands join into one shared world through the Hub, which only connects Lands and lets Characters travel between them. Gold is mined by Proof of Work on the game's own chain, like Bitcoin. Players' keys stay in the Shell, and each Land makes its own rules.
+A game made of many Lands. Each player hosts their own Land, and the Lands join into one shared world through the Hub, which only connects Lands and lets Characters travel between them. Gold is mined by Proof of Work on LR, the project's own chain, like Bitcoin. Players' keys stay in the Shell, and each Land makes its own rules.
 
-> **Status:** Phase 2, step 2B: the world without the chain. The chain, the Node and the Mine come in step 2C. **Test network only:** nothing in this project has real value.
+> **Status:** Phase 2, step 2B: the world without the chain. The chain, the Node and the Mine come in step 2C. **No network runs yet:** a test network serves step 2C's acceptance test, then the main network starts and is never reset (P7).
 
 ## Stage 1
 
 - Each Character owns at most one Land (64×64 tiles). The Hub gives every Land a cell, and Characters walk into neighbouring Lands through Gates.
-- Gold is mined by Proof of Work on the game's own chain. Every Node checks every Block, and Gold is created only on a fixed schedule, with no premine.
+- Gold is mined by Proof of Work on LR, the project's own chain. Every Node checks every Block, and Gold is created only on a fixed schedule, with no premine.
 - A Player's key never leaves the Shell. A Land's UI runs in an isolated frame, and the Shell shows the Player every signature a Land asks for.
 
 ## Play

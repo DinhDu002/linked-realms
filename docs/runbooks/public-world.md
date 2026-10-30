@@ -1,6 +1,6 @@
 # Running a public world
 
-One server runs the Hub, the relay, the Shell and the Hub's PostgreSQL behind Caddy, from `deploy/`. Land owners run their Map servers on their own machines with [docs/self-hosting.md](../self-hosting.md). Test network only (P7).
+One server runs the Hub, the relay, the Shell and the Hub's PostgreSQL behind Caddy, from `deploy/`. Land owners run their Map servers on their own machines with [docs/self-hosting.md](../self-hosting.md). No chain runs yet: it comes in step 2C, and its main network after it (P7).
 
 ## 1. Names
 

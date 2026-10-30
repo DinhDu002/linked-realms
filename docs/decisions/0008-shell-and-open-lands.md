@@ -35,7 +35,7 @@ The project owner wants every Land to be free to make its own rules and its own 
    - Other Lands write text that the model reads, so prompt injection is the expected attack.
    - The model only proposes actions. The NPC runner on the owner's server checks each one against limits the owner sets, such as Gold per day and allowed Lands, and only then signs.
    - Earnings are paid to the owner directly, so an NPC holds little.
-7. **NPCs say they are AI.** The reference NPC always sets the "driven by AI" field at arrival, and Lands show it. Article 50(1) of the EU AI Act has applied since 2 August 2026 and requires people to be told when they are interacting with an AI system. A legal review is in Phase 3.
+7. **NPCs say they are AI.** The reference NPC always sets the "driven by AI" field at arrival, and Lands show it. Article 50(1) of the EU AI Act has applied since 2 August 2026 and requires people to be told when they are interacting with an AI system. The legal review once planned for Phase 3 was dropped on 2026-10-30 (ADR 0015).
 
 ## Consequences
 
