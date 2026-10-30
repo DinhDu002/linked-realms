@@ -1,8 +1,9 @@
 # @linked-realms/core
 
-The WebAssembly build of `crates/core`: ML-DSA-44 keys, signatures and addresses (`docs/protocols/identity.md`, ADR 0009). The Shell, `hub-api`, the relay and the reference Map server all use it, so there is one implementation (P9).
+The WebAssembly build of `crates/core`: ML-DSA-44 keys, signatures and addresses (`docs/protocols/identity.md`, ADR 0009), and transactions and amounts (`docs/protocols/transactions.md`). The Shell, `hub-api`, the relay and the reference Map server all use it, so there is one implementation (P9).
 
 - `pnpm --filter @linked-realms/core build` runs `cargo build --features wasm --target wasm32-unknown-unknown --profile wasm`, then `wasm-bindgen --target web` into `pkg/` (not committed). Turbo runs it before any `typecheck` or `test` that needs it. It needs the Rust toolchain from `rust-toolchain.toml` and `wasm-bindgen-cli` 0.2.129 (`cargo install wasm-bindgen-cli --version 0.2.129 --locked`).
 - In Node, importing the package loads the module synchronously. In browsers, await `ready` first.
 - `sign` takes `rnd`, 32 fresh random bytes from the caller (`crypto.getRandomValues`), because `wasm32-unknown-unknown` has no random source. Call `free()` on a `Key` when done, or declare it with `using`, so its private key is wiped.
-- Size on 2026-10-29: `linked_realms_core_bg.wasm` is 190 KB, 68 KB with gzip and 55 KB with Brotli.
+- Transactions: `Key.signTransfer` and `Key.signRotation` build and sign one for a network id (`1` the test network, `2` the dev network; any other is refused) and return its bytes; `transactionId` gives the id of any transaction's bytes on a network. Nonces, fees and amounts are base units, as `bigint`. They refuse what no Node would take on its format (a memo over 80 bytes, a new key of the wrong length); the account rules (nonce, balance, the first transaction's key) are the Node's. `parseAmount` and `formatAmount` turn GOLD as typed into base units and back; `addressToBytes` and `addressFromBytes` give an address's 34-byte payload. `chain.test.ts` builds the vectors' transactions again byte for byte.
+- Size on 2026-10-31: `linked_realms_core_bg.wasm` is 207 KB, 76 KB with gzip and 62 KB with Brotli (190, 68 and 55 KB on 2026-10-29, before the transaction API).

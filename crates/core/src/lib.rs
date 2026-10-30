@@ -14,6 +14,7 @@ use sha2::Sha512;
 use sha3::{Digest, Keccak256};
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod amount;
 pub mod block;
 pub mod checkpoint;
 pub mod codec;
@@ -76,6 +77,8 @@ pub enum Error {
     KeyMismatch,
     /// A sum passes `u64::MAX`.
     Overflow,
+    /// Not GOLD with at most 8 decimals (`amount::parse_amount`).
+    BadAmount,
     InsufficientBalance,
     BadSignature,
     /// A state snapshot's keys are not in ascending order, each once.
@@ -128,6 +131,7 @@ impl fmt::Display for Error {
             Error::RepeatedKey => "only the first transaction carries the public key",
             Error::KeyMismatch => "the public key does not match the sender",
             Error::Overflow => "amount too large",
+            Error::BadAmount => "not an amount in GOLD with at most 8 decimals",
             Error::InsufficientBalance => "not enough Gold",
             Error::BadSignature => "bad signature",
             Error::SnapshotOrder => "state snapshot out of order",

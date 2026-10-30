@@ -32,6 +32,13 @@ Sizes for scheme 1: a transfer is 2,517 bytes plus the memo, and 1,312 more on t
 - **Signature:** ML-DSA over the signed bytes, with the context `linked-realms/tx/v1`, by the key the sender's account holds, or the key in the transaction on the first one. A signature made for one network does not verify on another.
 - **Id:** `keccak256(signed bytes)`. A new signature of the same transaction keeps its id.
 
+## Amounts as people write them
+
+Transactions hold base units; the Shell and the Land UI read and show GOLD (`crates/core/src/amount.rs`, `parseAmount` and `formatAmount` in `@linked-realms/core`). Nodes do not use these rules.
+
+- **Read:** digits, then optionally a dot and 1 to 8 digits. Nothing else: no sign, space, comma or exponent, and `1.` and `.5` are refused. Leading zeros are allowed. A value past `2^64 - 1` base units is `Overflow`; any other text is `BadAmount`.
+- **Shown:** the whole GOLD, then, if there is a fraction, a dot and the fraction without trailing zeros: `150000000` is `1.5`, `1` is `0.00000001`, `100000000` is `1`. What is shown reads back to the same base units.
+
 ## Accounts
 
 An account belongs to an address: a balance, a nonce (the number of transactions the address has sent) and, from its first transaction on, a public key. An address has no account until it receives Gold. Accounts are never removed: an emptied account keeps its nonce, so its old transactions cannot be replayed.

@@ -3,7 +3,15 @@
 
 use wasm_bindgen::prelude::*;
 
-use crate::{Address, SigningKey};
+use crate::amount::{format_amount, parse_amount};
+use crate::params::{ChainParams, by_network_id};
+use crate::state::PublicKey;
+use crate::tx::{Kind, MAX_MEMO_LEN, Tx};
+use crate::{Address, Error, SCHEME_ML_DSA_44, SigningKey};
+
+fn params(network_id: u32) -> Result<&'static ChainParams, JsError> {
+    by_network_id(network_id).ok_or_else(|| JsError::new("unknown network id"))
+}
 
 fn array<const N: usize>(bytes: &[u8]) -> Result<&[u8; N], JsError> {
     bytes
@@ -46,6 +54,117 @@ impl Key {
             .sign(context.as_bytes(), message, array(rnd)?)?
             .to_vec())
     }
+
+    /// A transfer from `sender`, signed for the network `networkId`, as its bytes (docs/protocols/
+    /// transactions.md). `nonce`, `fee` and `amount` are in base units. `withPublicKey` only on the
+    /// sender's first transaction.
+    #[wasm_bindgen(js_name = signTransfer)]
+    #[allow(clippy::too_many_arguments)] // wasm-bindgen takes no options object without serde.
+    pub fn sign_transfer(
+        &self,
+        network_id: u32,
+        sender: &str,
+        nonce: u64,
+        fee: u64,
+        to: &str,
+        amount: u64,
+        memo: &[u8],
+        with_public_key: bool,
+        rnd: &[u8],
+    ) -> Result<Vec<u8>, JsError> {
+        if memo.len() > MAX_MEMO_LEN {
+            return Err(Error::MemoTooLong.into());
+        }
+        let kind = Kind::Transfer {
+            to: to.parse()?,
+            amount,
+            memo: memo.to_vec(),
+        };
+        self.sign_tx(network_id, sender, nonce, fee, kind, with_public_key, rnd)
+    }
+
+    /// A rotation of `sender`'s key to `newPublicKey`, signed for the network `networkId`, as its
+    /// bytes. As `signTransfer` otherwise.
+    #[wasm_bindgen(js_name = signRotation)]
+    #[allow(clippy::too_many_arguments)] // wasm-bindgen takes no options object without serde.
+    pub fn sign_rotation(
+        &self,
+        network_id: u32,
+        sender: &str,
+        nonce: u64,
+        fee: u64,
+        new_scheme: u8,
+        new_public_key: &[u8],
+        with_public_key: bool,
+        rnd: &[u8],
+    ) -> Result<Vec<u8>, JsError> {
+        let kind = Kind::Rotation {
+            new_key: PublicKey {
+                scheme: new_scheme,
+                bytes: new_public_key.to_vec(),
+            },
+        };
+        self.sign_tx(network_id, sender, nonce, fee, kind, with_public_key, rnd)
+    }
+}
+
+impl Key {
+    #[allow(clippy::too_many_arguments)] // The arguments of the two calls above.
+    fn sign_tx(
+        &self,
+        network_id: u32,
+        sender: &str,
+        nonce: u64,
+        fee: u64,
+        kind: Kind,
+        with_public_key: bool,
+        rnd: &[u8],
+    ) -> Result<Vec<u8>, JsError> {
+        let mut tx = Tx {
+            scheme: SCHEME_ML_DSA_44,
+            sender: sender.parse()?,
+            nonce,
+            fee,
+            kind,
+            public_key: with_public_key.then(|| self.0.public_key().to_vec()),
+            signature: Vec::new(),
+        };
+        tx.sign(params(network_id)?, &self.0, array(rnd)?)?;
+        let bytes = tx.to_bytes();
+        // The format rules every Node applies, such as the length of a rotation's new key.
+        Tx::from_bytes(&bytes)?;
+        Ok(bytes)
+    }
+}
+
+/// The id of the transaction `bytes` on the network `networkId`. Throws if they are not a
+/// transaction.
+#[wasm_bindgen(js_name = transactionId)]
+pub fn transaction_id(network_id: u32, bytes: &[u8]) -> Result<Vec<u8>, JsError> {
+    Ok(Tx::from_bytes(bytes)?.id(params(network_id)?).to_vec())
+}
+
+/// Base units from GOLD as typed: digits, then optionally a dot and 1 to 8 digits.
+#[wasm_bindgen(js_name = parseAmount)]
+pub fn parse_amount_js(text: &str) -> Result<u64, JsError> {
+    Ok(parse_amount(text)?)
+}
+
+/// Base units as GOLD, without trailing zeros.
+#[wasm_bindgen(js_name = formatAmount)]
+pub fn format_amount_js(units: u64) -> String {
+    format_amount(units)
+}
+
+/// The 34-byte payload of `address`.
+#[wasm_bindgen(js_name = addressToBytes)]
+pub fn address_to_bytes(address: &str) -> Result<Vec<u8>, JsError> {
+    Ok(address.parse::<Address>()?.to_bytes().to_vec())
+}
+
+#[wasm_bindgen(js_name = addressFromBytes)]
+pub fn address_from_bytes(bytes: &[u8]) -> Result<String, JsError> {
+    Ok(Address::from_bytes(array(bytes)?)?.to_string())
 }
 
 #[wasm_bindgen(js_name = wordsFromEntropy)]

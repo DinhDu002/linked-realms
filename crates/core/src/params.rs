@@ -83,6 +83,13 @@ pub const DEV: ChainParams = ChainParams {
     checkpoint_signer_key: public_key(include_str!("../keys/dev-checkpoint.hex")),
 };
 
+/// The network with the id `network_id`, if this build knows it.
+pub fn by_network_id(network_id: u32) -> Option<&'static ChainParams> {
+    [&TESTNET, &DEV]
+        .into_iter()
+        .find(|params| params.network_id == network_id)
+}
+
 /// The published seed `xi` of the dev network's Checkpoint signer key: the network's id, repeated.
 pub const DEV_CHECKPOINT_SEED: [u8; SEED_LEN] = [2; SEED_LEN];
 
@@ -124,6 +131,14 @@ mod tests {
     fn each_network_has_its_own_checkpoint_key_and_genesis() {
         assert_ne!(TESTNET.checkpoint_signer_key, DEV.checkpoint_signer_key);
         assert_ne!(TESTNET.genesis().id(), DEV.genesis().id());
+    }
+
+    #[test]
+    fn a_network_is_found_by_its_id() {
+        assert_eq!(by_network_id(1), Some(&TESTNET));
+        assert_eq!(by_network_id(2), Some(&DEV));
+        assert_eq!(by_network_id(0), None);
+        assert_eq!(by_network_id(3), None);
     }
 
     #[test]
