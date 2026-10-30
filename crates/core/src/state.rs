@@ -49,6 +49,12 @@ impl Account {
     }
 }
 
+/// An account's key in the state tree (`smt`): `keccak256(address bytes)`. Its value is
+/// `Account::hashed_bytes`.
+pub fn tree_key(address: &Address) -> [u8; 32] {
+    keccak256(&[&address.to_bytes()])
+}
+
 /// Reading accounts: the Node implements it on its database, tests on a map.
 pub trait StateView {
     fn account(&self, address: &Address) -> Option<Account>;

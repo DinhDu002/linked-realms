@@ -1,6 +1,6 @@
 # Transactions and accounts
 
-Status: mandatory (ADR 0006, ADR 0011). Every Node checks transactions exactly this way, and every Shell builds them this way. The reference implementation is `crates/core` (`tx.rs`, `state.rs`); the vectors are `crates/core/test-vectors/chain.json` (`transactions`).
+Status: mandatory (ADR 0006, ADR 0011). Every Node checks transactions exactly this way, and every Shell builds them this way. The reference implementation is `crates/core` (`tx.rs`, `state.rs`, `smt.rs`); the vectors are `crates/core/test-vectors/chain.json` (`transactions`, `stateTree`, `stateSnapshots`).
 
 All integers are big-endian and fixed width. An address is its 34-byte payload (`docs/protocols/identity.md`). Amounts and fees are in base units: 1 GOLD is 100,000,000.
 
@@ -75,3 +75,27 @@ All of these happen together, or none:
 - The sender's balance falls by amount plus fee, its nonce rises by 1, and its key becomes the transaction's key on the first transaction, or the new key after a rotation. The address never changes.
 - A transfer adds the amount to the recipient's balance, making the account if there is none. A transfer to oneself costs only the fee.
 - The fee goes to the reward address of the Block that holds the transaction, after all of the Block's transactions.
+
+## State root
+
+The state root is the root of a sparse Merkle tree of depth 256 that holds every account. All hashes are keccak256.
+
+- **Key:** `keccak256(address)`, over the 34-byte address. Bit `i` of a key is `(key[i / 8] >> (7 - i % 8)) & 1`. A node at depth `d` (the root is at depth 0) has its left child on bit `d` = 0 and its right child on 1, so each account's leaf sits at depth 256 on its key's path.
+- **Leaf:** `keccak256(0x00 ‖ key ‖ hashed form)`.
+- **Node:** `keccak256(0x01 ‖ left ‖ right)`.
+- **Empty subtrees:** `E[0]` is 32 zero bytes; `E[h + 1] = keccak256(0x01 ‖ E[h] ‖ E[h])`. A subtree of height `h` with no account hashes to `E[h]`.
+- **Root:** the node at depth 0. With no account it is `E[256]`; the genesis state has no account, so that is the genesis state root. The root depends only on the accounts, never on the order in which they changed.
+- **One account** (the fold rule): start with `c` = its leaf. For `j` from 0 to 255, with `b` = bit `255 - j` of its key, set `c = keccak256(0x01 ‖ c ‖ E[j])` if `b` is 0, else `c = keccak256(0x01 ‖ E[j] ‖ c)`. Then `c` is the root of a tree that holds only this account.
+
+How a Node stores the tree is its own choice; only the hashes above count. `crates/core` stores one entry for each node over two or more accounts and one for each account alone in its subtree, about 2.4 entries per account, instead of 256 nodes per account.
+
+**Checking a state snapshot.** A state snapshot is every account at a Checkpoint's height, in ascending key order (keys compared as unsigned bytes), each once. The receiving Node builds the tree from it and compares the root with the state root in the Checkpoint's header:
+
+| Error | When |
+|---|---|
+| `SnapshotOrder` | a key is not greater than the one before it (a repeated or out-of-order account) |
+| `WrongStateRoot` | the root differs: an account is changed, missing or extra |
+
+Keys are checked as the accounts are read, so a snapshot that is out of order gives `SnapshotOrder` even if its root would also differ.
+
+How a Node sends and receives a state snapshot comes with pruning (plan item 14).
