@@ -2,6 +2,7 @@
 //! one `redb` write transaction, so a Block is applied, or a branch is left, whole or not at all.
 
 use linked_realms_core::block::{Block, ChainView, HEADER_LEN, Header};
+use linked_realms_core::checkpoint::Checkpoint;
 use linked_realms_core::codec::Reader;
 use linked_realms_core::smt::{Node, SmtStore};
 use linked_realms_core::state::{Account, PublicKey, State, StateView};
@@ -334,6 +335,18 @@ impl<'t> Tables<'t> {
 
     pub fn put_checkpoint(&mut self, height: u64, record: &[u8]) {
         db(self.checkpoints.insert(height, record));
+    }
+
+    /// The highest Checkpoint taken.
+    pub fn latest_checkpoint(&self) -> Option<Checkpoint> {
+        db(self.checkpoints.last()).map(|(height, record)| {
+            let (id, signature) = record.value().split_at(32);
+            Checkpoint {
+                height: height.value(),
+                block_id: id.try_into().expect("32 bytes"),
+                signature: signature.try_into().expect("a signature"),
+            }
+        })
     }
 
     /// The height and Block id of the highest Checkpoint at or below `height`.

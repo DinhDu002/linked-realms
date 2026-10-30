@@ -80,6 +80,59 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
             .header)
     }
 
+    /// Ids of the best chain, from the tip down: the last 10, then steps that double, then the
+    /// genesis. Another Node finds where its chain and this one part with them.
+    pub fn locator(&self) -> Result<Vec<[u8; 32]>, Error> {
+        self.read(|t| {
+            let tip = t.header(&t.tip()).expect("a stored tip").header.height;
+            let (mut ids, mut height, mut step) = (Vec::new(), tip, 1);
+            loop {
+                ids.push(t.best(height).expect("a Block at every height"));
+                if height == 0 {
+                    return Ok(ids);
+                }
+                if ids.len() >= 10 {
+                    step *= 2;
+                }
+                height = height.saturating_sub(step);
+            }
+        })
+    }
+
+    /// Up to `max` headers of the best chain after the first id of `locator` it holds, or after
+    /// the genesis if it holds none.
+    pub fn headers_after(&self, locator: &[[u8; 32]], max: u64) -> Result<Vec<Header>, Error> {
+        self.read(|t| {
+            let from = locator
+                .iter()
+                .filter_map(|id| Some((id, t.header(id)?.header.height)))
+                .find(|(id, height)| t.on_best_chain(id, *height))
+                .map_or(0, |(_, height)| height);
+            let tip = t.header(&t.tip()).expect("a stored tip").header.height;
+            Ok((from + 1..=tip.min(from.saturating_add(max)))
+                .map(|height| {
+                    let id = t.best(height).expect("a Block at every height");
+                    t.header(&id).expect("a stored header").header
+                })
+                .collect())
+        })
+    }
+
+    /// The stored Block `id`, if this Node has its body.
+    pub fn block(&self, id: &[u8; 32]) -> Result<Option<Block>, Error> {
+        self.read(|t| Ok(t.block(id)))
+    }
+
+    /// The ids of `ids` whose Block this Node does not have the body of.
+    pub fn missing(&self, ids: &[[u8; 32]]) -> Result<Vec<[u8; 32]>, Error> {
+        self.read(|t| Ok(ids.iter().filter(|id| !t.has_block(id)).copied().collect()))
+    }
+
+    /// The highest Checkpoint taken.
+    pub fn latest_checkpoint(&self) -> Result<Option<Checkpoint>, Error> {
+        self.read(|t| Ok(t.latest_checkpoint()))
+    }
+
     /// `address`'s account at the best chain's tip.
     pub fn account(&self, address: &Address) -> Result<Option<Account>, Error> {
         let txn = self.db.begin_read()?;

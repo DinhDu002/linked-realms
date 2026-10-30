@@ -4,12 +4,12 @@ use linked_realms_core::{SCHEME_ML_DSA_44, SigningKey};
 use super::*;
 use crate::chain::tests::{Builder, File, PARAMS, Test, balance, nobody, submit_all};
 
-fn key(seed: u8) -> SigningKey {
+pub(crate) fn key(seed: u8) -> SigningKey {
     SigningKey::from_seed(&[seed; 32])
 }
 
 /// A transfer paying `rate` base units per byte, its key included with nonce 0.
-fn pay(from: &SigningKey, nonce: u64, to: Address, amount: u64, rate: u64) -> Tx {
+pub(crate) fn pay(from: &SigningKey, nonce: u64, to: Address, amount: u64, rate: u64) -> Tx {
     pay_with(from, nonce, to, amount, rate, b"")
 }
 

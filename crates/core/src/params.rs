@@ -46,6 +46,12 @@ impl ChainParams {
             nonce: 0,
         }
     }
+
+    /// The first bytes of every P2P frame: the start of the genesis id, so a reset, which takes
+    /// a new genesis, also takes a new magic.
+    pub fn magic(&self) -> [u8; 4] {
+        self.genesis().id()[..4].try_into().expect("4 bytes")
+    }
 }
 
 /// `2^240 - 1`: about 65,536 hashes a Block at the easiest.
@@ -131,6 +137,7 @@ mod tests {
     fn each_network_has_its_own_checkpoint_key_and_genesis() {
         assert_ne!(TESTNET.checkpoint_signer_key, DEV.checkpoint_signer_key);
         assert_ne!(TESTNET.genesis().id(), DEV.genesis().id());
+        assert_ne!(TESTNET.magic(), DEV.magic());
     }
 
     #[test]
