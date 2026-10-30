@@ -386,7 +386,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 - [ ] Phase 2 – Own chain, open source and testing
   - [x] 2A – Self-hosting, wallet and dashboard (EVM design)
   - [ ] 2B – World without the chain
-  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; nothing built yet)
+  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; item 1 of 27 built)
   - [ ] 2D – Economy in the reference Land kit
   - [ ] 2E – NPCs
   - [ ] 2F – Audit before Phase 3
@@ -395,6 +395,8 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 ### Log
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
+
+- 2026-10-30: Step 2C item 1 on branch `phase-2/2c-1-core`: in `crates/core`, `codec::Reader` (big-endian fixed-width fields, refusing truncated and trailing bytes), `Address::to_bytes` and `Address::from_bytes` (the 34-byte payload), `params::ChainParams` with `TESTNET` (1) and `DEV` (2), `issuance::reward` (genesis at height 0 pays nothing, halvings from height 1, exactly 19,687,500 GOLD before the tail) and `merkle::tx_root` (an odd node moves up unchanged). New vectors in `crates/core/test-vectors/chain.json`; the `tx_root` and issuance values were also recomputed once by hand in JavaScript (`@noble/hashes`, a scratch script not kept in the repo), and item 10's Vitest makes that check permanent. ADR 0011 records the encodings, the network id in signed bytes, the transaction id and the issuance.
 
 - 2026-10-30: The step 2C plan is approved. The project owner answered its 22 questions (recorded in the plan, "Answers of the project owner"). They chose the recommended option except for four: the state root is a sparse Merkle tree from the start (a new item 3, so 27 items); the seed node, Public node and archive run as a separate compose project on the carthings server, with the Checkpoint signer on a separate machine; "No Land, no Mine": one Mine per Land, mining for the Land owner, with no standalone Mine (section 5.3, the Mine item in 2C, `CONTEXT.md` and ADR 0006 point 11 are updated; ADR 0014 will record it); and no minimum for a transfer to a new address. The work keeps the order of section 6, 2C, one stacked PR per item. `CONTEXT.md` gains Account, the chain's record for one address. A review after the answers found that the state-growth estimate left out the tree's own entries: at worst about 140 to 200 MB a day, not 57 MB; the plan says so and the figure goes back to the project owner.
 
