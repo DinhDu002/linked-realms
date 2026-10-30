@@ -22,11 +22,13 @@ pub fn next_target(
     let mut parent = U256::ZERO;
     for i in 1..=n {
         let (timestamp, target) = header_at(start + i);
-        // Timestamps may go backwards; i128 holds any difference of two u64.
-        let solvetime = (i128::from(timestamp) - i128::from(previous)).clamp(1, i128::from(6 * t));
-        weighted += solvetime as u64 * i;
+        // A timestamp at or below the one counted before it counts as 1 second after it, and the
+        // next solvetime starts from there: time taken from one Block is given back to the next,
+        // so timestamps out of order cannot add time to the window (zawy12's LWMA-1).
+        let counted = timestamp.max(previous.saturating_add(1));
+        weighted += (counted - previous).min(6 * t) * i;
         sum = sum.saturating_add(target);
-        (previous, parent) = (timestamp, target);
+        (previous, parent) = (counted, target);
     }
     // Solvetimes of exactly `t` give `weighted == k`, so equal Targets stay the same.
     let k = n * (n + 1) / 2 * t;
@@ -118,5 +120,19 @@ mod tests {
         // weighted = k + 300 * i for the slow Block at window position i.
         assert_eq!(oldest, X.mul_div(109_800 + 300, 109_800));
         assert_eq!(newest, X.mul_div(109_800 + 300 * 60, 109_800));
+    }
+
+    #[test]
+    fn time_taken_by_a_timestamp_out_of_order_is_given_back() {
+        let p = params(X);
+        // Position 30 is stamped 300 s ahead: its solvetime is 360. Positions 31 to 35 are found
+        // before that timestamp and count 1 s each, and position 36 counts the remaining 55.
+        let ahead = |j: u64| (j * 60 + if j == 70 { 300 } else { 0 }, X);
+        let weighted = 109_800 + 300 * 30 - 59 * (31 + 32 + 33 + 34 + 35) - 5 * 36;
+        assert_eq!(next_target(&p, 101, ahead), X.mul_div(weighted, 109_800));
+        // Stamped 30 s back after each 150: 150, then 1 and 119 by turns, 60 s a Block in all.
+        let back = |j: u64| (j / 2 * 120 + if j % 2 == 1 { 150 } else { 0 }, X);
+        let weighted = 150 + 119 * (900 - 1) + 930;
+        assert_eq!(next_target(&p, 61, back), X.mul_div(weighted, 109_800));
     }
 }

@@ -1350,11 +1350,28 @@ fn generate_retarget() -> Retarget {
             Some(x.mul_div(1, 2)),
         ),
         (
-            "timestamps going backwards: a negative solvetime counts as 1",
+            "timestamps going backwards: one at or below the previous counts 1 s after it, and the next solvetime starts there",
             true,
             1_000,
             window(&|p| if p % 2 == 0 { -30 } else { 150 }, &|_| x),
-            None,
+            Some(x.mul_div(150 + 119 * 899 + 930, 109_800)),
+        ),
+        (
+            "one timestamp 300 s ahead: the Blocks after it count 1 s each until a timestamp passes it",
+            true,
+            1_000,
+            window(
+                &|p| match p {
+                    30 => 360,
+                    31 => -240,
+                    _ => 60,
+                },
+                &|_| x,
+            ),
+            Some(x.mul_div(
+                109_800 + 300 * 30 - 59 * (31 + 32 + 33 + 34 + 35) - 5 * 36,
+                109_800,
+            )),
         ),
         (
             "solvetimes over 6T count as 6T; the Target stops at double the parent's",

@@ -145,21 +145,22 @@ nonce          u64    last 8 bytes, at offset 179
   3. timestamp rule; `target <= max_target`, nonzero, and equal to `next_target(params, ...)`;
   4. Proof of Work (RandomX light mode, an expensive step, so it runs before the transactions to stop CPU abuse by fake Blocks);
   5. `tx_root`; each transaction in order (`check_tx` then apply); the reward credit last; `state_root`.
-- **Timestamp:** core requires `timestamp > median of the last 11` timestamps and `timestamp <= 2^62` (so signed solvetimes cannot overflow). The "not too far ahead of my clock" rule needs a clock, so it is Node policy (default 300 seconds), not core. It applies only to live tips a Node receives, not to Blocks fetched during sync (their timestamps are old and the Checkpoints cover them). The Retarget relies on it: without a future-time limit on live Blocks, a Mine could set far-future timestamps and push the Target easier, limited only by the solvetime clamp.
+- **Timestamp:** core requires `timestamp > median of the last 11` timestamps and `timestamp <= 2^62` (so solvetimes cannot overflow). The "not too far ahead of my clock" rule needs a clock, so it is Node policy (default 300 seconds), not core. It applies to every Block a Node receives, a tip, an ancestor arriving with one, or a Block fetched during sync (old timestamps pass it), and a Block it refuses is not marked invalid, so it is taken once the clock catches up. The Retarget relies on it: a timestamp ahead makes the Blocks after it count 1 second each until it is passed (item 6). Checking only tips would let a Block stamped far ahead in, under a child stamped at the real time, and hold the chain back for the whole lead.
 - **PoW input injection:** core's `validate_block` takes the hasher as a function (`Fn(&[u8], key) -> [u8; 32]`) so core tests run with a fake hash and the WASM build has no RandomX.
 - **RandomX key** (P9: defined in core, tested by vectors): `key_height(h) = 0` for `h < 2112`, else `((h - 64) / 2048) * 2048`; the key is the id of the Block at `key_height` on the chain being checked (the genesis id for height 0). This follows the 2048/64 pattern of Monero's key block, whose exact consensus code I did not read (**UNVERIFIED**; the formula and its edges are fixed by our vectors, not by a citation). At 60 seconds a key lasts about 34 hours and the lag is about 64 minutes, far more than any reorg the Checkpoints allow. Question 4.
 
 ### Retarget (LWMA)
 
-Variant: LWMA after every Block (ADR 0006 decision 6). The exact LWMA-1 text of zawy12 and its recommended window are **UNVERIFIED** (not read); the formula below is my own statement of a linearly weighted moving average, checked only by its sanity property (constant solvetimes of `T` leave the Target unchanged), and is fixed by vectors, not by a citation. A lower Target is harder (CONTEXT.md), so slow Blocks raise the Target.
+Variant: LWMA after every Block (ADR 0006 decision 6). The exact LWMA-1 text of zawy12 and its recommended window are **UNVERIFIED** (not read); the formula below is my own statement of a linearly weighted moving average, checked only by its sanity property (constant solvetimes of `T` leave the Target unchanged), and is fixed by vectors, not by a citation. Item 6 then read LWMA-1 (zawy12/difficulty-algorithms, issues 3 and 30) and took its counted timestamps, below. A lower Target is harder (CONTEXT.md), so slow Blocks raise the Target.
 
 ```
-T = 60, N = 60, MAX_TARGET = 2^240 - 1        (provisional until item 6)
+T = 60, N = 60, MAX_TARGET = 2^240 - 1        (set by item 6)
 for a Block at height h > N, with H_j the header at height j:
     ts_i     = H_(h-N-1+i).timestamp   for i in 0..=N     (N+1 timestamps, H_(h-N-1) .. H_(h-1))
     target_i = H_(h-N-1+i).target      for i in 1..=N     (the N parents, H_(h-N) .. H_(h-1))
 for i in 1..=N (oldest to newest):
-    st_i      = clamp(ts_i - ts_(i-1), 1, 6*T)            (i64 arithmetic; may be negative before the clamp)
+    c_i       = max(ts_i, c_(i-1) + 1), with c_0 = ts_0  (counted timestamps never go backwards)
+    st_i      = min(c_i - c_(i-1), 6*T)                   (at least 1)
     weighted += st_i * i                                  (u64, at most 360 * 1830 < 2^20)
     sum_t    += target_i                                  (u256, at most 60 * 2^240 < 2^246)
 k           = N*(N+1)/2 * T                               (109,800)
@@ -169,7 +170,7 @@ next_target = clamp(next_target, max(parent_target / 2, 1), min(parent_target.sa
 
 - The first computed height is `N + 1`; its window starts at the genesis (`H_0`). For heights 1 to `N` the Target is `INITIAL_TARGET` (pinned; simplest to vector-test).
 - **Arithmetic:** with `MAX_TARGET = 2^240 - 1`, the sum of Targets and `parent_target * 2` fit in `u256`, and `(sum_t / N) * weighted` fits in a 320-bit intermediate. `u256` is a small hand-written module (add, compare, saturating mul by 2, `mul_div` with a `u320` intermediate) with vectors, no new dependency. The alternative is a compact 32-bit Target like Bitcoin's `nBits`. Question 3.
-- `N`, the solvetime clamps and the adjustment clamp are **provisional** until the simulation in item 6 sets them. If they change after the vectors, `chain.json` and the genesis are regenerated (the test network may reset) before ADR 0012 is final.
+- **Set by item 6** (`crates/core/tests/retarget_simulation.rs`): `N = 60`, the adjustment clamp as it was, and solvetimes from counted timestamps. The first statement, `clamp(ts_i - ts_(i-1), 1, 6T)` on the timestamps as written, lost the time the clamp at 1 took from a Block: a Mine with a fifth of the hash rate that stamped its Blocks 300 seconds ahead made Blocks come about every 16 seconds instead of 60. Counted timestamps give that time back to the next Block. `chain.json` was regenerated; no genesis existed yet.
 
 ### Fees and sizes
 
@@ -192,7 +193,7 @@ Generated deterministically like `identity.json` (fixed seeds, `rnd = [0; 32]`, 
 - **State root (SMT):** `E[0]` to `E[3]` and `E[256]` (the empty-tree root); one account (account bytes, leaf hash, every sibling on the path, root); two accounts whose keys differ only in the last bit (255 shared bits), two sharing exactly 100 bits and two differing in the first bit (these give 32-byte keys to `smt` directly, so no address grinding is needed); three accounts inserted in every order give one root; an update (balance and nonce changed, old and new root); a rotated key; an account at balance 0 stays; the internal removal used by undo (insert two, remove one: equals the one-account root byte for byte; accounts are never removed by a rule); a small ledger of accounts built through `apply`.
 - **State snapshot check:** a valid snapshot (accounts in key order) gives the Checkpoint's root; a changed balance, a missing account, an extra account, a duplicate key and a wrong order are each refused.
 - **Issuance:** `reward` at heights 0, 1, 2,100,000, 2,100,001, 4,200,001, 6,300,001, 8,400,001, 8,400,002 and 100,000,000, and the total at the end of era 3.
-- **Retarget:** constant solvetimes keep the Target; all-fast and all-slow windows; solvetimes of 0, negative (timestamps going backwards) and over `6T`; both clamps; the pinned start and height `N + 1` reaching the genesis; overflow cases: all Targets equal to `MAX_TARGET` (sum near `2^246`), a parent at `MAX_TARGET` (the doubled parent passes `MAX_TARGET` and the result is capped), and a case where `(sum_t / N) * weighted` passes 256 bits.
+- **Retarget:** constant solvetimes keep the Target; all-fast and all-slow windows; solvetimes of 0 and over `6T`; timestamps going backwards and one 300 seconds ahead (item 6); both clamps; the pinned start and height `N + 1` reaching the genesis; overflow cases: all Targets equal to `MAX_TARGET` (sum near `2^246`), a parent at `MAX_TARGET` (the doubled parent passes `MAX_TARGET` and the result is capped), and a case where `(sum_t / N) * weighted` passes 256 bits.
 - **Header:** bytes, id, nonce offset, the PoW comparison with a fake hash, the key function at heights 0, 2111, 2112, 4159 and 4160 (keys 0, 0, 2048, 2048, 4096; edges to be fixed in ADR 0012; the formula is **UNVERIFIED** against Monero). Item 5 built all but the key function, which item 5 checks only in a Rust test; its vectors come with ADR 0012 in item 9.
 - **Blocks:** one valid Block and one invalid for each check of `validate_block`: bad `reward_address`, wrong `tx_count`, trailing bytes, genesis with a nonzero `prev_id`, a reward credited after the transactions (a reward address that is also a sender). Item 5 built them, plus a Block with 50 new Accounts (valid) and one with 51 (refused), with two exceptions: a Block over 1,000,000 bytes is only a Rust test (a megabyte of hex), and the genesis case waits for the genesis in item 9.
 - The Rust tests read it; a Vitest in `packages/core` reads it too, as `identity.json` is read today.
@@ -373,7 +374,7 @@ Together they replace the deleted EVM simulation (`contracts/test/GoldMine.simul
 10. **WASM and TypeScript exports** for transactions. Verifies: Vitest reads `chain.json`; the TypeScript bytes and ids equal the Rust ones.
 11. **`crates/node` storage and chain.** `redb` table layer, apply, undo, fork choice, Checkpoint rule. Verifies: reorg tests, a Checkpoint overriding more work, apply atomic after a failure. First step checks that `redb` and `jsonrpsee` build on Rust 1.99.1. Before it, `smt` storage becomes path-compressed, one entry per branching node with the same hashes (ADR 0015); verifies: the existing tree tests and vectors pass unchanged, and keys that share a long prefix add no extra entries.
 12. **Mempool and Block template.** Verifies: fee ordering, nonce chains, eviction, replacement, the template never exceeds 1,000,000 bytes and always validates. The relay dust policy (ADR 0015): a Node does not relay a transfer that creates an Account with less than the dust amount, and this item sets the amount.
-13. **P2P and sync** behind `trait Network`: framing, messages, discovery of other Nodes, header and Block sync, ban. Verifies: with the in-memory network 3 Nodes converge; an oversize message and a ban are handled.
+13. **P2P and sync** behind `trait Network`: framing, messages, discovery of other Nodes, header and Block sync, ban. Verifies: with the in-memory network 3 Nodes converge; an oversize message and a ban are handled; a Block more than 300 seconds ahead of the clock is refused as a tip, as an ancestor of one and during sync, and taken once the clock catches up (item 6).
 14. **Pruning and state snapshots.** Verifies: a new Node bootstraps from a Checkpoint and a state snapshot; a bad state snapshot is refused.
 15. **JSON-RPC and Checkpoint intake.** Verifies: each method against a running test Node, error codes, rate limit, `lr_submitCheckpoint` refuses a wrong signature, no admin method on the public listener. Protocol documents `node-p2p.md` and `node-rpc.md`; ADR 0013.
 16. **The Mine workers:** threads, fast or light choice, `starting` state, off at every start, key change handling, attribution by Block id. Verifies: a dev-network Node plus a Mine win Blocks; the Mine's status, read in-process (`mine_status` comes with item 17), reports real hashing; a restart leaves it off; the thread cap holds; a Block with the same reward address from another Node is not attributed.
@@ -411,7 +412,7 @@ Together they replace the deleted EVM simulation (`contracts/test/GoldMine.simul
 - **Keys:** first transaction carries the public key exactly once; the address is account-bound and survives a rotation.
 - **Block:** at most 1,000,000 bytes in total; an empty Block is valid; no coinbase transaction.
 - **Fees:** the minimum relay fee is Node policy, 10 base units per byte.
-- **LWMA:** `T = 60`, `N = 60`, solvetime clamp `[1, 6T]`, result clamp half to double of the parent, Target pinned to `INITIAL_TARGET` for the first `N` Blocks; `MAX_TARGET = 2^240 - 1`; all provisional until item 6.
+- **LWMA:** `T = 60`, `N = 60`, solvetimes from counted timestamps that never go backwards, at most `6T` (LWMA-1), result clamp half to double of the parent, Target pinned to `INITIAL_TARGET` for the first `N` Blocks; `MAX_TARGET = 2^240 - 1`; set by item 6.
 - **RandomX:** stock configuration (no custom salt, so the official vectors apply), v2.0.1 vendored, key schedule 2048/64.
 - **Checkpoints:** binary signed bytes; signed at least `CHECKPOINT_LAG` (default 6) Blocks below the tip so an orphan is not signed.
 - **Mine:** one per Land in Linked Realms (no Land, no Mine; Answer 19), plus LR's standalone mine command (ADR 0015), inside `lr-node`, controlled over a Unix socket or an authenticated listener (never the public RPC); nothing persisted; threads default 1, cap `max(1, cores - 1)`; fast mode at 2.5 GiB available.
@@ -428,7 +429,7 @@ The numbers are those of the original questions; "Question N" elsewhere in this 
 1. **Byte order and the transaction id.** Big-endian fixed width; the id is over the signing bytes.
 2. **Genesis and halvings.** Genesis at height 0 without a reward; halvings from height 1, so the era 0 to 3 total is exactly 19,687,500 GOLD.
 3. **Target encoding.** 256-bit with a hand-written `u256`.
-4. **RandomX key schedule and the LWMA parameters.** Key every 2048 Blocks with a 64-Block lag; `N = 60`, clamps as above, tuned by the simulation and recorded in ADR 0012. The Monero values and the LWMA reference text stay **UNVERIFIED**.
+4. **RandomX key schedule and the LWMA parameters.** Key every 2048 Blocks with a 64-Block lag; `N = 60`, clamps as above, tuned by the simulation and recorded in ADR 0012. Item 6 kept `N = 60` and the adjustment clamp, and counts solvetimes as LWMA-1 does. The Monero values stay **UNVERIFIED**.
 5. **State root. Alternative chosen: a sparse Merkle tree now.** Not the O(n) sorted-account root. Depth 256, keccak256, as defined in "Account state and state root"; more code and vectors (its own item 3), and no later network upgrade for the state root.
 6. **Key rotation and identity.** Ship rotation in core and the Node; keep the Shell's rotation button out until an ADR says how the Hub and statements treat a rotated key.
 7. **Address transaction index.** The Public node keeps `lr_getAddressTxs` data for the same window as Block bodies.
