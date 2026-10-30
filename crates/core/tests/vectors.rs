@@ -2,11 +2,14 @@
 //! own `identity.json` and `chain.json`. `UPDATE_VECTORS=1 cargo test` rewrites our own files;
 //! otherwise they are checked byte for byte.
 
+use std::collections::HashMap;
 use std::path::PathBuf;
 
 use linked_realms_core::issuance::{BASE_UNITS_PER_GOLD, HALVING_INTERVAL, reward};
 use linked_realms_core::merkle::tx_root;
-use linked_realms_core::params::{DEV, TESTNET};
+use linked_realms_core::params::{ChainParams, DEV, TESTNET};
+use linked_realms_core::state::{Account, PublicKey};
+use linked_realms_core::tx::{Kind, Tx, apply_tx, check_tx};
 use linked_realms_core::{
     ADDRESS_LEN, Address, Error, SCHEME_ML_DSA_44, SigningKey, character_seed, entropy_from_words,
     verify, words_from_entropy,
@@ -409,8 +412,8 @@ fn identity_vectors() {
 }
 
 /// `chain.json`: the chain rules of ADR 0011. Amounts are decimal strings of base units, so
-/// JavaScript reads them exactly. Later items of step 2C add transactions, the state root, the
-/// Retarget, headers and Blocks.
+/// JavaScript reads them exactly. Later items of step 2C add the state root, the Retarget,
+/// headers and Blocks.
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Chain {
@@ -420,6 +423,7 @@ struct Chain {
     invalid_address_bytes: Vec<InvalidAddressBytes>,
     issuance: Issuance,
     tx_roots: Vec<TxRoot>,
+    transactions: Ledger,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -552,7 +556,333 @@ fn generate_chain() -> Chain {
         invalid_address_bytes,
         issuance,
         tx_roots,
+        transactions: generate_ledger(),
     }
+}
+
+/// Transactions replayed in order on one ledger of the test network: start from `start`, read
+/// each step's bytes with `Tx::from_bytes`, then check and apply it on the step's network. A
+/// refused step changes nothing.
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct Ledger {
+    start: Vec<AccountVector>,
+    steps: Vec<TxStep>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct AccountVector {
+    address: String,
+    balance: String,
+    nonce: String,
+    /// `keccak256(scheme ‖ public key)` of the stored key, or null before the first transaction.
+    key_hash: Option<String>,
+    /// The hashed form, `Account::hashed_bytes`.
+    bytes: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct TxStep {
+    note: String,
+    network: String,
+    tx: String,
+    /// Null when the bytes are not a transaction.
+    id: Option<String>,
+    /// "ok", or the error of `docs/protocols/transactions.md`.
+    verdict: String,
+    /// The accounts the step changed, as they are after it, ordered by address.
+    changed: Vec<AccountVector>,
+}
+
+const GOLD: u64 = BASE_UNITS_PER_GOLD;
+
+fn account_vectors<'a>(
+    accounts: impl Iterator<Item = (&'a Address, &'a Account)>,
+) -> Vec<AccountVector> {
+    let mut vectors: Vec<AccountVector> = accounts
+        .map(|(address, account)| AccountVector {
+            address: address.to_string(),
+            balance: account.balance.to_string(),
+            nonce: account.nonce.to_string(),
+            key_hash: account.key.as_ref().map(|key| hex::encode(key.hash())),
+            bytes: hex::encode(account.hashed_bytes(address)),
+        })
+        .collect();
+    vectors.sort_by(|a, b| a.address.cmp(&b.address));
+    vectors
+}
+
+/// A signed transaction's bytes. `signer` may differ from `sender` to build refused cases.
+fn signed(
+    params: &ChainParams,
+    signer: &SigningKey,
+    sender: Address,
+    nonce: u64,
+    fee: u64,
+    kind: Kind,
+    public_key: Option<&SigningKey>,
+) -> Vec<u8> {
+    let mut tx = Tx {
+        scheme: SCHEME_ML_DSA_44,
+        sender,
+        nonce,
+        fee,
+        kind,
+        public_key: public_key.map(|key| key.public_key().to_vec()),
+        signature: Vec::new(),
+    };
+    tx.sign(params, signer, &[0; 32]).unwrap();
+    tx.to_bytes()
+}
+
+fn send(to: Address, amount: u64, memo: &[u8]) -> Kind {
+    Kind::Transfer {
+        to,
+        amount,
+        memo: memo.to_vec(),
+    }
+}
+
+fn rotate_to(key: &SigningKey) -> Kind {
+    Kind::Rotation {
+        new_key: PublicKey {
+            scheme: SCHEME_ML_DSA_44,
+            bytes: key.public_key().to_vec(),
+        },
+    }
+}
+
+/// A note, the network, the bytes and the expected verdict.
+type Step<'a> = (&'a str, &'a ChainParams, Vec<u8>, Result<(), Error>);
+
+fn generate_ledger() -> Ledger {
+    let key = |seed: u8| SigningKey::from_seed(&[seed; 32]);
+    let (a, a2, b, b2, d) = (key(0x41), key(0x61), key(0x42), key(0x62), key(0x44));
+    let (a_at, b_at, c_at) = (a.address(), b.address(), key(0x43).address());
+    let mut state = HashMap::from([
+        (
+            a_at,
+            Account {
+                balance: 10 * GOLD,
+                ..Account::default()
+            },
+        ),
+        (
+            b_at,
+            Account {
+                balance: GOLD,
+                ..Account::default()
+            },
+        ),
+    ]);
+    let start = account_vectors(state.iter());
+    let t = &TESTNET;
+    let memo = b"An 80-byte memo: a Land can say what a payment is for, in any bytes it likes....";
+    assert_eq!(memo.len(), 80);
+
+    let first = signed(t, &a, a_at, 0, 40_000, send(b_at, GOLD, b""), Some(&a));
+    let second = signed(t, &a, a_at, 1, 30_000, send(c_at, 2 * GOLD, memo), None);
+    let third = signed(t, &a, a_at, 2, 30_000, send(b_at, GOLD, b""), None);
+    let mut flipped = signed(t, &a, a_at, 3, 30_000, send(b_at, GOLD, b""), None);
+    let middle_of_signature = flipped.len() - 1200;
+    flipped[middle_of_signature] ^= 1;
+    // `third` is a transfer with no memo and no key: its memo length is byte 95 and its key
+    // flag byte 96. In `second` the memo length is byte 95 too.
+    let patched = |index: usize, byte: u8| {
+        let mut bytes = third.clone();
+        bytes[index] = byte;
+        bytes
+    };
+    let mut long_memo = second.clone();
+    long_memo[95] = 81;
+    long_memo.insert(96 + 80, b'.');
+
+    use Error::*;
+    let steps: Vec<Step> = vec![
+        (
+            "A's first transaction carries A's public key",
+            t,
+            first,
+            Ok(()),
+        ),
+        (
+            "a later one carries none; C had no account and gets one; an 80-byte memo",
+            t,
+            second.clone(),
+            Ok(()),
+        ),
+        (
+            "the same bytes again (a replay)",
+            t,
+            second,
+            Err(WrongNonce),
+        ),
+        (
+            "A's public key on a later transaction",
+            t,
+            signed(t, &a, a_at, 2, 30_000, send(b_at, 1, b""), Some(&a)),
+            Err(RepeatedKey),
+        ),
+        (
+            "B's first transaction without B's public key",
+            t,
+            signed(t, &b, b_at, 0, 30_000, send(a_at, 1, b""), None),
+            Err(MissingKey),
+        ),
+        (
+            "B's first transaction with A's public key, signed by A",
+            t,
+            signed(t, &a, b_at, 0, 40_000, send(a_at, 1, b""), Some(&a)),
+            Err(KeyMismatch),
+        ),
+        (
+            "B sends all it has, with nothing left for the fee",
+            t,
+            signed(t, &b, b_at, 0, 40_000, send(a_at, 2 * GOLD, b""), Some(&b)),
+            Err(InsufficientBalance),
+        ),
+        (
+            "amount plus fee passes u64::MAX",
+            t,
+            signed(t, &b, b_at, 0, 1, send(a_at, u64::MAX, b""), Some(&b)),
+            Err(Overflow),
+        ),
+        (
+            "an amount of 0",
+            t,
+            signed(t, &b, b_at, 0, 40_000, send(a_at, 0, b""), Some(&b)),
+            Err(ZeroAmount),
+        ),
+        (
+            "signed for the dev network, checked on the test network",
+            t,
+            signed(&DEV, &a, a_at, 2, 30_000, send(b_at, GOLD, b""), None),
+            Err(BadSignature),
+        ),
+        (
+            "signed for the test network, checked on the dev network",
+            &DEV,
+            third.clone(),
+            Err(BadSignature),
+        ),
+        (
+            "the same bytes on the test network",
+            t,
+            third.clone(),
+            Ok(()),
+        ),
+        (
+            "one bit of the signature flipped",
+            t,
+            flipped,
+            Err(BadSignature),
+        ),
+        (
+            "D has never received Gold",
+            t,
+            signed(t, &d, d.address(), 0, 0, rotate_to(&d), Some(&d)),
+            Err(NoAccount),
+        ),
+        (
+            "B's first transaction rotates B's key; the address stays",
+            t,
+            signed(t, &b, b_at, 0, 50_000, rotate_to(&b2), Some(&b)),
+            Ok(()),
+        ),
+        (
+            "B signs with the old key after the rotation",
+            t,
+            signed(t, &b, b_at, 1, 30_000, send(b_at, GOLD, b""), None),
+            Err(BadSignature),
+        ),
+        (
+            "B signs with the new key; a transfer to oneself costs only the fee",
+            t,
+            signed(t, &b2, b_at, 1, 30_000, send(b_at, GOLD, b""), None),
+            Ok(()),
+        ),
+        (
+            "A rotates its key with a fee of 0",
+            t,
+            signed(t, &a, a_at, 3, 0, rotate_to(&a2), None),
+            Ok(()),
+        ),
+        (
+            "one byte short",
+            t,
+            third[..third.len() - 1].to_vec(),
+            Err(Truncated),
+        ),
+        (
+            "one byte too many",
+            t,
+            [third.as_slice(), &[0]].concat(),
+            Err(TrailingBytes),
+        ),
+        ("version 2", t, patched(0, 2), Err(UnknownVersion)),
+        ("kind 2", t, patched(1, 2), Err(UnknownKind)),
+        ("signing scheme 2", t, patched(2, 2), Err(UnknownScheme)),
+        (
+            "a sender address with version 1",
+            t,
+            patched(3, 1),
+            Err(BadAddress),
+        ),
+        (
+            "a recipient address with scheme 2",
+            t,
+            patched(3 + 34 + 16 + 1, 2),
+            Err(UnknownScheme),
+        ),
+        ("an 81-byte memo", t, long_memo, Err(MemoTooLong)),
+        ("a public key flag of 2", t, patched(96, 2), Err(BadKeyFlag)),
+    ];
+
+    let total =
+        |state: &HashMap<Address, Account>| -> u64 { state.values().map(|a| a.balance).sum() };
+    let (supply, mut fees) = (total(&state), 0);
+    let steps = steps
+        .into_iter()
+        .map(|(note, params, bytes, expected)| {
+            let before = state.clone();
+            let (id, verdict) = match Tx::from_bytes(&bytes) {
+                Err(error) => (None, Err(error)),
+                Ok(tx) => {
+                    assert_eq!(tx.to_bytes(), bytes, "{note}: one encoding");
+                    let checked = check_tx(params, &state, &tx);
+                    let applied = apply_tx(params, &mut state, &tx);
+                    assert_eq!(checked, applied, "{note}: check and apply agree");
+                    if applied.is_ok() {
+                        fees += tx.fee;
+                    }
+                    (Some(hex::encode(tx.id(params))), applied)
+                }
+            };
+            assert_eq!(verdict, expected, "{note}");
+            if verdict.is_err() {
+                assert_eq!(state, before, "{note}: a refused step writes nothing");
+            }
+            TxStep {
+                note: note.into(),
+                network: if params == &TESTNET { "testnet" } else { "dev" }.into(),
+                tx: hex::encode(&bytes),
+                id,
+                verdict: verdict.map_or_else(|error| format!("{error:?}"), |()| "ok".into()),
+                changed: account_vectors(
+                    state
+                        .iter()
+                        .filter(|(address, account)| before.get(address) != Some(account)),
+                ),
+            }
+        })
+        .collect();
+    assert_eq!(
+        total(&state) + fees,
+        supply,
+        "Gold is neither made nor lost"
+    );
+    Ledger { start, steps }
 }
 
 #[test]

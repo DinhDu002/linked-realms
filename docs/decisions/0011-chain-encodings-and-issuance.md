@@ -21,7 +21,8 @@ Step 2C writes the chain rules in `crates/core` (P9). Transaction ids, signature
    - The network id (`u32`) is the first field of the signed bytes of every transaction and every Checkpoint, and is not stored in them. A Character's key survives a reset of the test network and also signs on the dev network, so a transaction signed for one network must not verify on another.
 4. **A transaction's id is the keccak256 of its signed bytes.**
    - The id includes the network id and leaves out the signature. ML-DSA signatures are hedged (fresh random bytes each time), so an id over the signature would change each time the same transaction is signed.
-   - The transaction layout itself comes with the transaction rules (plan item 2) and follows decisions 1 to 3.
+   - The layout, the checks and how a transaction changes the accounts are in `docs/protocols/transactions.md`, which follows decisions 1 to 3.
+   - A sender must already have an account, that is, must have received Gold. Otherwise a transaction with a fee of 0 could make accounts that never held any Gold. (Chosen while building plan item 2; waiting for the project owner's confirmation.)
 5. **Heights and issuance.**
    - The genesis Block is height 0 and pays nothing; the first mined Block is height 1.
    - 1 GOLD is 100,000,000 base units, in a `u64`.
