@@ -24,8 +24,9 @@ pub struct ChainParams {
 /// `2^240 - 1` on both networks.
 const MAX_TARGET: U256 = U256::ones(240);
 
-/// The public test network. `retarget_window` is provisional until the simulation of plan item 6,
-/// and `initial_target` until plan item 9 measures the hash rate (ADR 0012).
+/// The public test network. `retarget_window` was set by the simulation of plan item 6
+/// (`tests/retarget_simulation.rs`); `initial_target` is provisional until plan item 9 measures
+/// the hash rate (ADR 0012).
 pub const TESTNET: ChainParams = ChainParams {
     network_id: 1,
     max_target: MAX_TARGET,

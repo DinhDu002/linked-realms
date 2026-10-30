@@ -2754,7 +2754,7 @@
         "nextTarget": "000000656de7d48f7632d50b38adca7fe0e4b2a5d2bf51778d1093de50893d41"
       },
       {
-        "note": "timestamps going backwards: a negative solvetime counts as 1",
+        "note": "timestamps going backwards: one at or below the previous counts 1 s after it, and the next solvetime starts there",
         "retargetEnabled": true,
         "height": 1000,
         "headers": [
@@ -3003,7 +3003,259 @@
             "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
           }
         ],
-        "nextTarget": "000000fb227275f3033878f6fe10c831fd673525e6f7e976c2f880dc70644e39"
+        "nextTarget": "000000c7a5522df4ecfe8f12e70b0562738e7c3631cd60c84f542ba6cf615b67"
+      },
+      {
+        "note": "one timestamp 300 s ahead: the Blocks after it count 1 s each until a timestamp passes it",
+        "retargetEnabled": true,
+        "height": 1000,
+        "headers": [
+          {
+            "timestamp": 1800000000,
+            "target": "0000ffffffffffffffffffffffffffffffffffffffffffffffffffffffffffff"
+          },
+          {
+            "timestamp": 1800000060,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000120,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000180,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000240,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000300,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000360,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000420,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000480,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000540,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000600,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000660,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000720,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000780,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000840,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000900,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800000960,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001020,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001080,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001140,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001200,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001260,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001320,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001380,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001440,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001500,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001560,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001620,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001680,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001740,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002100,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001860,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001920,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800001980,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002040,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002100,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002160,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002220,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002280,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002340,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002400,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002460,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002520,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002580,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002640,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002700,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002760,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002820,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002880,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800002940,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003000,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003060,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003120,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003180,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003240,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003300,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003360,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003420,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003480,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003540,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          },
+          {
+            "timestamp": 1800003600,
+            "target": "000000cadbcfa91eec65aa16715b94ffc1c9654ba57ea2ef1a2127bca1127a83"
+          }
+        ],
+        "nextTarget": "000000c92b0bcbfa66291578639cf3c1e470402f4861d90af9e96989fd98b97d"
       },
       {
         "note": "solvetimes over 6T count as 6T; the Target stops at double the parent's",

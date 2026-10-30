@@ -40,7 +40,7 @@ A Node checks a Block on top of its parent and against the accounts after the pa
 
 **Median of the last 11.** Take the timestamps of the Blocks at heights `max(0, h - 11)` to `h - 1`, sort them, and take the one at position `floor(count / 2)`, counting from 0. Below height 11 there are fewer than 11; with an even number, this is the later of the two in the middle.
 
-**Clock.** A Node also refuses a new tip whose timestamp is more than 300 seconds ahead of its own clock. That is a Node's policy, not a rule here: it needs a clock, and it does not apply to Blocks fetched during sync. The Retarget relies on it: without it a Mine could set far-future timestamps to make the Target easier, held back only by the solvetime clamp.
+**Clock.** A Node also refuses any Block whose timestamp is more than 300 seconds ahead of its own clock: a new tip, an ancestor arriving with one, or a Block fetched during sync, whose old timestamp passes. It does not mark such a Block invalid, and takes it once its clock has caught up. That is a Node's policy, not a rule here: it needs a clock. The Retarget relies on it: a timestamp ahead of the real time makes the Blocks after it count 1 second each until a timestamp passes it (Retarget, step 1), which makes the Target harder. Within 300 seconds that is a few Blocks. Checking only the tip is not enough: a Block stamped a day ahead, followed by one stamped at the real time, would hold the chain back for about a day.
 
 ## New Accounts
 
@@ -62,13 +62,13 @@ Each network fixes:
 | initial Target | set by plan item 9 | set by plan item 9 |
 | Retarget | on | off |
 
-`N` and both clamps below are provisional until the simulation of plan item 6; the initial Targets come from plan item 9 (ADR 0012).
+`N` and the clamps below were set by the simulation of plan item 6 (`crates/core/tests/retarget_simulation.rs`); the initial Targets come from plan item 9 (ADR 0012).
 
 The Target of the Block at height `h`:
 
 - If the Retarget is off, or `h <= N`: the initial Target.
 - Otherwise it reads the `N + 1` headers at heights `h - N - 1` to `h - 1`; at `h = N + 1` they start at the genesis. Number them 0 (the oldest) to `N` (the parent). Then:
-  1. For `i` from 1 to `N`, the solvetime `s_i` is header `i`'s timestamp minus header `i - 1`'s, as a signed number (timestamps may go backwards), clamped to at least 1 and at most `6T`.
+  1. Count the timestamps in order: `c_0` is header 0's timestamp, and for `i` from 1 to `N`, `c_i` is header `i`'s timestamp, or `c_(i-1) + 1` if that is larger. The solvetime `s_i` is `c_i - c_(i-1)`, lowered to at most `6T`; it is at least 1. A timestamp at or below the one counted before it counts as 1 second after it, and the next solvetime starts from there, so time taken from one Block is given back to the next and timestamps out of order cannot add time to the window (zawy12's LWMA-1).
   2. `weighted = 1·s_1 + 2·s_2 + … + N·s_N`, so the newest solvetime weighs most.
   3. `sum` is the sum of the Targets of headers 1 to `N`. Header 0's Target is not read.
   4. `next = floor(floor(sum / N) · weighted / k)`, with `k = T · N(N + 1) / 2` (109,800). The two roundings happen in this order.
@@ -76,4 +76,4 @@ The Target of the Block at height `h`:
 
 Solvetimes of exactly `T` give `weighted = k`, so equal Targets stay the same.
 
-**Sizes.** With valid headers (Targets at most `2^240 - 1`; timestamps at most `2^62`, check 3), `sum` is below `2^246`, `weighted` is at most 658,800, and `floor(sum / N) · weighted` can pass `2^256`, so that product needs at least 320 bits; `next` stays below `2^243`. A difference of two timestamps fits in a signed 64-bit number.
+**Sizes.** With valid headers (Targets at most `2^240 - 1`; timestamps at most `2^62`, check 3), `sum` is below `2^246`, `weighted` is at most 658,800, and `floor(sum / N) · weighted` can pass `2^256`, so that product needs at least 320 bits; `next` stays below `2^243`. A counted timestamp is at most `2^62 + N`, so it fits in an unsigned 64-bit number.
