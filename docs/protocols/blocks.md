@@ -1,6 +1,50 @@
 # Blocks
 
-Status: mandatory (ADR 0006, ADR 0011). Every Node computes the Retarget exactly this way. The reference implementation is `crates/core` (`retarget.rs`, `u256.rs`); the vectors are `crates/core/test-vectors/chain.json` (`retarget`). The header and the checks of a Block join this document with plan item 5.
+Status: mandatory (ADR 0006, ADR 0011, ADR 0015). Every Node reads and checks Blocks and computes the Retarget exactly this way. The reference implementation is `crates/core` (`block.rs`, `retarget.rs`, `u256.rs`); the vectors are `crates/core/test-vectors/chain.json` (`blocks` and `retarget`).
+
+## Header
+
+A header is 187 bytes, integers big-endian, in this order:
+
+| Field | Bytes | |
+|---|---|---|
+| `version` | 1 | 1 |
+| `height` | 8 | the genesis is height 0 |
+| `prev_id` | 32 | the parent's id; 32 zero bytes in the genesis |
+| `timestamp` | 8 | Unix seconds |
+| `target` | 32 | see "Target" |
+| `tx_root` | 32 | the root of the Block's transaction ids (`docs/protocols/transactions.md`) |
+| `state_root` | 32 | the state root after this Block (`docs/protocols/transactions.md`) |
+| `reward_address` | 34 | an address's bytes (ADR 0011 decision 2) |
+| `nonce` | 8 | the last 8 bytes, at offset 179: the only bytes a Mine changes |
+
+A Block's id is `keccak256(header)`. Its Proof-of-Work hash is RandomX v2 over the same 187 bytes, with the key below, read as a 256-bit big-endian number; the nonce is a Solution when that number is below `target`. The id is not the Proof-of-Work hash, so it cannot be mined lower by chance.
+
+**RandomX key.** The key of the Block at height `h` is the id of the Block at height `key_height(h)` on the same chain: 0 for `h < 2112`, otherwise `floor((h - 64) / 2048) · 2048`. A key changes every 2048 Blocks and is used from 64 Blocks after its Block. This follows Monero's pattern, not checked against Monero's code (**UNVERIFIED**); plan item 9 fixes its edges in ADR 0012, with vectors.
+
+## Block
+
+A Block is its header, then `tx_count` (`u16`), then that many transactions (`docs/protocols/transactions.md`) one after another. A transaction's own fields tell where it ends, so no length comes before it. A whole Block is at most 1,000,000 bytes, and it may have no transactions. There is no coinbase transaction: the reward is credited by a rule (check 5).
+
+## Checks
+
+A Node checks a Block on top of its parent and against the accounts after the parent, in this order, cheap checks first; the first check that fails gives the error, and a refused Block changes nothing.
+
+1. **Reading.** More than 1,000,000 bytes is refused before anything is read (`BlockTooLarge`). Then the fields are read in order: `version` must be 1 (`UnknownVersion`), `reward_address` a valid address (`BadAddress`, `UnknownScheme`), and each transaction must read (its own errors). Bytes that end before `tx_count` transactions are read give `Truncated`; bytes left after them give `TrailingBytes`.
+2. **Parent.** `height` is the parent's height plus 1 (`WrongHeight`), and `prev_id` is the parent's id (`WrongParent`).
+3. **Timestamp and Target.** `timestamp` is at most `2^62` (`TimestampTooLate`) and greater than the median of the last 11 (`TimestampTooEarly`, below). `target` equals the Target the Retarget gives for this height (`WrongTarget`), which is always between 1 and the maximum Target.
+4. **Proof of Work.** The Proof-of-Work hash is below `target` (`InsufficientWork`). It is the expensive check of the header, so it runs before the transactions.
+5. **Transactions, reward and state.** `tx_root` is the root of the transaction ids in Block order (`WrongTxRoot`). Each transaction in order is then checked and applied as `docs/protocols/transactions.md` says (its errors). After all of them, the reward address is credited `reward(height)` plus the Block's fees, so a reward address that also sends in the Block cannot spend that credit there. A sum past `2^64 - 1` gives `Overflow`. After each transaction and after the credit, the Block may have created at most 50 Accounts (`TooManyNewAccounts`, "New Accounts" below). Last, `state_root` is the state root of the accounts after the Block (`WrongStateRoot`).
+
+**The genesis** (height 0) is checked by no rule. A Node starts from the genesis in its network's values and accepts only Blocks on top of it; the genesis and its check arrive with plan item 9.
+
+**Median of the last 11.** Take the timestamps of the Blocks at heights `max(0, h - 11)` to `h - 1`, sort them, and take the one at position `floor(count / 2)`, counting from 0. Below height 11 there are fewer than 11; with an even number, this is the later of the two in the middle.
+
+**Clock.** A Node also refuses a new tip whose timestamp is more than 300 seconds ahead of its own clock. That is a Node's policy, not a rule here: it needs a clock, and it does not apply to Blocks fetched during sync. The Retarget relies on it: without it a Mine could set far-future timestamps to make the Target easier, held back only by the solvetime clamp.
+
+## New Accounts
+
+A Block creates at most 50 Accounts (ADR 0015): the number of Accounts after the Block minus the number before it, the reward address included when it had no Account. Accounts are never removed, so this is the number of addresses the Block gives an Account. It is counted after each transaction and after the reward credit, so a Block stops at the transaction that creates the 51st. At 1,440 Blocks a day that is at most 72,000 new Accounts a day.
 
 ## Target
 
@@ -32,4 +76,4 @@ The Target of the Block at height `h`:
 
 Solvetimes of exactly `T` give `weighted = k`, so equal Targets stay the same.
 
-**Sizes.** With valid headers (Targets at most `2^240 - 1`; timestamps at most `2^62`, a header rule of plan item 5), `sum` is below `2^246`, `weighted` is at most 658,800, and `floor(sum / N) · weighted` can pass `2^256`, so that product needs at least 320 bits; `next` stays below `2^243`. A difference of two timestamps fits in a signed 64-bit number.
+**Sizes.** With valid headers (Targets at most `2^240 - 1`; timestamps at most `2^62`, check 3), `sum` is below `2^246`, `weighted` is at most 658,800, and `floor(sum / N) · weighted` can pass `2^256`, so that product needs at least 320 bits; `next` stays below `2^243`. A difference of two timestamps fits in a signed 64-bit number.

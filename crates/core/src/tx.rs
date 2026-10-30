@@ -105,6 +105,14 @@ impl Tx {
     /// Reads the fields in order; the first one that is wrong gives the error.
     pub fn from_bytes(bytes: &[u8]) -> Result<Tx, Error> {
         let mut reader = Reader::new(bytes);
+        let tx = Tx::read(&mut reader)?;
+        reader.finish()?;
+        Ok(tx)
+    }
+
+    /// Reads one transaction and stops at its end, which its fields tell, so the transactions of
+    /// a Block need no lengths.
+    pub(crate) fn read(reader: &mut Reader<'_>) -> Result<Tx, Error> {
         if reader.u8()? != TX_VERSION {
             return Err(Error::UnknownVersion);
         }
@@ -139,7 +147,6 @@ impl Tx {
             _ => return Err(Error::BadKeyFlag),
         };
         let signature = reader.bytes(signature_len)?.to_vec();
-        reader.finish()?;
         Ok(Tx {
             scheme,
             sender,

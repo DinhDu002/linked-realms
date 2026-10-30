@@ -5,6 +5,9 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use linked_realms_core::block::{
+    Block, HEADER_LEN, Header, MAX_BLOCK_SIZE, MAX_NEW_ACCOUNTS, NONCE_OFFSET, validate_block,
+};
 use linked_realms_core::issuance::{BASE_UNITS_PER_GOLD, HALVING_INTERVAL, reward};
 use linked_realms_core::merkle::tx_root;
 use linked_realms_core::params::{ChainParams, DEV, TESTNET};
@@ -429,6 +432,7 @@ struct Chain {
     state_tree: StateTree,
     state_snapshots: StateSnapshots,
     retarget: Retarget,
+    blocks: Blocks,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -567,6 +571,7 @@ fn generate_chain() -> Chain {
         state_tree: generate_state_tree(),
         state_snapshots,
         retarget: generate_retarget(),
+        blocks: generate_blocks(),
     }
 }
 
@@ -1457,6 +1462,348 @@ fn generate_retarget() -> Retarget {
         max_target: hex::encode(max.to_be_bytes()),
         initial_target: hex::encode(initial.to_be_bytes()),
         cases,
+    }
+}
+
+/// Blocks checked with `block::validate_block` on the dev network, with both Targets set to
+/// `2^255 - 1` (the Retarget is off) and a fake Proof-of-Work hash in place of RandomX:
+/// `keccak256(key ‖ header)`, read as a big-endian number. Below height 2112 the key is the
+/// genesis id. Every nonce is the lowest that passes, except where a case says otherwise.
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct Blocks {
+    network: String,
+    target: String,
+    header_len: usize,
+    nonce_offset: usize,
+    max_block_size: usize,
+    max_new_accounts: usize,
+    /// Checked by no rule: a Node starts from it.
+    genesis: BlockVector,
+    /// Valid, each applied on top of the one before, from no account at all.
+    chain: Vec<BlockVector>,
+    /// Each checked on top of the chain's last Block and the accounts after it; none is applied.
+    /// A Block over `maxBlockSize` bytes is refused before it is read (`BlockTooLarge`); a
+    /// megabyte of hex is left out.
+    cases: Vec<BlockCase>,
+    new_accounts: NewAccounts,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct BlockVector {
+    bytes: String,
+    id: String,
+    /// The fake Proof-of-Work hash, below the Target; null for the genesis.
+    pow: Option<String>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct BlockCase {
+    note: String,
+    bytes: String,
+    /// "ok", or the error of `docs/protocols/blocks.md`.
+    verdict: String,
+}
+
+/// The cap on new Accounts. Each case's Block, on top of the chain like `cases`, is its header,
+/// then the count 50 (`0032`), then these 50 transactions.
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct NewAccounts {
+    note: String,
+    transactions: Vec<String>,
+    cases: Vec<HeaderCase>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct HeaderCase {
+    note: String,
+    header: String,
+    verdict: String,
+}
+
+fn generate_blocks() -> Blocks {
+    let params = ChainParams {
+        max_target: U256::ones(255),
+        initial_target: U256::ones(255),
+        ..DEV
+    };
+    let p = &params;
+    let fake = |header: &[u8], key: &[u8; 32]| keccak(&[key, header]);
+    let key = |seed: u8| SigningKey::from_seed(&[seed; 32]);
+    let (a, b, c, d) = (key(0x51), key(0x52), key(0x53), key(0x54));
+    let tx = |nonce: u64, fee: u64, to: Address, amount: u64| {
+        let bytes = signed(
+            p,
+            &a,
+            a.address(),
+            nonce,
+            fee,
+            send(to, amount, b""),
+            (nonce == 0).then_some(&a),
+        );
+        Tx::from_bytes(&bytes).unwrap()
+    };
+    // An address nobody has the key of.
+    let nobody = |n: u8| {
+        let mut bytes = [n; ADDRESS_LEN];
+        bytes[..2].copy_from_slice(&[0, SCHEME_ML_DSA_44]);
+        Address::from_bytes(&bytes).unwrap()
+    };
+
+    let genesis = Header {
+        height: 0,
+        prev_id: [0; 32],
+        timestamp: 1_800_000_000,
+        target: params.initial_target,
+        tx_root: tx_root(&[]),
+        state_root: smt::empty(256),
+        reward_address: nobody(0),
+        nonce: 0,
+    };
+    let key_id = genesis.id();
+    let mine = |mut header: Header, from: u64, pass: bool| {
+        header.nonce = from;
+        while (U256::from_be_bytes(fake(&header.to_bytes(), &key_id)) < header.target) != pass {
+            header.nonce += 1;
+        }
+        header
+    };
+    // A Block on top of `headers` with every field right, its state root from applying the
+    // transactions and the reward to a copy of `state`.
+    let build = |headers: &[Header],
+                 state: &HashMap<Address, Account>,
+                 reward_to: Address,
+                 txs: Vec<Tx>| {
+        let parent = headers.last().unwrap();
+        let mut after = state.clone();
+        for tx in &txs {
+            apply_tx(p, &mut after, tx).unwrap();
+        }
+        let fees: u64 = txs.iter().map(|tx| tx.fee).sum();
+        after.entry(reward_to).or_default().balance += reward(parent.height + 1) + fees;
+        let ids: Vec<[u8; 32]> = txs.iter().map(|tx| tx.id(p)).collect();
+        let header = Header {
+            height: parent.height + 1,
+            prev_id: parent.id(),
+            timestamp: parent.timestamp + 60,
+            target: params.initial_target,
+            tx_root: tx_root(&ids),
+            state_root: smt::root(&tree_of(&after)),
+            reward_address: reward_to,
+            nonce: 0,
+        };
+        Block {
+            header: mine(header, 0, true),
+            txs,
+        }
+    };
+    let vector = |block: &Block, pow: bool| BlockVector {
+        bytes: hex::encode(block.to_bytes()),
+        id: hex::encode(block.header.id()),
+        pow: pow.then(|| hex::encode(fake(&block.header.to_bytes(), &key_id))),
+    };
+    let verdict = |result: Result<(), Error>| {
+        result.map_or_else(|error| format!("{error:?}"), |()| "ok".into())
+    };
+
+    // The chain: a reward to A, then A's first transfer, to B, with a reward to C.
+    let mut headers = vec![genesis];
+    let (mut state, mut tree) = (HashMap::new(), Tree::new());
+    let mut chain = Vec::new();
+    for (reward_to, txs) in [
+        (a.address(), Vec::new()),
+        (c.address(), vec![tx(0, 40_000, b.address(), GOLD)]),
+    ] {
+        let block = build(&headers, &state, reward_to, txs);
+        assert_eq!(
+            block.header.to_bytes()[NONCE_OFFSET..],
+            block.header.nonce.to_be_bytes()
+        );
+        validate_block(p, &block, &headers[..], &state, &tree, fake)
+            .unwrap()
+            .apply(&mut state, &mut tree);
+        assert_eq!(smt::root(&tree), block.header.state_root);
+        chain.push(vector(&block, true));
+        headers.push(block.header);
+    }
+
+    // Height 3: A sends half a GOLD to B and gets the reward.
+    let valid = build(
+        &headers,
+        &state,
+        a.address(),
+        vec![tx(1, 30_000, b.address(), GOLD / 2)],
+    );
+    let changed = |change: &dyn Fn(&mut Block)| {
+        let mut block = valid.clone();
+        change(&mut block);
+        block.header = mine(block.header, 0, true);
+        block.to_bytes()
+    };
+    let with_txs = |block: &mut Block, txs: Vec<Tx>| {
+        block.header.tx_root = tx_root(&txs.iter().map(|tx| tx.id(p)).collect::<Vec<_>>());
+        block.txs = txs;
+    };
+    let valid_bytes = valid.to_bytes();
+    let byte = |at: usize, value: u8| {
+        let mut bytes = valid_bytes.clone();
+        bytes[at] = value;
+        bytes
+    };
+    let mut no_work = valid.clone();
+    no_work.header = mine(no_work.header, 0, false);
+    let cases: Vec<(&str, Vec<u8>, Result<(), Error>)> = vec![
+        (
+            "valid: A sends 0.5 GOLD to B and gets the reward",
+            valid_bytes.clone(),
+            Ok(()),
+        ),
+        ("unknown version", byte(0, 2), Err(Error::UnknownVersion)),
+        (
+            "reward address with an unknown version",
+            byte(145, 1),
+            Err(Error::BadAddress),
+        ),
+        (
+            "reward address with an unknown scheme",
+            byte(146, 2),
+            Err(Error::UnknownScheme),
+        ),
+        (
+            "transaction count 2 for 1 transaction",
+            byte(HEADER_LEN + 1, 2),
+            Err(Error::Truncated),
+        ),
+        (
+            "transaction count 0 for 1 transaction",
+            byte(HEADER_LEN + 1, 0),
+            Err(Error::TrailingBytes),
+        ),
+        (
+            "a byte after the last transaction",
+            [valid_bytes.as_slice(), &[0]].concat(),
+            Err(Error::TrailingBytes),
+        ),
+        (
+            "height 4 on a parent at height 2",
+            changed(&|b| b.header.height = 4),
+            Err(Error::WrongHeight),
+        ),
+        (
+            "prev_id of the parent's parent",
+            changed(&|b| b.header.prev_id = headers[1].id()),
+            Err(Error::WrongParent),
+        ),
+        (
+            "timestamp after 2^62",
+            changed(&|b| b.header.timestamp = (1 << 62) + 1),
+            Err(Error::TimestampTooLate),
+        ),
+        (
+            "timestamp equal to the median of the 3 before it (heights 0 to 2)",
+            changed(&|b| b.header.timestamp = headers[1].timestamp),
+            Err(Error::TimestampTooEarly),
+        ),
+        (
+            "Target 2^254 - 1, not the initial Target",
+            changed(&|b| b.header.target = U256::ones(254)),
+            Err(Error::WrongTarget),
+        ),
+        (
+            "the lowest nonce whose hash is not below the Target",
+            no_work.to_bytes(),
+            Err(Error::InsufficientWork),
+        ),
+        (
+            "tx_root of no transactions",
+            changed(&|b| b.header.tx_root = tx_root(&[])),
+            Err(Error::WrongTxRoot),
+        ),
+        (
+            "a refused transaction: A's nonce 0 again",
+            changed(&|block| with_txs(block, vec![tx(0, 30_000, b.address(), GOLD / 2)])),
+            Err(Error::WrongNonce),
+        ),
+        (
+            "the reward is credited after the transactions: A, the reward address, sends 4 GOLD \
+             with 3.9996 GOLD, which the reward would cover",
+            changed(&|block| with_txs(block, vec![tx(1, 30_000, b.address(), 4 * GOLD)])),
+            Err(Error::InsufficientBalance),
+        ),
+        (
+            "wrong state_root",
+            changed(&|b| b.header.state_root = headers[2].state_root),
+            Err(Error::WrongStateRoot),
+        ),
+    ];
+    let cases = cases
+        .into_iter()
+        .map(|(note, bytes, expected)| {
+            let result = Block::from_bytes(&bytes)
+                .and_then(|block| validate_block(p, &block, &headers[..], &state, &tree, fake))
+                .map(|_| ());
+            assert_eq!(result, expected, "{note}");
+            BlockCase {
+                note: note.into(),
+                bytes: hex::encode(bytes),
+                verdict: verdict(result),
+            }
+        })
+        .collect();
+
+    // 50 transfers to new addresses: with the reward to A the Block creates 50 Accounts, with the
+    // reward to D, which has none, 51.
+    let txs: Vec<Tx> = (1..=50)
+        .map(|n| tx(n, 30_000, nobody(n as u8), 1_000))
+        .collect();
+    let new_accounts = [
+        ("the reward to A: 50 new Accounts", a.address(), Ok(())),
+        (
+            "the reward to the first recipient, new too: 50 new Accounts, each counted once",
+            nobody(1),
+            Ok(()),
+        ),
+        (
+            "the reward to D, a new address: 51 new Accounts",
+            d.address(),
+            Err(Error::TooManyNewAccounts),
+        ),
+    ]
+    .into_iter()
+    .map(|(note, reward_to, expected)| {
+        let block = build(&headers, &state, reward_to, txs.clone());
+        assert_eq!(&block.to_bytes()[HEADER_LEN..HEADER_LEN + 2], [0, 50]);
+        let result = validate_block(p, &block, &headers[..], &state, &tree, fake).map(|_| ());
+        assert_eq!(result, expected, "{note}");
+        HeaderCase {
+            note: note.into(),
+            header: hex::encode(block.header.to_bytes()),
+            verdict: verdict(result),
+        }
+    })
+    .collect();
+
+    Blocks {
+        network: "dev".into(),
+        target: hex::encode(params.initial_target.to_be_bytes()),
+        header_len: HEADER_LEN,
+        nonce_offset: NONCE_OFFSET,
+        max_block_size: MAX_BLOCK_SIZE,
+        max_new_accounts: MAX_NEW_ACCOUNTS,
+        genesis: vector(
+            &Block {
+                header: genesis,
+                txs: Vec::new(),
+            },
+            false,
+        ),
+        chain,
+        cases,
+        new_accounts: NewAccounts {
+            note: "A has an Account; the 50 recipients and D do not.".into(),
+            transactions: txs.iter().map(|tx| hex::encode(tx.to_bytes())).collect(),
+            cases: new_accounts,
+        },
     }
 }
 
