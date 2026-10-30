@@ -386,7 +386,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 - [ ] Phase 2 – Own chain, open source and testing
   - [x] 2A – Self-hosting, wallet and dashboard (EVM design)
   - [ ] 2B – World without the chain
-  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; items 1 to 3 of 27 built)
+  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; items 1 to 4 of 27 built)
   - [ ] 2D – Economy in the reference Land kit
   - [ ] 2E – NPCs
   - [ ] 2F – Audit before Phase 3
@@ -395,6 +395,8 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 ### Log
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
+
+- 2026-10-30: Step 2C item 4 on branch `phase-2/2c-4-retarget`: the Retarget in `crates/core`. `u256::U256` is a hand-written 256-bit number with only a saturating add and a multiply then divide through a 320-bit product. `retarget::next_target` is the plan's LWMA: the initial Target for the first `N` Blocks and on the dev network, then the weighted solvetimes of the last `N + 1` headers (from the genesis at `N + 1`), clamped to `[1, 6T]`, and a result clamped to half and double the parent's Target and to the maximum. `ChainParams` gains the maximum and initial Targets, `T`, `N` and the Retarget switch; `N` is provisional until item 6 and both initial Targets until item 9. `chain.json` gains 20 Retarget cases, among them every overflow case of the plan, a window where rounding once instead of twice gives another Target, and clamps against a parent that differs from the mean; a scratch BigInt version written from the plan (not kept) agreed with all 20. The new mandatory `docs/protocols/blocks.md` defines the Target and the Retarget; ADR 0011 gains the 256-bit Target.
 
 - 2026-10-30: Step 2C item 3 on branch `phase-2/2c-3-smt`: the state root in `crates/core` `smt`, a sparse Merkle tree of depth 256 keyed by `keccak256(address)` over the `SmtStore` trait, with an in-memory store for tests. Storage keeps one entry per node over two or more accounts and one per account alone in its subtree, split at the first differing bit when a second key arrives, and the entries depend only on the set of keys; a removal (for a Node undoing a Block) merges them back. `check_snapshot` builds the tree of a state snapshot in key order and compares the root. A naive full-tree reference checks inserts, updates and removals step by step. `chain.json` gains the state tree on chosen keys, a state root after every ledger step (28 steps, one more where an emptied account stays) and six state snapshot cases; a scratch JavaScript tree written from the plan's text (`@noble/hashes`, not kept) agreed with all 559 values. Measured on an Apple M5: a full Block's 795 changed accounts update the root in 38.6 ms with 100,000 accounts, at 2.44 stored entries per account, about 160 MB a day of state growth when keys are spread evenly; keys ground to share long prefixes raise it, about 1 GB a day at twenty extra shared bits each. ADR 0011 gains the state root and the growth bound, which waits for the project owner's confirmation; `docs/protocols/transactions.md` gains the state root.
 
