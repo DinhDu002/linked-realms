@@ -1107,8 +1107,8 @@ fn generate_state_tree() -> StateTree {
 }
 
 /// State snapshots of the ledger's last state. An account is given here in its hashed form, whose
-/// first 34 bytes are the address; its tree key is `keccak256` of them. (The full accounts a Node
-/// sends, with public keys, are plan item 14's.)
+/// first 34 bytes are the address; its tree key is `keccak256` of the byte 0 (the account kind)
+/// and them. (The full accounts a Node sends, with public keys, are plan item 14's.)
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 struct StateSnapshots {
@@ -1129,7 +1129,7 @@ fn generate_state_snapshots(state: &HashMap<Address, Account>, ledger: &Ledger) 
     let root = smt::root(&tree_of(state));
     assert_eq!(hex::encode(root), ledger.steps.last().unwrap().state_root);
     let in_key_order = |accounts: &mut Vec<Vec<u8>>| {
-        accounts.sort_by_key(|bytes| keccak(&[&bytes[..ADDRESS_LEN]]));
+        accounts.sort_by_key(|bytes| keccak(&[&[0], &bytes[..ADDRESS_LEN]]));
     };
     let mut sorted: Vec<Vec<u8>> = state
         .iter()
@@ -1170,7 +1170,7 @@ fn generate_state_snapshots(state: &HashMap<Address, Account>, ledger: &Ledger) 
     .map(|(note, accounts, expected)| {
         let entries = accounts
             .iter()
-            .map(|bytes| (keccak(&[&bytes[..ADDRESS_LEN]]), bytes.clone()));
+            .map(|bytes| (keccak(&[&[0], &bytes[..ADDRESS_LEN]]), bytes.clone()));
         let verdict = smt::check_snapshot(&mut Tree::new(), entries, &root);
         assert_eq!(verdict, expected, "{note}");
         SnapshotCase {

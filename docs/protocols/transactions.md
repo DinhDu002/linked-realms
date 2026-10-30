@@ -80,7 +80,7 @@ All of these happen together, or none:
 
 The state root is the root of a sparse Merkle tree of depth 256 that holds every account. All hashes are keccak256.
 
-- **Key:** `keccak256(address)`, over the 34-byte address. Bit `i` of a key is `(key[i / 8] >> (7 - i % 8)) & 1`. A node at depth `d` (the root is at depth 0) has its left child on bit `d` = 0 and its right child on 1, so each account's leaf sits at depth 256 on its key's path.
+- **Key:** `keccak256(0x00 ‖ address)`, over the kind byte `0x00` (an account; no other kind exists yet) and the 34-byte address. Bit `i` of a key is `(key[i / 8] >> (7 - i % 8)) & 1`. A node at depth `d` (the root is at depth 0) has its left child on bit `d` = 0 and its right child on 1, so each account's leaf sits at depth 256 on its key's path.
 - **Leaf:** `keccak256(0x00 ‖ key ‖ hashed form)`.
 - **Node:** `keccak256(0x01 ‖ left ‖ right)`.
 - **Empty subtrees:** `E[0]` is 32 zero bytes; `E[h + 1] = keccak256(0x01 ‖ E[h] ‖ E[h])`. A subtree of height `h` with no account hashes to `E[h]`.

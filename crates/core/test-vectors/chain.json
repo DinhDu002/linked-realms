@@ -161,7 +161,7 @@
         "bytes": "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000005f5e10000000000000000000000000000000000000000000000000000000000000000000000000000000000"
       }
     ],
-    "startRoot": "57ca2ea396a85c3d96b50dedf8c349ab162d506db3d1ab5811b0986d847aca70",
+    "startRoot": "06905d11769d7aec3b7073e2ace0bce4826a5460d935de2b92c2b46b4a54af7f",
     "steps": [
       {
         "note": "A's first transaction carries A's public key",
@@ -185,7 +185,7 @@
             "bytes": "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb55670000000000bebc20000000000000000000000000000000000000000000000000000000000000000000000000000000000"
           }
         ],
-        "stateRoot": "759ea8266d6505bc90e77a2b8528f7328ebdd1f77f02a0a73121b71a443341b0"
+        "stateRoot": "94f46917eda94e7265f9b0433f9875f1f55bf9a1b01491313e4779cac5d564bc"
       },
       {
         "note": "a later one carries none; C had no account and gets one; an 80-byte memo",
@@ -209,7 +209,7 @@
             "bytes": "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0000000000bebc20000000000000000000000000000000000000000000000000000000000000000000000000000000000"
           }
         ],
-        "stateRoot": "945b3c378b7f8310ad6f2baccf9a2fd5f0bdce261d1aa9d4cd1edf374e66b659"
+        "stateRoot": "c9652b35b4e2253a15b0b728b4f3a682cf979e35a14750897e207dcc20c6e223"
       },
       {
         "note": "the same bytes again (a replay)",
@@ -218,7 +218,7 @@
         "id": "b86c02191fc0b577f0409e3c93fcfd8bdeb08f7a109e173d6783590bf3c68f34",
         "verdict": "WrongNonce",
         "changed": [],
-        "stateRoot": "945b3c378b7f8310ad6f2baccf9a2fd5f0bdce261d1aa9d4cd1edf374e66b659"
+        "stateRoot": "c9652b35b4e2253a15b0b728b4f3a682cf979e35a14750897e207dcc20c6e223"
       },
       {
         "note": "A's public key on a later transaction",
@@ -227,7 +227,7 @@
         "id": "187ed6fe8abf8b4de5f4ed3e566e491b8528ce6a452dc4bdfb8628bbec081e1f",
         "verdict": "RepeatedKey",
         "changed": [],
-        "stateRoot": "945b3c378b7f8310ad6f2baccf9a2fd5f0bdce261d1aa9d4cd1edf374e66b659"
+        "stateRoot": "c9652b35b4e2253a15b0b728b4f3a682cf979e35a14750897e207dcc20c6e223"
       },
       {
         "note": "B's first transaction without B's public key",
@@ -236,7 +236,7 @@
         "id": "ff1c49e1d24ece90c2936cf26f997da9376fe00c00a274eef763b22c3e14452c",
         "verdict": "MissingKey",
         "changed": [],
-        "stateRoot": "945b3c378b7f8310ad6f2baccf9a2fd5f0bdce261d1aa9d4cd1edf374e66b659"
+        "stateRoot": "c9652b35b4e2253a15b0b728b4f3a682cf979e35a14750897e207dcc20c6e223"
       },
       {
         "note": "B's first transaction with A's public key, signed by A",
@@ -245,7 +245,7 @@
         "id": "d1163607b96808faa80120ad47d34e4ca50cf3d4be35456a207dd3b2e44aada5",
         "verdict": "KeyMismatch",
         "changed": [],
-        "stateRoot": "945b3c378b7f8310ad6f2baccf9a2fd5f0bdce261d1aa9d4cd1edf374e66b659"
+        "stateRoot": "c9652b35b4e2253a15b0b728b4f3a682cf979e35a14750897e207dcc20c6e223"
       },
       {
         "note": "B sends all it has, with nothing left for the fee",
@@ -254,7 +254,7 @@
         "id": "300ae8e521c45b32fa4f8434b8355e0ce476f45f5c85ae19cca988973b8839cc",
         "verdict": "InsufficientBalance",
         "changed": [],
-        "stateRoot": "945b3c378b7f8310ad6f2baccf9a2fd5f0bdce261d1aa9d4cd1edf374e66b659"
+        "stateRoot": "c9652b35b4e2253a15b0b728b4f3a682cf979e35a14750897e207dcc20c6e223"
       },
       {
         "note": "amount plus fee passes u64::MAX",
@@ -263,7 +263,7 @@
         "id": "4201a1feb11e658b47d5076127561e228fbd8f47e6ebc881e9a9e03f13675c14",
         "verdict": "Overflow",
         "changed": [],
-        "stateRoot": "945b3c378b7f8310ad6f2baccf9a2fd5f0bdce261d1aa9d4cd1edf374e66b659"
+        "stateRoot": "c9652b35b4e2253a15b0b728b4f3a682cf979e35a14750897e207dcc20c6e223"
       },
       {
         "note": "an amount of 0",
@@ -272,7 +272,7 @@
         "id": "090e188ba5b3832cc47cfa4e9031ab0975e0c2563a691ecf99295a6d97cb80cf",
         "verdict": "ZeroAmount",
         "changed": [],
-        "stateRoot": "945b3c378b7f8310ad6f2baccf9a2fd5f0bdce261d1aa9d4cd1edf374e66b659"
+        "stateRoot": "c9652b35b4e2253a15b0b728b4f3a682cf979e35a14750897e207dcc20c6e223"
       },
       {
         "note": "signed for the dev network, checked on the test network",
@@ -281,7 +281,7 @@
         "id": "997ba7577ff02bb483ee1483a9a6606f6f23ed6a8a9ea044528633049ceb6aaa",
         "verdict": "BadSignature",
         "changed": [],
-        "stateRoot": "945b3c378b7f8310ad6f2baccf9a2fd5f0bdce261d1aa9d4cd1edf374e66b659"
+        "stateRoot": "c9652b35b4e2253a15b0b728b4f3a682cf979e35a14750897e207dcc20c6e223"
       },
       {
         "note": "signed for the test network, checked on the dev network",
@@ -290,7 +290,7 @@
         "id": "45c16d7019c8245563f9936b6575787742dc4c02a9507af32ecd766d32929738",
         "verdict": "BadSignature",
         "changed": [],
-        "stateRoot": "945b3c378b7f8310ad6f2baccf9a2fd5f0bdce261d1aa9d4cd1edf374e66b659"
+        "stateRoot": "c9652b35b4e2253a15b0b728b4f3a682cf979e35a14750897e207dcc20c6e223"
       },
       {
         "note": "the same bytes on the test network",
@@ -314,7 +314,7 @@
             "bytes": "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e1a30000000000000000000000000000000000000000000000000000000000000000000000000000000000"
           }
         ],
-        "stateRoot": "37cbabf2af509b46936641d6a45d7d4739d321982726ef2b3fb761d11ed6aa9b"
+        "stateRoot": "9d8cafaf8e8a370bb106a00a660fc09c7c7aa7ea266322198beedc9a7aa7388c"
       },
       {
         "note": "one bit of the signature flipped",
@@ -323,7 +323,7 @@
         "id": "ff9bc5c8550b0ae95d295d2fec528c17d0db85168bf36c52e7e10f63dae8b257",
         "verdict": "BadSignature",
         "changed": [],
-        "stateRoot": "37cbabf2af509b46936641d6a45d7d4739d321982726ef2b3fb761d11ed6aa9b"
+        "stateRoot": "9d8cafaf8e8a370bb106a00a660fc09c7c7aa7ea266322198beedc9a7aa7388c"
       },
       {
         "note": "D has never received Gold",
@@ -332,7 +332,7 @@
         "id": "e4247e08e3ac584a6c8b6f233a0a8979e6c5bd6faa5802daad98fba4abfe1886",
         "verdict": "NoAccount",
         "changed": [],
-        "stateRoot": "37cbabf2af509b46936641d6a45d7d4739d321982726ef2b3fb761d11ed6aa9b"
+        "stateRoot": "9d8cafaf8e8a370bb106a00a660fc09c7c7aa7ea266322198beedc9a7aa7388c"
       },
       {
         "note": "B's first transaction rotates B's key; the address stays",
@@ -349,7 +349,7 @@
             "bytes": "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e0dfb0000000000000000165944c6c3b153bff26acfcc992e24cd13a93b7d143e6e95c77f768ad0ba9f6bd"
           }
         ],
-        "stateRoot": "456cf5e4dca0ec039361fa8439e5e4adb1a44bb24ad33452f6f35f18c2e83b29"
+        "stateRoot": "49d6d2976ec525a21dcc6e310bc3b1a218a816b80bd9e4cec80b4861abe4924a"
       },
       {
         "note": "B signs with the old key after the rotation",
@@ -358,7 +358,7 @@
         "id": "fdc250d9b079b59dedd4b8eda454dab7b950ffb7522c920ded7dcae10ee5dcd9",
         "verdict": "BadSignature",
         "changed": [],
-        "stateRoot": "456cf5e4dca0ec039361fa8439e5e4adb1a44bb24ad33452f6f35f18c2e83b29"
+        "stateRoot": "49d6d2976ec525a21dcc6e310bc3b1a218a816b80bd9e4cec80b4861abe4924a"
       },
       {
         "note": "B signs with the new key; a transfer to oneself costs only the fee",
@@ -375,7 +375,7 @@
             "bytes": "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e06a80000000000000000265944c6c3b153bff26acfcc992e24cd13a93b7d143e6e95c77f768ad0ba9f6bd"
           }
         ],
-        "stateRoot": "0038055039c2e05d14dcfb26d00a56bec24629712712445566f92ea8728260fa"
+        "stateRoot": "45628c36fcc83591fb85fa113e2e0e8351d9bc2a4205e267604778afc5025f1a"
       },
       {
         "note": "A rotates its key with a fee of 0",
@@ -392,7 +392,7 @@
             "bytes": "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a0000000023c1bf6000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87"
           }
         ],
-        "stateRoot": "569132a39f2282fc5b0cf20ac28328399b6f8d322ebe118fb0b9a74583d11f1b"
+        "stateRoot": "7fa227a64d0beb47f6f61f60794c095403d81a99efc04589575bbeac389df8b6"
       },
       {
         "note": "C sends all it has but the fee; its emptied account stays",
@@ -416,7 +416,7 @@
             "bytes": "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0"
           }
         ],
-        "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61"
+        "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6"
       },
       {
         "note": "one byte short",
@@ -425,7 +425,7 @@
         "id": null,
         "verdict": "Truncated",
         "changed": [],
-        "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61"
+        "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6"
       },
       {
         "note": "one byte too many",
@@ -434,7 +434,7 @@
         "id": null,
         "verdict": "TrailingBytes",
         "changed": [],
-        "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61"
+        "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6"
       },
       {
         "note": "version 2",
@@ -443,7 +443,7 @@
         "id": null,
         "verdict": "UnknownVersion",
         "changed": [],
-        "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61"
+        "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6"
       },
       {
         "note": "kind 2",
@@ -452,7 +452,7 @@
         "id": null,
         "verdict": "UnknownKind",
         "changed": [],
-        "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61"
+        "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6"
       },
       {
         "note": "signing scheme 2",
@@ -461,7 +461,7 @@
         "id": null,
         "verdict": "UnknownScheme",
         "changed": [],
-        "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61"
+        "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6"
       },
       {
         "note": "a sender address with version 1",
@@ -470,7 +470,7 @@
         "id": null,
         "verdict": "BadAddress",
         "changed": [],
-        "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61"
+        "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6"
       },
       {
         "note": "a recipient address with scheme 2",
@@ -479,7 +479,7 @@
         "id": null,
         "verdict": "UnknownScheme",
         "changed": [],
-        "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61"
+        "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6"
       },
       {
         "note": "an 81-byte memo",
@@ -488,7 +488,7 @@
         "id": null,
         "verdict": "MemoTooLong",
         "changed": [],
-        "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61"
+        "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6"
       },
       {
         "note": "a public key flag of 2",
@@ -497,7 +497,7 @@
         "id": null,
         "verdict": "BadKeyFlag",
         "changed": [],
-        "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61"
+        "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6"
       }
     ]
   },
@@ -1155,60 +1155,60 @@
     ]
   },
   "stateSnapshots": {
-    "stateRoot": "45ac33cdd11d9348b971c0f5e456f2c3d319e27fd9261d6df38b461782a44b61",
+    "stateRoot": "34e3d5c0686106b9dd978ab8d9ac7aace72e50cd24f391f30ac6d13ed42260c6",
     "cases": [
       {
         "note": "every account, in key order",
         "accounts": [
-          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0",
           "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e06a80000000000000000265944c6c3b153bff26acfcc992e24cd13a93b7d143e6e95c77f768ad0ba9f6bd",
-          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87"
+          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87",
+          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0"
         ],
         "verdict": "ok"
       },
       {
         "note": "one balance changed",
         "accounts": [
-          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0",
-          "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e06a81000000000000000265944c6c3b153bff26acfcc992e24cd13a93b7d143e6e95c77f768ad0ba9f6bd",
-          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87"
+          "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e06a80000000000000000265944c6c3b153bff26acfcc992e24cd13a93b7d143e6e95c77f768ad0ba9f6bd",
+          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52100000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87",
+          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0"
         ],
         "verdict": "WrongStateRoot"
       },
       {
         "note": "one account missing",
         "accounts": [
-          "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e06a80000000000000000265944c6c3b153bff26acfcc992e24cd13a93b7d143e6e95c77f768ad0ba9f6bd",
-          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87"
+          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87",
+          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0"
         ],
         "verdict": "WrongStateRoot"
       },
       {
         "note": "one account too many",
         "accounts": [
-          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0",
           "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e06a80000000000000000265944c6c3b153bff26acfcc992e24cd13a93b7d143e6e95c77f768ad0ba9f6bd",
           "000129791d128ae62c773fd7b17d53d46a4750988401ea883452931aa0f1413699c9000000000000000100000000000000000000000000000000000000000000000000000000000000000000000000000000",
-          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87"
+          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87",
+          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0"
         ],
         "verdict": "WrongStateRoot"
       },
       {
         "note": "one account twice",
         "accounts": [
-          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0",
           "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e06a80000000000000000265944c6c3b153bff26acfcc992e24cd13a93b7d143e6e95c77f768ad0ba9f6bd",
-          "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e06a80000000000000000265944c6c3b153bff26acfcc992e24cd13a93b7d143e6e95c77f768ad0ba9f6bd",
-          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87"
+          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87",
+          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87",
+          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0"
         ],
         "verdict": "SnapshotOrder"
       },
       {
         "note": "two accounts swapped",
         "accounts": [
+          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87",
           "0001d15f70adff6fc50978e46732d10a3da8c96215f21eadadaa3d956e996eb556700000000011e06a80000000000000000265944c6c3b153bff26acfcc992e24cd13a93b7d143e6e95c77f768ad0ba9f6bd",
-          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0",
-          "000158ae82946b63520e008e9e16d23a002cad3f08cd0dc597930f267fb02b8ab94a000000002face52000000000000000049566714db891d11eefec7e57b98237769acfa92e63c381870cb892edd95c8f87"
+          "000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f00000000000000000000000000000000122a2021c0dd3a21ecfcb3a8539eb03990ef55597dfc3d321049eacdd8e6ac0f0"
         ],
         "verdict": "SnapshotOrder"
       }
