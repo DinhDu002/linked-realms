@@ -8,9 +8,11 @@ use std::path::PathBuf;
 use linked_realms_core::issuance::{BASE_UNITS_PER_GOLD, HALVING_INTERVAL, reward};
 use linked_realms_core::merkle::tx_root;
 use linked_realms_core::params::{ChainParams, DEV, TESTNET};
+use linked_realms_core::retarget::next_target;
 use linked_realms_core::smt::{self, Node};
 use linked_realms_core::state::{Account, PublicKey, tree_key};
 use linked_realms_core::tx::{Kind, Tx, apply_tx, check_tx};
+use linked_realms_core::u256::U256;
 use linked_realms_core::{
     ADDRESS_LEN, Address, Error, SCHEME_ML_DSA_44, SigningKey, character_seed, entropy_from_words,
     verify, words_from_entropy,
@@ -413,7 +415,7 @@ fn identity_vectors() {
 }
 
 /// `chain.json`: the chain rules of ADR 0011. Amounts are decimal strings of base units, so
-/// JavaScript reads them exactly. Later items of step 2C add the Retarget, headers and Blocks.
+/// JavaScript reads them exactly. Later items of step 2C add headers and Blocks.
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Chain {
@@ -426,6 +428,7 @@ struct Chain {
     transactions: Ledger,
     state_tree: StateTree,
     state_snapshots: StateSnapshots,
+    retarget: Retarget,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -563,6 +566,7 @@ fn generate_chain() -> Chain {
         transactions: ledger,
         state_tree: generate_state_tree(),
         state_snapshots,
+        retarget: generate_retarget(),
     }
 }
 
@@ -1182,6 +1186,276 @@ fn generate_state_snapshots(state: &HashMap<Address, Account>, ledger: &Ledger) 
     .collect();
     StateSnapshots {
         state_root: hex::encode(root),
+        cases,
+    }
+}
+
+/// The Retarget (`retarget::next_target`) with the test network's values, except the initial
+/// Target, chosen here. Each case gives the headers at heights `height - N - 1` to `height - 1`,
+/// oldest first; the oldest header's Target is never read, so it is set to the maximum.
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct Retarget {
+    block_time: u64,
+    retarget_window: u64,
+    max_target: String,
+    initial_target: String,
+    cases: Vec<RetargetCase>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct RetargetCase {
+    note: String,
+    retarget_enabled: bool,
+    height: u64,
+    /// Empty when the rule reads no header.
+    headers: Vec<RetargetHeader>,
+    next_target: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct RetargetHeader {
+    timestamp: u64,
+    target: String,
+}
+
+fn generate_retarget() -> Retarget {
+    // Targets with many nonzero digits, so every rounding shows.
+    let below = |seed: &[u8], zero_bytes: usize| {
+        let mut bytes = keccak(&[seed]);
+        bytes[..zero_bytes].fill(0);
+        U256::from_be_bytes(bytes)
+    };
+    let (x, initial) = (below(b"x", 3), below(b"initial", 4));
+    let params = ChainParams {
+        initial_target: initial,
+        ..TESTNET
+    };
+    let (n, max) = (params.retarget_window, params.max_target);
+    // The N + 1 headers of a window: solvetimes and Targets by position, 1 to N.
+    let window = |solvetime: &dyn Fn(u64) -> i64, target: &dyn Fn(u64) -> U256| {
+        let mut timestamp = 1_800_000_000u64;
+        (0..=n)
+            .map(|p| {
+                if p == 0 {
+                    return (timestamp, max);
+                }
+                timestamp = timestamp.checked_add_signed(solvetime(p)).unwrap();
+                (timestamp, target(p))
+            })
+            .collect::<Vec<_>>()
+    };
+    let steady = |solvetime: i64, target: U256| window(&|_| solvetime, &|_| target);
+    let case = |note: &str, enabled: bool, height: u64, headers: Vec<(u64, U256)>| {
+        let p = ChainParams {
+            retarget_enabled: enabled,
+            ..params.clone()
+        };
+        let start = height.saturating_sub(n + 1);
+        let next = next_target(&p, height, |j| headers[usize::try_from(j - start).unwrap()]);
+        let vector = RetargetCase {
+            note: note.into(),
+            retarget_enabled: enabled,
+            height,
+            headers: headers
+                .iter()
+                .map(|(timestamp, target)| RetargetHeader {
+                    timestamp: *timestamp,
+                    target: hex::encode(target.to_be_bytes()),
+                })
+                .collect(),
+            next_target: hex::encode(next.to_be_bytes()),
+        };
+        (vector, next)
+    };
+
+    let mut genesis = steady(60, initial);
+    genesis[0].1 = initial;
+    // Targets from x up to 2x, the parent's, so the parent differs from the mean (about 1.5x).
+    let mixed: Vec<U256> = (0..=n).map(|p| x.mul_div(n + p, n)).collect();
+    let mixed_sum = mixed[1..]
+        .iter()
+        .fold(U256::ZERO, |s, t| s.saturating_add(*t));
+    let mixed_window = |solvetime: &dyn Fn(u64) -> i64| window(solvetime, &|p| mixed[p as usize]);
+    let late = |slow_at: u64| window(&|p| if p == slow_at { 360 } else { 60 }, &|_| x);
+    let half_max = max.mul_div(1, 2);
+    let cases = [
+        (
+            "height 1: the initial Target",
+            true,
+            1,
+            vec![],
+            Some(initial),
+        ),
+        (
+            "height N: still the initial Target",
+            true,
+            n,
+            vec![],
+            Some(initial),
+        ),
+        (
+            "the Retarget switched off, as on the dev network",
+            false,
+            1_000,
+            vec![],
+            Some(initial),
+        ),
+        (
+            "height N + 1: the window starts at the genesis; steady Blocks keep the Target",
+            true,
+            n + 1,
+            genesis,
+            Some(initial),
+        ),
+        (
+            "steady Blocks keep the Target",
+            true,
+            1_000,
+            steady(60, x),
+            Some(x),
+        ),
+        (
+            "steady Blocks over differing Targets: their mean, rounded down",
+            true,
+            1_000,
+            mixed_window(&|_| 60),
+            Some(mixed_sum.mul_div(1, n)),
+        ),
+        (
+            "fast Blocks (40 s) lower the Target",
+            true,
+            1_000,
+            steady(40, x),
+            Some(x.mul_div(40, 60)),
+        ),
+        (
+            "slow Blocks (90 s) raise it",
+            true,
+            1_000,
+            steady(90, x),
+            Some(x.mul_div(90, 60)),
+        ),
+        (
+            "solvetimes of 0 count as 1; the Target stops at half the parent's",
+            true,
+            1_000,
+            steady(0, x),
+            Some(x.mul_div(1, 2)),
+        ),
+        (
+            "timestamps going backwards: a negative solvetime counts as 1",
+            true,
+            1_000,
+            window(&|p| if p % 2 == 0 { -30 } else { 150 }, &|_| x),
+            None,
+        ),
+        (
+            "solvetimes over 6T count as 6T; the Target stops at double the parent's",
+            true,
+            1_000,
+            steady(1_000, x),
+            Some(x.mul_div(2, 1)),
+        ),
+        (
+            "one slow Block, the oldest: weight 1",
+            true,
+            1_000,
+            late(1),
+            Some(x.mul_div(109_800 + 300, 109_800)),
+        ),
+        (
+            "one slow Block, the newest: weight N",
+            true,
+            1_000,
+            late(n),
+            Some(x.mul_div(109_800 + 300 * 60, 109_800)),
+        ),
+        (
+            "every Target at the maximum, steady: the sum is near 2^246",
+            true,
+            1_000,
+            steady(60, max),
+            Some(max),
+        ),
+        (
+            "every Target at the maximum, slow: the product passes 2^256 and double the parent passes the maximum",
+            true,
+            1_000,
+            steady(1_000, max),
+            Some(max),
+        ),
+        (
+            "Targets at half the maximum, slow (90 s): the product passes 2^256, the result is not clamped",
+            true,
+            1_000,
+            steady(90, half_max),
+            Some(half_max.mul_div(90, 60)),
+        ),
+        (
+            "the smallest Target, fast: never below 1",
+            true,
+            1_000,
+            steady(0, U256::ONE),
+            Some(U256::ONE),
+        ),
+        (
+            "differing Targets, one slow Block at position 4: the mean is rounded down before the weights",
+            true,
+            1_000,
+            mixed_window(&|p| if p == 4 { 360 } else { 60 }),
+            Some(mixed_sum.mul_div(1, n).mul_div(109_800 + 300 * 4, 109_800)),
+        ),
+        (
+            "differing Targets, solvetimes of 0: half the parent's Target, not half the mean",
+            true,
+            1_000,
+            mixed_window(&|_| 0),
+            Some(mixed[n as usize].mul_div(1, 2)),
+        ),
+        (
+            "differing Targets, solvetimes over 6T: double the parent's Target, not double the mean",
+            true,
+            1_000,
+            mixed_window(&|_| 1_000),
+            Some(mixed[n as usize].mul_div(2, 1)),
+        ),
+    ];
+    // Rounding once, floor(sum * weighted / (N * k)), gives another Target here.
+    assert_ne!(
+        mixed_sum.mul_div(1, n).mul_div(111_000, 109_800),
+        mixed_sum.mul_div(111_000, n * 109_800)
+    );
+    // The mean's clamps would differ from the parent's.
+    let mean = mixed_sum.mul_div(1, n);
+    assert!(mean.mul_div(1, 2) < mixed[n as usize].mul_div(1, 2));
+    assert!(mean.mul_div(2, 1) < mixed[n as usize].mul_div(2, 1));
+    // The overflow cases overflow where their notes say.
+    assert!(max.mul_div(n, 1) > U256::ones(245) && max.mul_div(n, 1) < U256::ones(246));
+    assert_eq!(max.mul_div(6 * 1_830 * 60, 1), U256::MAX, "past 2^256");
+    assert_eq!(half_max.mul_div(90 * 1_830, 1), U256::MAX, "past 2^256");
+    assert!(half_max.mul_div(90, 60) < max);
+
+    let cases = cases
+        .into_iter()
+        .map(|(note, enabled, height, headers, expected)| {
+            let (vector, next) = case(note, enabled, height, headers);
+            if let Some(expected) = expected {
+                assert_eq!(next, expected, "{note}");
+            }
+            vector
+        })
+        .collect::<Vec<_>>();
+    assert_ne!(
+        cases[9].next_target, cases[4].next_target,
+        "backwards timestamps change it"
+    );
+    Retarget {
+        block_time: params.block_time,
+        retarget_window: n,
+        max_target: hex::encode(max.to_be_bytes()),
+        initial_target: hex::encode(initial.to_be_bytes()),
         cases,
     }
 }

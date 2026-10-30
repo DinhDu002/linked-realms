@@ -18,9 +18,11 @@ pub mod codec;
 pub mod issuance;
 pub mod merkle;
 pub mod params;
+pub mod retarget;
 pub mod smt;
 pub mod state;
 pub mod tx;
+pub mod u256;
 #[cfg(feature = "wasm")]
 mod wasm;
 
