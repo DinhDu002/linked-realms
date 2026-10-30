@@ -386,7 +386,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 - [ ] Phase 2 – Own chain, open source and testing
   - [x] 2A – Self-hosting, wallet and dashboard (EVM design)
   - [ ] 2B – World without the chain
-  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; items 1 and 2 of 27 built)
+  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; items 1 to 3 of 27 built)
   - [ ] 2D – Economy in the reference Land kit
   - [ ] 2E – NPCs
   - [ ] 2F – Audit before Phase 3
@@ -395,6 +395,8 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 ### Log
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
+
+- 2026-10-30: Step 2C item 3 on branch `phase-2/2c-3-smt`: the state root in `crates/core` `smt`, a sparse Merkle tree of depth 256 keyed by `keccak256(address)` over the `SmtStore` trait, with an in-memory store for tests. Storage keeps one entry per node over two or more accounts and one per account alone in its subtree, split at the first differing bit when a second key arrives, and the entries depend only on the set of keys; a removal (for a Node undoing a Block) merges them back. `check_snapshot` builds the tree of a state snapshot in key order and compares the root. A naive full-tree reference checks inserts, updates and removals step by step. `chain.json` gains the state tree on chosen keys, a state root after every ledger step (28 steps, one more where an emptied account stays) and six state snapshot cases; a scratch JavaScript tree written from the plan's text (`@noble/hashes`, not kept) agreed with all 559 values. Measured on an Apple M5: a full Block's 795 changed accounts update the root in 38.6 ms with 100,000 accounts, at 2.44 stored entries per account, about 160 MB a day of state growth when keys are spread evenly; keys ground to share long prefixes raise it, about 1 GB a day at twenty extra shared bits each. ADR 0011 gains the state root and the growth bound, which waits for the project owner's confirmation; `docs/protocols/transactions.md` gains the state root.
 
 - 2026-10-30: Step 2C item 2 on branch `phase-2/2c-2-tx`: transactions and accounts in `crates/core`. `tx::Tx` reads and writes the layout of the new mandatory `docs/protocols/transactions.md` (transfer with a memo of up to 80 bytes, key rotation, the public key only on the sender's first transaction), signs with the network id first in the signed bytes, and its id is the keccak256 of those bytes. `check_tx` and `apply_tx` run over the `StateView` and `State` traits, cheap checks first and the signature last, and write nothing on an error. `state::Account` has its 82-byte hashed form for the state root. A sender must already have an account (ADR 0011). `chain.json` gains a ledger of 27 steps replayed in order: every valid kind, every refusal (including a replay, the wrong network both ways, the old key after a rotation) and every format error, each asserted against its expected verdict, with a check that Gold is neither made nor lost.
 
