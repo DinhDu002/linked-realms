@@ -49,6 +49,16 @@ impl Account {
     }
 }
 
+/// The kind of a state-tree entry, the first byte hashed into its key, so that a later kind of
+/// state (P10) can join the tree without meeting an account's key. Accounts are the only kind.
+pub const ACCOUNT_KIND: u8 = 0;
+
+/// An account's key in the state tree (`smt`): `keccak256(ACCOUNT_KIND ‖ address bytes)`. Its
+/// value is `Account::hashed_bytes`.
+pub fn tree_key(address: &Address) -> [u8; 32] {
+    keccak256(&[&[ACCOUNT_KIND], &address.to_bytes()])
+}
+
 /// Reading accounts: the Node implements it on its database, tests on a map.
 pub trait StateView {
     fn account(&self, address: &Address) -> Option<Account>;

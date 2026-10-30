@@ -18,6 +18,7 @@ pub mod codec;
 pub mod issuance;
 pub mod merkle;
 pub mod params;
+pub mod smt;
 pub mod state;
 pub mod tx;
 #[cfg(feature = "wasm")]
@@ -73,6 +74,10 @@ pub enum Error {
     Overflow,
     InsufficientBalance,
     BadSignature,
+    /// A state snapshot's keys are not in ascending order, each once.
+    SnapshotOrder,
+    /// A state snapshot does not give the state root it should.
+    WrongStateRoot,
 }
 
 impl fmt::Display for Error {
@@ -98,6 +103,8 @@ impl fmt::Display for Error {
             Error::Overflow => "amount too large",
             Error::InsufficientBalance => "not enough Gold",
             Error::BadSignature => "bad signature",
+            Error::SnapshotOrder => "state snapshot out of order",
+            Error::WrongStateRoot => "wrong state root",
         })
     }
 }

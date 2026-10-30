@@ -32,7 +32,22 @@ Step 2C writes the chain rules in `crates/core` (P9). Transaction ids, signature
 6. **`tx_root` is a binary Merkle tree over the Block's transaction ids, in Block order.**
    - Leaf `keccak256(0x00 ‖ id)`, inner node `keccak256(0x01 ‖ left ‖ right)`, so a leaf never passes for a node. With no transactions the root is `keccak256("")`.
    - An odd node at the end of a level moves up unchanged. Rejected: pairing it with itself, as Bitcoin does, which gives two different lists of transactions the same root.
-   - The state root, a sparse Merkle tree (plan answer 5), and the bound on state growth are added here with the tree's code (plan item 3).
+7. **The state root is a sparse Merkle tree of depth 256 over every account (plan answer 5).**
+   - Key `keccak256(0x00 ‖ address)`, leaf `keccak256(0x00 ‖ key ‖ hashed account)`, node `keccak256(0x01 ‖ left ‖ right)`, and `E[h]` for an empty subtree of height `h`; with no account the root is `E[256]`, the genesis state root. The full rules and the state snapshot check are in `docs/protocols/transactions.md`.
+   - The key is a hash, not the raw address: it binds the whole address (version and scheme), spreads keys evenly, and stays 256 bits whatever address forms come later (P10).
+   - The first byte hashed is the entry's kind, `0x00` for an account (`state::ACCOUNT_KIND`), so that a later kind of state, such as a money rule added by a network upgrade, can join the same tree without meeting an account's key (decided by the project owner on 2026-10-30, before any network ran). Rejected: a second root per account (every account 32 bytes larger), and leaving it for later (a later change re-keys every account and changes every state root).
+   - The leaf holds the public key only as its hash, so every leaf hashes an 82-byte account.
+   - Only the hashes are consensus. `crates/core` stores one entry for each node over two or more accounts and one for each account alone in its subtree; a Node may store the tree any way that gives the same hashes.
+   - Measured on an Apple M5 (release build, in memory, `smt::tests::full_block`): with 100,000 accounts, a full Block's 795 changes (397 senders, 397 new recipients and a new reward address), each updated along its own path, take 38.6 ms, and the store holds 2.44 entries per account.
+   - A key that shares a longer prefix with an existing key adds more entries: one per extra shared bit, up to 257 for one new account. It does not make updating the root slower. Decision 8 counts what this means for state growth.
+   - Rejected: a root over the sorted list of all accounts. Every Block would re-hash every account, and a single account could not be proven.
+   - Rejected: a tree whose hashes skip chains of one-child nodes. It needs fewer hashes, but its extra rules must give the same bytes in every language; here only storage takes that shortcut.
+8. **State growth: no minimum amount for a new account (plan answer 22).**
+   - A transfer of any amount to a new address creates its account for the fee alone. There is no minimum and no state rent on the test network.
+   - The bound is the Block size: at most about 397 new accounts per Block, about 571,680 a day (1,440 Blocks).
+   - Per account: about 51 bytes in the accounts table (the 34-byte address, the balance and the nonce) and 2.44 tree entries (measured): one `Leaf` of about 131 bytes and on average 1.44 `Inner` of about 67, table keys included. That is about 280 bytes before `redb`'s own overhead, so about 160 MB a day when keys are spread evenly, as random addresses give. Item 11 measures it on `redb`.
+   - Keys can be ground: a transfer may go to any address bytes, and its key is one keccak256 of them. Each extra bit a new key shares with an existing one adds an entry of about 67 bytes and doubles the tries. Twenty extra bits, about a million tries per address, give about 1.6 KB per account, about 1 GB a day. The hard limit, 257 entries for one account, is about 17 KB, about 10 GB a day, far beyond what grinding can reach.
+   - The project owner accepted no minimum when this bound was put at about 57 MB a day, a figure that left out the tree and grinding; the corrected bound waits for their confirmation.
 
 ## Consequences
 

@@ -8,7 +8,8 @@ use std::path::PathBuf;
 use linked_realms_core::issuance::{BASE_UNITS_PER_GOLD, HALVING_INTERVAL, reward};
 use linked_realms_core::merkle::tx_root;
 use linked_realms_core::params::{ChainParams, DEV, TESTNET};
-use linked_realms_core::state::{Account, PublicKey};
+use linked_realms_core::smt::{self, Node};
+use linked_realms_core::state::{Account, PublicKey, tree_key};
 use linked_realms_core::tx::{Kind, Tx, apply_tx, check_tx};
 use linked_realms_core::{
     ADDRESS_LEN, Address, Error, SCHEME_ML_DSA_44, SigningKey, character_seed, entropy_from_words,
@@ -412,8 +413,7 @@ fn identity_vectors() {
 }
 
 /// `chain.json`: the chain rules of ADR 0011. Amounts are decimal strings of base units, so
-/// JavaScript reads them exactly. Later items of step 2C add the state root, the Retarget,
-/// headers and Blocks.
+/// JavaScript reads them exactly. Later items of step 2C add the Retarget, headers and Blocks.
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
 #[serde(rename_all = "camelCase")]
 struct Chain {
@@ -424,6 +424,8 @@ struct Chain {
     issuance: Issuance,
     tx_roots: Vec<TxRoot>,
     transactions: Ledger,
+    state_tree: StateTree,
+    state_snapshots: StateSnapshots,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -472,6 +474,8 @@ lowercase hex; amounts are decimal strings of base units (1 GOLD = 100000000). R
 UPDATE_VECTORS=1 cargo test -p linked-realms-core.";
 
 fn generate_chain() -> Chain {
+    let (ledger, final_state) = generate_ledger();
+    let state_snapshots = generate_state_snapshots(&final_state, &ledger);
     let networks = [("testnet", &TESTNET), ("dev", &DEV)]
         .into_iter()
         .map(|(name, params)| Network {
@@ -556,7 +560,9 @@ fn generate_chain() -> Chain {
         invalid_address_bytes,
         issuance,
         tx_roots,
-        transactions: generate_ledger(),
+        transactions: ledger,
+        state_tree: generate_state_tree(),
+        state_snapshots,
     }
 }
 
@@ -567,6 +573,8 @@ fn generate_chain() -> Chain {
 #[serde(rename_all = "camelCase")]
 struct Ledger {
     start: Vec<AccountVector>,
+    /// The state root of `start`.
+    start_root: String,
     steps: Vec<TxStep>,
 }
 
@@ -583,6 +591,7 @@ struct AccountVector {
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
 struct TxStep {
     note: String,
     network: String,
@@ -593,6 +602,8 @@ struct TxStep {
     verdict: String,
     /// The accounts the step changed, as they are after it, ordered by address.
     changed: Vec<AccountVector>,
+    /// The state root after the step.
+    state_root: String,
 }
 
 const GOLD: u64 = BASE_UNITS_PER_GOLD;
@@ -656,10 +667,33 @@ fn rotate_to(key: &SigningKey) -> Kind {
 /// A note, the network, the bytes and the expected verdict.
 type Step<'a> = (&'a str, &'a ChainParams, Vec<u8>, Result<(), Error>);
 
-fn generate_ledger() -> Ledger {
+type Tree = HashMap<(u16, [u8; 32]), Node>;
+
+/// The state tree of a whole state, built from scratch.
+fn tree_of(state: &HashMap<Address, Account>) -> Tree {
+    let mut tree = Tree::new();
+    for (address, account) in state {
+        smt::insert(
+            &mut tree,
+            &tree_key(address),
+            &account.hashed_bytes(address),
+        );
+    }
+    tree
+}
+
+/// The ledger's vectors, and its accounts at the end.
+fn generate_ledger() -> (Ledger, HashMap<Address, Account>) {
     let key = |seed: u8| SigningKey::from_seed(&[seed; 32]);
-    let (a, a2, b, b2, d) = (key(0x41), key(0x61), key(0x42), key(0x62), key(0x44));
-    let (a_at, b_at, c_at) = (a.address(), b.address(), key(0x43).address());
+    let (a, a2, b, b2, c, d) = (
+        key(0x41),
+        key(0x61),
+        key(0x42),
+        key(0x62),
+        key(0x43),
+        key(0x44),
+    );
+    let (a_at, b_at, c_at) = (a.address(), b.address(), c.address());
     let mut state = HashMap::from([
         (
             a_at,
@@ -677,6 +711,8 @@ fn generate_ledger() -> Ledger {
         ),
     ]);
     let start = account_vectors(state.iter());
+    let mut tree = tree_of(&state);
+    let start_root = hex::encode(smt::root(&tree));
     let t = &TESTNET;
     let memo = b"An 80-byte memo: a Land can say what a payment is for, in any bytes it likes....";
     assert_eq!(memo.len(), 80);
@@ -809,6 +845,20 @@ fn generate_ledger() -> Ledger {
             Ok(()),
         ),
         (
+            "C sends all it has but the fee; its emptied account stays",
+            t,
+            signed(
+                t,
+                &c,
+                c_at,
+                0,
+                40_000,
+                send(a_at, 2 * GOLD - 40_000, b""),
+                Some(&c),
+            ),
+            Ok(()),
+        ),
+        (
             "one byte short",
             t,
             third[..third.len() - 1].to_vec(),
@@ -863,17 +913,30 @@ fn generate_ledger() -> Ledger {
             if verdict.is_err() {
                 assert_eq!(state, before, "{note}: a refused step writes nothing");
             }
+            let changed: Vec<_> = state
+                .iter()
+                .filter(|(address, account)| before.get(address) != Some(account))
+                .collect();
+            for (address, account) in &changed {
+                smt::insert(
+                    &mut tree,
+                    &tree_key(address),
+                    &account.hashed_bytes(address),
+                );
+            }
+            assert_eq!(
+                tree,
+                tree_of(&state),
+                "{note}: the tree follows the accounts"
+            );
             TxStep {
                 note: note.into(),
                 network: if params == &TESTNET { "testnet" } else { "dev" }.into(),
                 tx: hex::encode(&bytes),
                 id,
                 verdict: verdict.map_or_else(|error| format!("{error:?}"), |()| "ok".into()),
-                changed: account_vectors(
-                    state
-                        .iter()
-                        .filter(|(address, account)| before.get(address) != Some(account)),
-                ),
+                changed: account_vectors(changed.into_iter()),
+                state_root: hex::encode(smt::root(&tree)),
             }
         })
         .collect();
@@ -882,7 +945,245 @@ fn generate_ledger() -> Ledger {
         supply,
         "Gold is neither made nor lost"
     );
-    Ledger { start, steps }
+    let emptied = &state[&c_at];
+    assert_eq!((emptied.balance, emptied.nonce), (0, 1));
+    (
+        Ledger {
+            start,
+            start_root,
+            steps,
+        },
+        state,
+    )
+}
+
+/// The state tree (`smt`) on chosen keys and values, so no address has to be ground to get keys
+/// that share a given number of bits.
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct StateTree {
+    /// `E[0]` to `E[256]`, the hashes of empty subtrees by height. `E[256]` is the root with no
+    /// account, so the genesis state's root.
+    empty_subtrees: Vec<String>,
+    one_key: OneKey,
+    trees: Vec<TreeCase>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct OneKey {
+    key: String,
+    value: String,
+    /// `keccak256(0x00 ‖ key ‖ value)`.
+    leaf: String,
+    /// The fold rule's hash at each height, from 0 (the leaf) to 256 (the root).
+    path: Vec<String>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct TreeCase {
+    note: String,
+    /// Inserted in this order; a key that is already there gets the new value.
+    entries: Vec<Entry>,
+    /// Then removed, in this order.
+    removed: Vec<String>,
+    root: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct Entry {
+    key: String,
+    value: String,
+}
+
+fn keccak(parts: &[&[u8]]) -> [u8; 32] {
+    use sha3::{Digest, Keccak256};
+    let mut hasher = Keccak256::new();
+    for part in parts {
+        hasher.update(part);
+    }
+    hasher.finalize().into()
+}
+
+fn generate_state_tree() -> StateTree {
+    let flipped = |key: [u8; 32], i: usize| {
+        let mut key = key;
+        key[i / 8] ^= 0x80 >> (i % 8);
+        key
+    };
+    let base = [0x5a; 32];
+    let case = |note: &str, entries: &[([u8; 32], &[u8])], removed: &[[u8; 32]]| {
+        let mut tree = Tree::new();
+        for (key, value) in entries {
+            smt::insert(&mut tree, key, value);
+        }
+        for key in removed {
+            smt::remove(&mut tree, key);
+        }
+        TreeCase {
+            note: note.into(),
+            entries: entries
+                .iter()
+                .map(|(key, value)| Entry {
+                    key: hex::encode(key),
+                    value: hex::encode(value),
+                })
+                .collect(),
+            removed: removed.iter().map(hex::encode).collect(),
+            root: hex::encode(smt::root(&tree)),
+        }
+    };
+    let pair = |i: usize| [(base, &b"first"[..]), (flipped(base, i), b"second")];
+    let three = [
+        ([0x11; 32], &b"first"[..]),
+        ([0x22; 32], b"second"),
+        ([0x33; 32], b"third"),
+    ];
+    let trees = vec![
+        case("one key", &[(base, b"first")], &[]),
+        case("two keys that differ only in the last bit", &pair(255), &[]),
+        case(
+            "two keys that share exactly their first 100 bits",
+            &pair(100),
+            &[],
+        ),
+        case("two keys that differ in the first bit", &pair(0), &[]),
+        case("three keys", &three, &[]),
+        case(
+            "the same three keys in reverse order: the same root",
+            &[three[2], three[1], three[0]],
+            &[],
+        ),
+        case(
+            "two keys, then the second removed: the root of the first alone",
+            &pair(100),
+            &[flipped(base, 100)],
+        ),
+        case(
+            "a key set twice: the second value counts",
+            &[(base, b"old"), (base, b"first")],
+            &[],
+        ),
+    ];
+    assert_eq!(trees[4].root, trees[5].root);
+    assert_eq!(trees[6].root, trees[0].root);
+    assert_eq!(trees[7].root, trees[0].root);
+    for order in [[0, 2, 1], [1, 0, 2], [1, 2, 0], [2, 0, 1]] {
+        let entries = order.map(|i| three[i]);
+        assert_eq!(case("", &entries, &[]).root, trees[4].root, "every order");
+    }
+
+    // The fold rule, written out with this file's own keccak256.
+    let empty: Vec<[u8; 32]> = (0..=256).map(smt::empty).collect();
+    assert_eq!(empty[0], [0; 32]);
+    for h in 0..256 {
+        assert_eq!(empty[h + 1], keccak(&[&[1], &empty[h], &empty[h]]));
+    }
+    let (key, value) = (base, b"first");
+    let leaf = keccak(&[&[0], &key, value]);
+    assert_eq!(leaf, smt::leaf_hash(&key, value));
+    let mut path = vec![leaf];
+    for j in 0..256 {
+        let (c, b) = (path[j], 255 - j);
+        path.push(match (key[b / 8] >> (7 - b % 8)) & 1 {
+            0 => keccak(&[&[1], &c, &empty[j]]),
+            _ => keccak(&[&[1], &empty[j], &c]),
+        });
+    }
+    assert_eq!(
+        hex::encode(path[256]),
+        trees[0].root,
+        "the fold rule gives the root"
+    );
+    StateTree {
+        empty_subtrees: empty.iter().map(hex::encode).collect(),
+        one_key: OneKey {
+            key: hex::encode(key),
+            value: hex::encode(value),
+            leaf: hex::encode(leaf),
+            path: path.iter().map(hex::encode).collect(),
+        },
+        trees,
+    }
+}
+
+/// State snapshots of the ledger's last state. An account is given here in its hashed form, whose
+/// first 34 bytes are the address; its tree key is `keccak256` of the byte 0 (the account kind)
+/// and them. (The full accounts a Node sends, with public keys, are plan item 14's.)
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct StateSnapshots {
+    /// The ledger's last state root.
+    state_root: String,
+    cases: Vec<SnapshotCase>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct SnapshotCase {
+    note: String,
+    accounts: Vec<String>,
+    /// "ok", or the error.
+    verdict: String,
+}
+
+fn generate_state_snapshots(state: &HashMap<Address, Account>, ledger: &Ledger) -> StateSnapshots {
+    let root = smt::root(&tree_of(state));
+    assert_eq!(hex::encode(root), ledger.steps.last().unwrap().state_root);
+    let in_key_order = |accounts: &mut Vec<Vec<u8>>| {
+        accounts.sort_by_key(|bytes| keccak(&[&[0], &bytes[..ADDRESS_LEN]]));
+    };
+    let mut sorted: Vec<Vec<u8>> = state
+        .iter()
+        .map(|(address, account)| account.hashed_bytes(address).to_vec())
+        .collect();
+    in_key_order(&mut sorted);
+    assert!(sorted.len() >= 3);
+
+    let mut changed = sorted.clone();
+    changed[1][41] ^= 1; // the last byte of the balance
+    let mut extra = sorted.clone();
+    let newcomer = SigningKey::from_seed(&[0x45; 32]).address();
+    let newcomer = Account {
+        balance: 1,
+        ..Account::default()
+    }
+    .hashed_bytes(&newcomer);
+    extra.push(newcomer.to_vec());
+    in_key_order(&mut extra);
+    let mut repeated = sorted.clone();
+    repeated.insert(1, sorted[1].clone());
+    let mut swapped = sorted.clone();
+    swapped.swap(0, 1);
+
+    let cases = [
+        ("every account, in key order", sorted.clone(), Ok(())),
+        ("one balance changed", changed, Err(Error::WrongStateRoot)),
+        (
+            "one account missing",
+            sorted[1..].to_vec(),
+            Err(Error::WrongStateRoot),
+        ),
+        ("one account too many", extra, Err(Error::WrongStateRoot)),
+        ("one account twice", repeated, Err(Error::SnapshotOrder)),
+        ("two accounts swapped", swapped, Err(Error::SnapshotOrder)),
+    ]
+    .into_iter()
+    .map(|(note, accounts, expected)| {
+        let entries = accounts
+            .iter()
+            .map(|bytes| (keccak(&[&[0], &bytes[..ADDRESS_LEN]]), bytes.clone()));
+        let verdict = smt::check_snapshot(&mut Tree::new(), entries, &root);
+        assert_eq!(verdict, expected, "{note}");
+        SnapshotCase {
+            note: note.into(),
+            accounts: accounts.iter().map(hex::encode).collect(),
+            verdict: verdict.map_or_else(|error| format!("{error:?}"), |()| "ok".into()),
+        }
+    })
+    .collect();
+    StateSnapshots {
+        state_root: hex::encode(root),
+        cases,
+    }
 }
 
 #[test]
