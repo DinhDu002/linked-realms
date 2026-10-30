@@ -1,6 +1,6 @@
-//! What differs between networks (ADR 0011). Only test networks exist (P7), and there is no id
-//! for any other. The genesis and the Checkpoint signer's key join these values in later items of
-//! step 2C.
+//! What differs between networks (ADR 0011). Only the test and dev networks exist so far; the
+//! main network joins at the end of step 2C (P7, ADR 0015). The genesis and the Checkpoint signer's
+//! key join these values in later items of step 2C.
 
 use crate::u256::U256;
 

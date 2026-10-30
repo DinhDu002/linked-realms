@@ -15,14 +15,15 @@
 - Each player hosts their own server, and each server is one Land. Lands join into one shared world through a service the company operates, the **Hub**. The Hub only connects Lands and lets Characters and NPCs travel between them.
 - Each Player plays **one main Character**, whose key stays in the Player's **Shell**. A Character can create NPCs, driven by AI models, to work for it.
 - Each Land makes its own rules and its own interface, and its owner is responsible for it.
-- **Gold** is the game's money. It is mined by Proof of Work on the game's own chain, like Bitcoin. Every Land runs a Node, and the Mines that Land owners switch on compete to seal each Block.
+- **Gold** is the game's money. It is mined by Proof of Work on LR, the project's own chain, like Bitcoin. Every Land runs a Node, and the Mines that Land owners switch on compete to seal each Block.
 - **Stage 1** has Lands that anyone can host for free, Characters that walk between them, and Gold that is mined on the chain and sent between Characters.
+- LR is a product of its own: Linked Realms is its first application, and other applications may use it (ADR 0015).
 - Open source. **The project owner decides** which changes are merged into the main version.
 - Ideas beyond stage 1 are in section 7.
 
 ## 2. Invariant principles
 
-Every design and every line of code must follow the principles below. If a request conflicts with them, **stop and ask**. Only the project owner may edit this section. The project owner approved this version on 2026-10-29 (ADR 0006–0008).
+Every design and every line of code must follow the principles below. If a request conflicts with them, **stop and ask**. Only the project owner may edit this section. The project owner approved this version on 2026-10-29 (ADR 0006–0008) and replaced P7 on 2026-10-30 (ADR 0015).
 
 - **P1 – Do not trust Map servers.** Gold is decided only by chain rules that every Node checks. What happens inside a Land is that Land's business; a Land cannot change another Land or the chain.
 - **P2 – No server holds a Player's key.** Players' keys stay in the Shell. A server holds only its Map server key and the keys of its owner's NPCs.
@@ -30,7 +31,7 @@ Every design and every line of code must follow the principles below. If a reque
 - **P4 – Gold is issued on a fixed schedule:** a Block reward halved every 2,100,000 Blocks, then 0.3125 GOLD per Block forever. No premine, no other way to create Gold.
 - **P5 – Mining is voluntary.** A Mine runs only when its owner turns it on, has a CPU limit, and shows clearly that it is mining.
 - **P6 – A Land's code runs only in an isolated frame.** The Shell never runs Land code in its own page and shows every signing request outside the frame.
-- **P7 – Test network only.** It may be reset with notice; Gold has no value until Phase 3 and a written decision.
+- **P7 – The main network starts after step 2C and is never reset.** The test network serves only step 2C's acceptance test and may be reset; it stops once the main network starts, and network upgrades are tested locally. The main network starts quietly, with no premine, and only the project owner launches it. Its rules change only through network upgrades (P10). Checkpoints end at height 1,051,200, written in the genesis code, or earlier through a network upgrade.
 - **P8 – The chain holds only money.** Lands, names, items, stats and heavy data live with the Hub or the Lands.
 - **P9 – Chain rules have one source:** `crates/core`, tested against fixed vectors and used by the Node, the Mine and the Shell.
 - **P10 – Design for extension.** Transactions and addresses carry a version and a scheme id, so rules and signature schemes can change through network upgrades.
@@ -51,20 +52,23 @@ The target architecture follows ADR 0006 (own chain), ADR 0007 (the world off th
 | `packages/hub-api` | Company | Land registration and cells, Directory, names, Travel tickets, abuse reports and removal |
 | `packages/relay` | Company | Serves each Land on its own subdomain and forwards its connections |
 | `packages/shared` | — | TypeScript types shared by the reference kit and the Hub |
-| Checkpoint signer, seed nodes, Public node, archive | Company | Separate services built on `crates/node` (ADR 0006) |
+| Checkpoint signer | The project owner | Signs Checkpoints until they end (ADR 0006, ADR 0015) |
+| Seed nodes, Public node, archive | Company | Separate services built on `crates/node` (ADR 0006) |
 
 ### 3.2 Repo structure
 
 ```
 linked-realms/
 ├── CLAUDE.md
-├── CONTEXT.md            # domain glossary
+├── CONTEXT.md            # the game's glossary
+├── CONTEXT-MAP.md        # which glossary covers what, and what goes with LR at the split
 ├── PLAN.md
 ├── Cargo.toml            # Cargo workspace for crates/
 ├── rust-toolchain.toml
 ├── compose.yaml          # local dev environment
 ├── .github/workflows/    # CI
-├── crates/
+├── crates/               # LR, the chain
+│   ├── CONTEXT.md        # LR's glossary
 │   ├── core/
 │   └── node/
 ├── packages/
@@ -101,7 +105,7 @@ linked-realms/
   2. It tries nonces, hashing the Block header with RandomX, until a hash falls below the Target.
   3. The Node broadcasts the sealed Block. Every Node checks the Proof of Work, the signatures and the rules (P3) before passing it on.
   4. The Block reward and the fees go to the address the Mine mines for.
-  5. The Target is retargeted after every Block, and the Checkpoint signer signs a Checkpoint every 10 Blocks.
+  5. The Target is retargeted after every Block, and the Checkpoint signer signs a Checkpoint every 10 Blocks until Checkpoints end.
 - **Paying inside a Land:** the Land's UI asks the Shell to sign a payment (amount, recipient, memo). The Player approves it in the Shell, and the transaction goes to a Node. Once it is in a Block, the Land sees it through its Node and delivers the item.
 - **An NPC doing a Quest:** the NPC runner on the owner's server gets a Travel ticket and arrives declaring that an AI drives it. The model reads the actions the Land publishes and proposes one; the runner checks it against the owner's limits and signs. The Land pays the reward to the payout address the NPC names, which is its owner's by default.
 
@@ -154,12 +158,15 @@ The values below are defaults. Chain rules live in `crates/core` (P9) and change
 - **Reward (D9):** 5 `GOLD` per Block, halved every 2,100,000 Blocks (about 4 years). After four halvings (about 16 years, 19,687,500 `GOLD`), 0.3125 `GOLD` per Block forever. 8 decimals. No premine, no developer fund.
 - **Fees:** a per-size fee auction with a minimum relay fee; fees go with the Block reward to the address the sealing Mine names. A Block holds at most 1 MB. A transfer may carry a memo of up to 80 bytes.
 - **Signatures (D12):** ML-DSA-44 with a scheme id in addresses and transactions. A key-rotation transaction. The public key travels in an address's first transaction and is then kept on chain.
-- **Checkpoints:** every 10 Blocks, signed by the Checkpoint signer. No Node accepts a history that changes anything before a Checkpoint.
+- **Checkpoints:** every 10 Blocks, signed by the Checkpoint signer, whose key the project owner holds. No Node accepts a history that changes anything before a Checkpoint. Checkpoints end at height 1,051,200, written in the genesis code (no Node accepts one above it). A network upgrade may end them earlier once 12 months pass without a consensus bug, no reorganisation goes deeper than 6 Blocks, no Mine has more than 30% of the hash rate and at least 20 independent Nodes run; keeping them longer also needs an upgrade (ADR 0015).
+- **New Accounts:** a Block creates at most 50, counted as the Accounts after it minus the Accounts before it, the reward address included (ADR 0015; built in step 2C item 5).
+- **Networks:** the main network (`lr` addresses) starts after step 2C and is never reset (P7). The test network (`tlr`) serves step 2C's acceptance test and stops once the main network starts; the dev network is for local work and tests of network upgrades.
 - **Nodes:** pruned by default, starting from a Checkpoint snapshot; Block headers carry a state root.
 
 ### 5.3 Mine
 
-- Each Land has one Mine. It runs beside the Land's Node on the Land owner's server and mines for the Land owner's address. No Land, no Mine: a Player without a Land gets Gold only by being sent some (decided by the project owner on 2026-10-30; this replaces ADR 0006 point 11, and ADR 0014 records it).
+- Each Land has one Mine. It runs beside the Land's Node on the Land owner's server and mines for the Land owner's address. No Land, no Mine: in Linked Realms, a Player without a Land gets Gold only by being sent some (decided by the project owner on 2026-10-30; ADR 0014 records it).
+- "No Land, no Mine" is a Linked Realms rule, not a chain rule. LR's Node also has a standalone mine command that mines for one address, off until its owner starts it and with a thread cap (P5); the reference Land kit and the Shell do not offer it (ADR 0015).
 - The Land owner switches the Mine on or off and picks its threads in their own Land, signing through the Shell's prompt; everyone in the Land sees when it mines and when it wins a Block.
 - **Voluntary mining (P5):** off at every start. When on, it uses 1 CPU thread unless the owner picks more, and it shows clearly that it is mining.
 - Fast mode when the machine has the memory (about 2 GB), light mode otherwise.
@@ -225,9 +232,9 @@ Built on Solidity contracts; superseded on 2026-10-29 by ADR 0006–0008. Step 2
 
 **Done when:** three map servers run in three separate containers; a player walks through a gate from land A to land B; shutting down A makes the directory show it as offline.
 
-### Phase 2 – Own chain, open source and testing (test network)
+### Phase 2 – Own chain, open source and testing
 
-**Goal:** people outside the team host their own Land, mine Gold on the game's own chain and play reliably.
+**Goal:** people outside the team host their own Land, mine Gold on LR, the project's own chain, and play reliably.
 
 #### 2A – Self-hosting, wallet and dashboard (EVM design)
 
@@ -254,14 +261,16 @@ Built on Solidity contracts; superseded on 2026-10-29 by ADR 0006–0008. Step 2
 
 - [ ] `crates/core`: transfers with a memo, key rotation, the Block format with a state root, issuance with halvings and the tail reward, LWMA Retarget, fee and size rules, the RandomX v2 binding (v2.0.1 pinned) with the official vectors on x86 and ARM.
 - [ ] `crates/node`: Block and transaction checks, a mempool with the fee auction and minimum relay fee, `redb` storage, pruning from Checkpoint snapshots, TCP P2P behind an interface, JSON-RPC (`jsonrpsee`), Checkpoint checks.
-- [ ] The Mine: one per Land, switched on and off by the Land owner in the Land, CPU limit, fast or light mode by available memory, rewards to the Land owner's address; the effect everyone in the Land sees when it wins a Block.
-- [ ] Company services: Checkpoint signer, seed nodes, Public node, archive.
+- [ ] The Mine: one per Land, switched on and off by the Land owner in the Land, CPU limit, fast or light mode by available memory, rewards to the Land owner's address; the effect everyone in the Land sees when it wins a Block. LR's standalone mine command (ADR 0015).
+- [ ] Services: the Checkpoint signer (the project owner's key, on a separate machine); the company's seed nodes, Public node and archive.
 - [ ] Shell: balance, send Gold with a memo, key rotation, prompts for payments a Land asks for.
 - [ ] Docker stack: Map server, Node (on by default, can be turned off) and Mine (off); self-hosting guide updated; Map server ↔ Node protocol specified.
 - [ ] Dashboard rebuilt on the Public node and the Hub.
 - [ ] Simulation: hash rate rises and falls and Block time returns to about 60 seconds; Checkpoints stop deeper rewrites.
+- [ ] After the Done-when check below: LR moves to its own repository with `git filter-repo` (ADR 0015), before the genesis.
+- [ ] The main network launch, by the project owner only (P7): a genesis without premine, the main network's id, the `lr` address prefix and the Checkpoint end height 1,051,200 in the genesis code; the test network stops.
 
-**Done when (Stage 1):** on the test network, at least 3 Players on 3 different machines each host a Land, run a Mine that wins Blocks, send Gold to each other through the Shell, and walk into each other's Lands.
+**Done when (Stage 1):** on the test network, at least 3 Players on 3 different machines each host a Land, run a Mine that wins Blocks, send Gold to each other through the Shell, and walk into each other's Lands. Then LR moves to its own repository and the project owner launches the main network.
 
 #### 2D – Economy in the reference Land kit
 
@@ -278,19 +287,13 @@ Built on Solidity contracts; superseded on 2026-10-29 by ADR 0006–0008. Step 2
 
 **Done when:** an NPC created by one Player travels to another Player's Land, finishes a Quest there, and the reward reaches its owner; a test Land that tells the NPC to send its Gold away does not get past the owner's limits.
 
-#### 2F – Audit before Phase 3
+#### 2F – Audit
 
-- [ ] Independent security audit of `crates/core` and `crates/node`: consensus, ML-DSA, the RandomX binding, P2P.
+- [ ] Independent security audit of `crates/core` and `crates/node`: consensus, ML-DSA, the RandomX binding, P2P. It runs after the main network starts and does not hold up the genesis (ADR 0015).
 
 **Done when:** the audit report is published and every finding is fixed or accepted by the project owner in writing.
 
 **Phase 2 is done when:** at least 10 Lands hosted by people outside the team stay connected reliably for one week.
-
-### Phase 3 – Mainnet preparation (only with a written decision)
-
-- [ ] Legal review before Gold has real value: a currency, mining, player-hosted content, AI-driven NPCs (EU AI Act).
-- [ ] Launch plan for the main network: genesis without premine, handling of the Checkpoint signer's key, seed nodes.
-- [ ] Revisit the issuance parameters using test network data.
 
 ## 7. Ideas beyond stage 1
 
@@ -328,9 +331,11 @@ Not part of stage 1. The project owner will decide the order.
 
 | Risk | Mitigation |
 |---|---|
-| Rented hash power takes over a small chain (51% attack) | Checkpoints every 10 Blocks limit rewrites; RandomX v2 favours CPUs; the test network has no value (P7) |
-| The Checkpoint signer's key leaks | A separate company service with its own key; the key changes only by network upgrade; key handling is a Phase 3 item |
-| Bugs in new consensus code, ML-DSA crates or the RandomX binding | Pinned versions; NIST and RandomX vectors on x86 and ARM; two ML-DSA crates cross-checked; independent audit before Phase 3 |
+| Rented hash power takes over a small chain (51% attack) | Checkpoints every 10 Blocks limit rewrites until height 1,051,200 or an earlier network upgrade; RandomX v2 favours CPUs |
+| The Checkpoint signer's key leaks | The project owner holds it on a machine separate from the company's servers; the key changes only by network upgrade; Checkpoints end at a height written in the genesis code (ADR 0015) |
+| Bugs in new consensus code, ML-DSA crates or the RandomX binding | Pinned versions; NIST and RandomX vectors on x86 and ARM; two ML-DSA crates cross-checked; independent audit after the genesis (2F); the main network is never reset, so a bug is fixed by a network upgrade |
+| A network upgrade breaks the main network | Tested locally on the dev network and with several Nodes; there is no public test network for upgrades (ADR 0015) |
+| State grows without bound from new Accounts | At most 50 new Accounts per Block; path-compressed state storage; a relay dust policy; new Accounts counted per Block and per Mine (ADR 0015) |
 | Players with powerful machines win most Blocks | Accepted, as in Bitcoin; track the winner distribution on the dashboard |
 | Players write their own mining tools or mine elsewhere | Cannot be prevented with open source; rewards still depend only on hash rate |
 | Players' machines run hot; the software is flagged as coin-mining malware | P5: voluntary mining, off by default, CPU limit, clearly shown |
@@ -342,8 +347,9 @@ Not part of stage 1. The project owner will decide the order.
 | The Hub is a central point | It holds no Players' keys and signs no Checkpoints; if it is down, travel stops but the chain and the Lands keep running |
 | Leaked private keys or secrets | P2; `.env.example`; secret scanning in CI |
 | Rule-breaking content on player-hosted Lands | Report and remove from the Hub's Directory; terms of use |
-| NPCs not disclosed as AI (EU AI Act Article 50) | The "driven by AI" field at arrival; legal review in Phase 3 |
-| Legal exposure once Gold has real value | P7; legal review before the main network |
+| NPCs not disclosed as AI (EU AI Act Article 50) | The "driven by AI" field at arrival |
+| Legal exposure once Gold has real value | Accepted by the project owner: no legal opinion before the main network (ADR 0015) |
+| The quiet launch looks like a premine | The genesis gives Gold to no one and every Block follows the same rules; ADR 0015 says the first Blocks will mostly go to whoever mines first |
 
 ## 10. Decisions to confirm
 
@@ -351,7 +357,7 @@ Not part of stage 1. The project owner will decide the order.
 |---|---|---|---|---|
 | D1 | Client | Phaser 4 in the browser | Godot 4, Unity | Confirmed 2026-10-29. The original default was Phaser 3; Phaser 4 is the current major version. |
 | D2 | Map server networking | Reference Land kit: WebSocket + Protocol Buffers, not mandatory for other Lands (ADR 0008) | Colyseus 0.18 (used until step 2B) | Replaced 2026-10-29. Colyseus's wire format is undocumented and its server is TypeScript-only, so Lands in other languages could not speak it. |
-| D3 | Test network | The game's own chain, reset with notice (ADR 0006) | Base Sepolia | Replaced 2026-10-29 |
+| D3 | Test network | The game's own chain, reset with notice (ADR 0006); from 2026-10-30 it serves only step 2C's acceptance test, and the main network follows (ADR 0015) | Base Sepolia | Replaced 2026-10-29 |
 | D4 | Hub API and relay | `hub-api`: TypeScript (Hono) in `packages/hub-api`. `relay`: Node.js + `ws`, scaled per section 3.5 | Symfony following the company backend standard; Cloudflare Tunnel, libp2p or WebRTC instead of a relay | Confirmed 2026-10-29. One language across relay, reference Map server and Hub. viem and the ERC-1271/6492 checks go away with the contracts (ADR 0007). Alternatives rejected for cost or terms of service (see `docs/research/2026-10-29-connection-scaling.md`). |
 | D5 | Players' keys | The Shell: keys from 24 words, encrypted with a password, Land UIs in isolated frames (ADR 0008) | Passkey wallet + CDP Paymaster (ADR 0005, built in 2A) | Replaced 2026-10-29 |
 | D6 | Licence | MIT | AGPL-3.0, Apache-2.0 | Confirmed 2026-10-29. The original default was AGPL-3.0. Chain rules checked by every Node already stop cheating, so forcing modified servers to publish their code adds no protection, and MIT is easier for contributors. |
@@ -364,6 +370,7 @@ Not part of stage 1. The project owner will decide the order.
 | D13 | Where the world lives | Lands and names with the Hub; items, Quests and stats with each Land; NPCs unrecorded (ADR 0007) | Lands on chain | Confirmed 2026-10-29 |
 | D14 | Land freedom | Own rules and UI per Land; a few mandatory protocols, the rest reference (ADR 0008) | One shared game server for every Land | Confirmed 2026-10-29 |
 | D15 | NPC AI | Owner's own model and API key; Claude API adapter first, then OpenAI-compatible (ADR 0008) | A company-provided AI | Confirmed 2026-10-29 |
+| D16 | The chain as a product | LR, its own product with Linked Realms as its first application; main network after step 2C; repository split before the genesis (ADR 0015) | Test network only until Phase 3; split now or at a second application | Confirmed 2026-10-30 |
 
 Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all repository content is in English.
 
@@ -373,7 +380,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 - At the end of each task: run the relevant tests; mark it done only when the tests are green.
 - The project owner decides every merge. Do not merge into `main` yourself, and do not push to the remote unless asked.
 - When a rule or requirement is unclear: ask instead of guessing, then record the decision in `docs/decisions/`.
-- Do not deploy to mainnet, do not commit secrets.
+- Do not launch or deploy the main network: only the project owner launches it (P7). Do not commit secrets.
 - Before adding a large library or a new external service: ask first.
 
 ## 12. Progress
@@ -386,16 +393,18 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 - [ ] Phase 2 – Own chain, open source and testing
   - [x] 2A – Self-hosting, wallet and dashboard (EVM design)
   - [ ] 2B – World without the chain
-  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; items 1 to 4 of 27 built)
+  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; items 1 to 4 of 29 built; ends with the repository split and the main network launch)
   - [ ] 2D – Economy in the reference Land kit
   - [ ] 2E – NPCs
-  - [ ] 2F – Audit before Phase 3
-- [ ] Phase 3 – Mainnet preparation
+  - [ ] 2F – Audit (after the genesis)
 
 ### Log
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
 
+- 2026-10-30: Design review with the project owner on whether the chain and the game should be two repositories, on branch `phase-2/2c-lr-design` (documents only). ADR 0015 records the answers. The chain is its own product, LR, with Linked Realms as its first application; the coin stays Gold, and addresses start with `lr` on the main network and `tlr` on the test network. LR holds money and a few fixed money rules, each added by a network upgrade with its own ADR. LR gets a standalone mine command, and "No Land, no Mine" stays a Linked Realms rule (step 2C plan, Answer 19 reversed in part). The main network starts after step 2C and is never reset: P7 is replaced with the text the project owner approved, and the test network serves only step 2C's acceptance test. The project owner holds the Checkpoint signer's key, and Checkpoints end at height 1,051,200, written in the genesis code, or earlier by a network upgrade once four criteria hold. The repository splits with `git filter-repo` at the end of step 2C, before the genesis; until then LR has its own glossary, `crates/CONTEXT.md`, and `CONTEXT-MAP.md` lists what goes with it. State growth: at most 50 new Accounts per Block (step 2C item 5), path-compressed tree storage (before item 11), a relay dust policy (item 12), and a count of new Accounts per Block and per Mine; about 23 MB a day at worst, an estimate. No legal opinion or audit before the genesis; step 2F, the audit, runs after it, and Phase 3 is removed. Each NPC has its own Account. Also changed: `CLAUDE.md`, `AGENTS.md`, `CONTRIBUTING.md`, `README.md`, `CONTEXT.md`, ADR 0006 and 0011, the step 2C plan (29 items, Answers 13, 19 and 22), and the documents that said "test network only". The design ADR is 0015 because the step 2C plan reserves 0012 to 0014.
+- 2026-10-30: A state-tree key starts with a kind byte, on branch `phase-2/2c-3-smt` (decided in the design review above, before item 5): an Account's key is `keccak256(0x00 ‖ address)` (`state::ACCOUNT_KIND`), so that a later money rule can keep its own state in the same tree without meeting an Account's key. ADR 0011 decision 7, `docs/protocols/transactions.md` and the step 2C plan say so. In `chain.json` the ledger's state roots, the start root and the state snapshot changed (49 values); the state-tree vectors did not. A naive sparse Merkle tree in JavaScript (`@noble/hashes`, a scratch script) gave the new snapshot root from the new rule and the old root from the old rule. `phase-2/2c-4-retarget` is rebased on it; the pull requests of both branches are not updated yet.
+- 2026-10-30: Two Shell browser tests that failed in Firefox in CI, on branch `phase-2/2b-world`. `connectedFrame` could return the document a reload was leaving, so it skips a document `land.reload()` has marked; and the locking test read the Hub stub's sign-in count once, before the Shell's background sign-in after an unlock had arrived, so it now polls.
 - 2026-10-30: The project owner confirmed the NoAccount rule (a sender must already have an account; ADR 0011 decision 4). The 2B branch and the four 2C branches are pushed, with stacked pull requests for 2C items 1 to 4; the pull request of 2B into `main` waits until step 2B is marked done. The state growth bound (ADR 0011 decision 8) still waits for the project owner.
 - 2026-10-30: Step 2C item 4 on branch `phase-2/2c-4-retarget`: the Retarget in `crates/core`. `u256::U256` is a hand-written 256-bit number with only a saturating add and a multiply then divide through a 320-bit product. `retarget::next_target` is the plan's LWMA: the initial Target for the first `N` Blocks and on the dev network, then the weighted solvetimes of the last `N + 1` headers (from the genesis at `N + 1`), clamped to `[1, 6T]`, and a result clamped to half and double the parent's Target and to the maximum. `ChainParams` gains the maximum and initial Targets, `T`, `N` and the Retarget switch; `N` is provisional until item 6 and both initial Targets until item 9. `chain.json` gains 20 Retarget cases, among them every overflow case of the plan, a window where rounding once instead of twice gives another Target, and clamps against a parent that differs from the mean; a scratch BigInt version written from the plan (not kept) agreed with all 20. The new mandatory `docs/protocols/blocks.md` defines the Target and the Retarget; ADR 0011 gains the 256-bit Target.
 

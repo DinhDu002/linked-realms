@@ -1,6 +1,6 @@
 # The public world: the Hub, the relay and the Shell behind Caddy, on one server
 # (docs/runbooks/public-world.md). Land owners run their Map servers on their own machines
-# (docs/self-hosting.md). Test network only (P7).
+# (docs/self-hosting.md). No chain runs yet: it comes in step 2C, and its main network after it (P7).
 #
 #   cp deploy/.env.example deploy/.env   # then fill it in
 #   docker compose -f deploy/compose.public.yaml up -d --build

@@ -4,7 +4,7 @@ Status: accepted, 2026-10-30 — by the project owner, with the step 2C plan (`d
 
 ## Context
 
-Step 2C writes the chain rules in `crates/core` (P9). Transaction ids, signatures and Merkle roots are hashes of bytes, so the Node, the Mine and the Shell must write every field the same way, byte for byte, or they disagree about which Blocks are valid. ADR 0006 fixed the issuance in GOLD; the chain needs it in exact integers, with a genesis height that makes the totals come out exactly. Once the test network has Blocks, changing any of this means resetting it.
+Step 2C writes the chain rules in `crates/core` (P9). Transaction ids, signatures and Merkle roots are hashes of bytes, so the Node, the Mine and the Shell must write every field the same way, byte for byte, or they disagree about which Blocks are valid. ADR 0006 fixed the issuance in GOLD; the chain needs it in exact integers, with a genesis height that makes the totals come out exactly. Once the test network has Blocks, changing any of this means resetting it; once the main network has Blocks, which is never reset, it means a network upgrade (P7).
 
 ## Decisions
 
@@ -17,7 +17,7 @@ Step 2C writes the chain rules in `crates/core` (P9). Transaction ids, signature
    - `version 0 ‖ scheme ‖ keccak256(scheme ‖ public key)`: the same bytes the Bech32m text carries (ADR 0009, `docs/protocols/identity.md`).
    - An unknown version or scheme is refused, as in the text form.
 3. **Networks have ids, and every signature binds one.**
-   - `testnet` is 1 and `dev` is 2. There is no id for a main network (P7). Each network is a `ChainParams` value, passed to the rules instead of global constants; the genesis, the Targets and the Checkpoint signer's key join it in later items.
+   - `testnet` is 1 and `dev` is 2. The main network's id joins with its genesis at the end of step 2C (ADR 0015). Each network is a `ChainParams` value, passed to the rules instead of global constants; the genesis, the Targets and the Checkpoint signer's key join it in later items.
    - The network id (`u32`) is the first field of the signed bytes of every transaction and every Checkpoint, and is not stored in them. A Character's key survives a reset of the test network and also signs on the dev network, so a transaction signed for one network must not verify on another.
 4. **A transaction's id is the keccak256 of its signed bytes.**
    - The id includes the network id and leaves out the signature. ML-DSA signatures are hedged (fresh random bytes each time), so an id over the signature would change each time the same transaction is signed.
@@ -47,7 +47,7 @@ Step 2C writes the chain rules in `crates/core` (P9). Transaction ids, signature
    - The bound is the Block size: at most about 397 new accounts per Block, about 571,680 a day (1,440 Blocks).
    - Per account: about 51 bytes in the accounts table (the 34-byte address, the balance and the nonce) and 2.44 tree entries (measured): one `Leaf` of about 131 bytes and on average 1.44 `Inner` of about 67, table keys included. That is about 280 bytes before `redb`'s own overhead, so about 160 MB a day when keys are spread evenly, as random addresses give. Item 11 measures it on `redb`.
    - Keys can be ground: a transfer may go to any address bytes, and its key is one keccak256 of them. Each extra bit a new key shares with an existing one adds an entry of about 67 bytes and doubles the tries. Twenty extra bits, about a million tries per address, give about 1.6 KB per account, about 1 GB a day. The hard limit, 257 entries for one account, is about 17 KB, about 10 GB a day, far beyond what grinding can reach.
-   - The project owner accepted no minimum when this bound was put at about 57 MB a day, a figure that left out the tree and grinding; the corrected bound waits for their confirmation.
+   - The project owner accepted no minimum when this bound was put at about 57 MB a day, a figure that left out the tree and grinding. Told the corrected bound, they chose on 2026-10-30 to cap new Accounts at 50 per Block, to store the tree path-compressed and to add a relay dust policy (ADR 0015); plan item 5 writes the cap into this decision.
 9. **A Target is a 256-bit number (plan answer 3).**
    - 32 bytes big-endian in a header, compared as a number with the Solution's hash read the same way.
    - `crates/core` `u256` is hand-written and holds only what the Retarget needs: a saturating add, and a multiply then divide by 64-bit numbers through a 320-bit product. No new dependency.
