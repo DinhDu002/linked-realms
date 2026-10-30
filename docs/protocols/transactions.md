@@ -94,7 +94,7 @@ The state root is the root of a sparse Merkle tree of depth 256 that holds every
 - **Root:** the node at depth 0. With no account it is `E[256]`; the genesis state has no account, so that is the genesis state root. The root depends only on the accounts, never on the order in which they changed.
 - **One account** (the fold rule): start with `c` = its leaf. For `j` from 0 to 255, with `b` = bit `255 - j` of its key, set `c = keccak256(0x01 ‖ c ‖ E[j])` if `b` is 0, else `c = keccak256(0x01 ‖ E[j] ‖ c)`. Then `c` is the root of a tree that holds only this account.
 
-How a Node stores the tree is its own choice; only the hashes above count. `crates/core` stores one entry for each node over two or more accounts and one for each account alone in its subtree, about 2.4 entries per account, instead of 256 nodes per account.
+How a Node stores the tree is its own choice; only the hashes above count. `crates/core` stores it path-compressed (ADR 0015, R1): one entry at the root and one at each child of a node where keys split, so `n` accounts take `2n - 1` entries however long a prefix their keys share, instead of 256 nodes per account.
 
 **Checking a state snapshot.** A state snapshot is every account at a Checkpoint's height, in ascending key order (keys compared as unsigned bytes), each once. The receiving Node builds the tree from it and compares the root with the state root in the Checkpoint's header:
 

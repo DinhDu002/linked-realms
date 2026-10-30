@@ -1,0 +1,13 @@
+[package]
+name = "linked-realms-node"
+version = "0.1.0"
+description = "The LR Node: stores the chain and follows its best branch"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+publish.workspace = true
+
+[dependencies]
+linked-realms-core = { path = "../core" }
+# Pinned: the database file's format is redb's.
+redb = "=4.4.0"

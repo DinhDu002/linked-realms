@@ -64,6 +64,14 @@ impl Header {
         keccak256(&[&self.to_bytes()])
     }
 
+    /// A header alone, as a Node stores it.
+    pub fn from_bytes(bytes: &[u8]) -> Result<Header, Error> {
+        let mut reader = Reader::new(bytes);
+        let header = Header::read(&mut reader)?;
+        reader.finish()?;
+        Ok(header)
+    }
+
     fn read(reader: &mut Reader<'_>) -> Result<Header, Error> {
         if reader.u8()? != BLOCK_VERSION {
             return Err(Error::UnknownVersion);
@@ -193,6 +201,20 @@ pub fn validate_block(
     tree: &impl SmtStore,
     hash: impl Fn(&[u8], &[u8; 32]) -> [u8; 32],
 ) -> Result<Changes, Error> {
+    check_block(params, block, chain, hash)?;
+    check_on_accounts(params, block, state, tree)
+}
+
+/// The checks of `validate_block` that need no account, in its order: the size, the header
+/// against the chain it extends, and the transactions against the header's `tx_root`. A Node
+/// runs them before it stores a Block of any branch. A transaction's id leaves out its
+/// signature, so a Block that passes may still carry a signature someone changed.
+pub fn check_block(
+    params: &ChainParams,
+    block: &Block,
+    chain: &(impl ChainView + ?Sized),
+    hash: impl Fn(&[u8], &[u8; 32]) -> [u8; 32],
+) -> Result<(), Error> {
     // 1. What `from_bytes` checks, for a Block built in memory.
     if block.size() > MAX_BLOCK_SIZE {
         return Err(Error::BlockTooLarge);
@@ -228,9 +250,21 @@ pub fn validate_block(
     }
     // 5. The transactions, then the reward, then the state root.
     let ids: Vec<[u8; 32]> = block.txs.iter().map(|tx| tx.id(params)).collect();
-    if tx_root(&ids) != header.tx_root {
-        return Err(Error::WrongTxRoot);
+    match tx_root(&ids) == header.tx_root {
+        true => Ok(()),
+        false => Err(Error::WrongTxRoot),
     }
+}
+
+/// The rest of `validate_block`, on the accounts as the Block's parent leaves them, for a Block
+/// that `check_block` has passed: the transactions, the reward and the state root.
+pub fn check_on_accounts(
+    params: &ChainParams,
+    block: &Block,
+    state: &impl StateView,
+    tree: &impl SmtStore,
+) -> Result<Changes, Error> {
+    let (header, height) = (&block.header, block.header.height);
     let mut after = Overlay {
         state,
         tree,
@@ -474,6 +508,12 @@ mod tests {
         assert_eq!(bytes[145..NONCE_OFFSET], header.reward_address.to_bytes());
         assert_eq!(bytes[NONCE_OFFSET..], header.nonce.to_be_bytes());
         assert_eq!(header.id(), keccak256(&[&bytes]));
+        assert_eq!(Header::from_bytes(&bytes), Ok(header));
+        assert_eq!(Header::from_bytes(&bytes[1..]), Err(Error::UnknownVersion));
+        assert_eq!(
+            Header::from_bytes(&[&bytes[..], &[0]].concat()),
+            Err(Error::TrailingBytes)
+        );
     }
 
     #[test]

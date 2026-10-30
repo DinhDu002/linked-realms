@@ -39,6 +39,14 @@ pub fn next_target(
         .min(parent.mul_div(2, 1).min(params.max_target))
 }
 
+/// The work a header with `target` proves, the expected number of hashes to find it:
+/// `floor(2^256 / (target + 1))`. Fork choice adds it up along a branch (docs/protocols/blocks.md).
+pub fn work(target: U256) -> U256 {
+    // 2^256 does not fit, but 2^256 / (t + 1) = (2^256 - t - 1) / (t + 1) + 1, and
+    // 2^256 - t - 1 is !t. The saturating additions give 1 at the maximum and cap a Target of 0.
+    (!target / target.saturating_add(U256::ONE)).saturating_add(U256::ONE)
+}
+
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -134,5 +142,20 @@ mod tests {
         let back = |j: u64| (j / 2 * 120 + if j % 2 == 1 { 150 } else { 0 }, X);
         let weighted = 150 + 119 * (900 - 1) + 930;
         assert_eq!(next_target(&p, 61, back), X.mul_div(weighted, 109_800));
+    }
+
+    #[test]
+    fn work_is_the_expected_number_of_hashes() {
+        let n = |n: u64| U256::ONE.mul_div(n, 1);
+        // The easiest Targets: 65,536 and 1,024 hashes a Block (params.rs).
+        assert_eq!(work(TESTNET.max_target), n(1 << 16));
+        assert_eq!(work(DEV.max_target), n(1 << 10));
+        // Half of all hashes pass, then all but one.
+        assert_eq!(work(U256::ones(255)), n(2));
+        assert_eq!(work(U256::MAX), n(1));
+        assert_eq!(work(U256::ONE), U256::ones(255).saturating_add(n(1)));
+        assert_eq!(work(U256::ZERO), U256::MAX);
+        // A harder Target proves more work.
+        assert!(work(X) > work(X.saturating_add(X)));
     }
 }
