@@ -336,9 +336,10 @@ impl<'t> Tables<'t> {
         db(self.checkpoints.insert(height, record));
     }
 
-    /// The height and Block id of the highest Checkpoint.
-    pub fn latest_checkpoint(&self) -> Option<(u64, [u8; 32])> {
-        db(self.checkpoints.last()).map(|(height, record)| {
+    /// The height and Block id of the highest Checkpoint at or below `height`.
+    pub fn checkpoint_at_or_below(&self, height: u64) -> Option<(u64, [u8; 32])> {
+        let last = db(self.checkpoints.range(..=height)).next_back();
+        db(last.transpose()).map(|(height, record)| {
             let id = record.value()[..32].try_into().expect("32 bytes");
             (height.value(), id)
         })

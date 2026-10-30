@@ -368,6 +368,28 @@ fn a_branch_that_contradicts_the_checkpoint_ends_below_it() {
 }
 
 #[test]
+fn a_higher_checkpoint_does_not_lift_a_lower_one() {
+    let file = File::new("lower");
+    let chain = file.open();
+    let mut build = Builder::new();
+    let genesis = build.genesis();
+    let a = build.branch(&genesis, nobody(1), 12);
+    submit_all(&chain, &a);
+    chain
+        .add_checkpoint(&checkpoint(10, a[9].header.id()))
+        .unwrap();
+    // No branch reaches this one yet.
+    chain.add_checkpoint(&checkpoint(20, [1; 32])).unwrap();
+    let c = build.branch(&genesis, nobody(2), 14);
+    submit_all(&chain, &c);
+    assert_eq!(chain.tip().unwrap(), a[11].header);
+    // A branch that holds A10 goes on past it.
+    let d = build.branch(&a[10], nobody(3), 3);
+    submit_all(&chain, &d);
+    assert_eq!(chain.tip().unwrap(), d[2].header);
+}
+
+#[test]
 fn refuses_a_checkpoint_the_signer_did_not_sign() {
     let file = File::new("bad-checkpoint");
     let chain = file.open();

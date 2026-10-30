@@ -1,9 +1,10 @@
 //! The chain a Node follows (docs/protocols/blocks.md). A Block of any branch is stored once
 //! `block::check_block` passes on its branch; its accounts are checked only when its branch
-//! becomes the best. The best branch has the most work among the branches that match the latest
-//! Checkpoint; if none does, among those that do not contradict it. Moving to another branch
-//! undoes Blocks back to where the branches part, then applies the other branch's, in one write
-//! transaction: a Block a rule refuses on the way leaves the chain as it was.
+//! becomes the best. The best branch has the most work among the branches that hold the highest
+//! Checkpoint any branch holds, and no branch counts past a Checkpoint it contradicts. Moving to
+//! another branch undoes Blocks back to where the branches part, then applies the other
+//! branch's, in one write transaction: a Block a rule refuses on the way leaves the chain as it
+//! was.
 
 use std::path::Path;
 
@@ -121,8 +122,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
         }
     }
 
-    /// Takes `checkpoint` if the Checkpoint signer signed it, then follows the best branch. The
-    /// highest Checkpoint taken decides.
+    /// Takes `checkpoint` if the Checkpoint signer signed it, then follows the best branch.
     pub fn add_checkpoint(&self, checkpoint: &Checkpoint) -> Result<(), Error> {
         verify_checkpoint(&self.params, checkpoint).map_err(Error::Rule)?;
         // Every branch starts at the genesis: a Checkpoint that names another leaves none.
@@ -255,12 +255,11 @@ fn undo(t: &mut Tables, height: u64) {
 }
 
 /// The Block the best branch ends with. Each branch ends below its lowest Block that a rule
-/// refused or that has no body, and below the latest Checkpoint's height if it holds another
-/// Block there. Branches that hold the Checkpoint's Block come first, then the most work; a tie
+/// refused or that has no body, and below each Checkpoint's height at which it holds another
+/// Block. Branches that hold a higher Checkpoint's Block come first, then the most work; a tie
 /// keeps the tip.
 fn best_candidate(t: &Tables) -> [u8; 32] {
-    let checkpoint = t.latest_checkpoint();
-    let candidate = |end: [u8; 32]| -> (bool, U256, [u8; 32]) {
+    let candidate = |end: [u8; 32]| -> (u64, U256, [u8; 32]) {
         let mut usable = end;
         let mut id = end;
         loop {
@@ -273,22 +272,27 @@ fn best_candidate(t: &Tables) -> [u8; 32] {
             }
             id = stored.header.prev_id;
         }
-        let stored = t.header(&usable).expect("a stored header");
-        match checkpoint {
-            None => (true, stored.work, usable),
-            Some((height, _)) if stored.header.height < height => (false, stored.work, usable),
-            Some((height, block_id)) if ancestor(t, usable, height) == block_id => {
-                (true, stored.work, usable)
+        // A Checkpoint's Block fixes every Block below it, so the highest one the branch holds
+        // is its rank. The genesis is held by every branch.
+        let mut below = t.header(&usable).expect("a stored header").header.height;
+        let held = loop {
+            match t.checkpoint_at_or_below(below) {
+                None => break 0,
+                Some((height, block_id)) if ancestor(t, usable, height) == block_id => {
+                    break height;
+                }
+                Some((height, _)) => {
+                    // Not the genesis: a Checkpoint at height 0 names it.
+                    usable = ancestor(t, usable, height - 1);
+                    below = height - 1;
+                }
             }
-            Some((height, _)) => {
-                let below = ancestor(t, usable, height - 1);
-                (
-                    false,
-                    t.header(&below).expect("a stored header").work,
-                    below,
-                )
-            }
-        }
+        };
+        (
+            held,
+            t.header(&usable).expect("a stored header").work,
+            usable,
+        )
     };
     let mut best = candidate(t.tip());
     for end in t.tips() {

@@ -50,7 +50,7 @@ Step 2C writes the chain rules in `crates/core` (P9). Transaction ids, signature
    - The project owner accepted no minimum when this bound was put at about 57 MB a day, a figure that left out the tree and grinding. Told the corrected bound, they chose on 2026-10-30 to cap new Accounts at 50 per Block, to store the tree path-compressed and to add a relay dust policy (ADR 0015). With all three, ADR 0015 puts the bound at about 23 MB a day, an estimate that item 11 measured as about 32 MB a day (about 450 bytes per new Account on `redb`). The cap is checked by `validate_block` from plan item 5.
 9. **A Target is a 256-bit number (plan answer 3).**
    - 32 bytes big-endian in a header, compared as a number with the Solution's hash read the same way.
-   - `crates/core` `u256` is hand-written and holds only what the Retarget needs: a saturating add, and a multiply then divide by 64-bit numbers through a 320-bit product. No new dependency.
+   - `crates/core` `u256` is hand-written and holds only what the Retarget needs: a saturating add, and a multiply then divide by 64-bit numbers through a 320-bit product. No new dependency. Item 11 of step 2C added a 256-bit division and a bitwise not, for the work a Target proves (`retarget::work`), which fork choice sums.
    - The Retarget rounds down twice, in a fixed order: `floor(floor(sum / N) · weighted / k)` (`docs/protocols/blocks.md`). Another order gives other Targets, so the order is part of the rule.
    - Rejected: a compact 32-bit Target like Bitcoin's `nBits`. It saves 28 bytes per header but rounds every Target to a few significant bytes, one more rule that every language must reproduce exactly.
 

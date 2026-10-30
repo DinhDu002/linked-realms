@@ -1,4 +1,5 @@
-//! A 256-bit unsigned number for Targets, with only what the Retarget needs (ADR 0011).
+//! A 256-bit unsigned number for Targets, with only what the Retarget and the work a Target
+//! proves need (ADR 0011).
 
 /// Most significant limb first, so the derived order is the numeric order.
 #[derive(Debug, Clone, Copy, PartialEq, Eq, PartialOrd, Ord, Hash)]
