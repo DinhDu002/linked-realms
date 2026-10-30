@@ -124,13 +124,20 @@ impl Block {
 }
 
 /// The height of the Block whose id is the RandomX key at `height`: a new key every 2048 Blocks,
-/// used from 64 Blocks after it. This follows Monero's pattern, UNVERIFIED against its code;
-/// ADR 0012 fixes the edges and the vectors (plan item 9).
+/// used from 64 Blocks after it (ADR 0012). Monero's `rx_seedheight` switches one Block later.
 pub fn key_height(height: u64) -> u64 {
     if height < 2112 {
         0
     } else {
         (height - 64) / 2048 * 2048
+    }
+}
+
+/// Whether `block` is the genesis of `params`, the only Block a Node takes at height 0.
+pub fn check_genesis(params: &ChainParams, block: &Block) -> Result<(), Error> {
+    match block.header == params.genesis() && block.txs.is_empty() {
+        true => Ok(()),
+        false => Err(Error::WrongGenesis),
     }
 }
 
