@@ -5,6 +5,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 
+use linked_realms_core::amount::{format_amount, parse_amount};
 use linked_realms_core::block::{
     Block, HEADER_LEN, Header, MAX_BLOCK_SIZE, MAX_NEW_ACCOUNTS, NONCE_OFFSET, check_genesis,
     key_height, validate_block,
@@ -18,7 +19,7 @@ use linked_realms_core::params::{ChainParams, DEV, DEV_CHECKPOINT_SEED, TESTNET}
 use linked_realms_core::retarget::next_target;
 use linked_realms_core::smt::{self, Node};
 use linked_realms_core::state::{Account, PublicKey, tree_key};
-use linked_realms_core::tx::{Kind, Tx, apply_tx, check_tx};
+use linked_realms_core::tx::{Kind, TX_CONTEXT, Tx, apply_tx, check_tx};
 use linked_realms_core::u256::U256;
 use linked_realms_core::{
     ADDRESS_LEN, Address, Error, SCHEME_ML_DSA_44, SigningKey, character_seed, entropy_from_words,
@@ -440,6 +441,8 @@ struct Chain {
     key_heights: Vec<KeyHeight>,
     genesis: Vec<GenesisCase>,
     checkpoints: Checkpoints,
+    tx_builds: Vec<TxBuild>,
+    amounts: Amounts,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -496,6 +499,7 @@ UPDATE_VECTORS=1 cargo test -p linked-realms-core.";
 fn generate_chain() -> Chain {
     let (ledger, final_state) = generate_ledger();
     let state_snapshots = generate_state_snapshots(&final_state, &ledger);
+    let tx_builds = generate_tx_builds(&ledger.steps);
     let networks = [("testnet", &TESTNET), ("dev", &DEV)]
         .into_iter()
         .map(|(name, params)| Network {
@@ -599,6 +603,8 @@ fn generate_chain() -> Chain {
             .collect(),
         genesis: generate_genesis(),
         checkpoints: generate_checkpoints(),
+        tx_builds,
+        amounts: generate_amounts(),
     }
 }
 
@@ -816,6 +822,40 @@ struct TxStep {
     changed: Vec<AccountVector>,
     /// The state root after the step.
     state_root: String,
+}
+
+/// How a ledger step's bytes are built again through the WASM API (`packages/core`): signing these
+/// fields anew, with `rnd` of zeros, gives the step's bytes. Steps whose bytes were changed after
+/// signing have none.
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct TxBuild {
+    /// The index of the step in `transactions.steps`.
+    step: usize,
+    /// The network it was signed for, not always the one the step checks it on.
+    network_id: u32,
+    signer_xi: String,
+    sender: String,
+    nonce: String,
+    fee: String,
+    /// The transaction carries the signer's public key.
+    with_public_key: bool,
+    transfer: Option<TransferBuild>,
+    rotation: Option<RotationBuild>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct TransferBuild {
+    to: String,
+    amount: String,
+    memo: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct RotationBuild {
+    new_scheme: u8,
+    new_public_key: String,
 }
 
 const GOLD: u64 = BASE_UNITS_PER_GOLD;
@@ -1167,6 +1207,162 @@ fn generate_ledger() -> (Ledger, HashMap<Address, Account>) {
         },
         state,
     )
+}
+
+/// The builds of the ledger's steps: for each step that parses, the key among the ledger's that
+/// signed it, for the network it signed it for, if signing it again with `rnd` of zeros gives
+/// its bytes.
+fn generate_tx_builds(steps: &[TxStep]) -> Vec<TxBuild> {
+    // The ledger's keys (`generate_ledger`).
+    let keys: Vec<_> = [0x41, 0x61, 0x42, 0x62, 0x43, 0x44]
+        .map(|seed| ([seed; 32], SigningKey::from_seed(&[seed; 32])))
+        .into();
+    let builds: Vec<TxBuild> = steps
+        .iter()
+        .enumerate()
+        .filter_map(|(step, vector)| {
+            let bytes = hex::decode(&vector.tx).unwrap();
+            let tx = Tx::from_bytes(&bytes).ok()?;
+            let (params, xi, key) = [&TESTNET, &DEV].into_iter().find_map(|params| {
+                keys.iter().find_map(|(xi, key)| {
+                    let message = tx.signing_bytes(params);
+                    verify(
+                        SCHEME_ML_DSA_44,
+                        key.public_key(),
+                        TX_CONTEXT,
+                        &message,
+                        &tx.signature,
+                    )
+                    .then_some((params, xi, key))
+                })
+            })?;
+            let with_public_key = match &tx.public_key {
+                None => false,
+                Some(public_key) => public_key == key.public_key(),
+            };
+            let mut again = tx.clone();
+            again.sign(params, key, &[0; 32]).unwrap();
+            if again.to_bytes() != bytes || (tx.public_key.is_some() && !with_public_key) {
+                return None;
+            }
+            let (transfer, rotation) = match tx.kind {
+                Kind::Transfer { to, amount, memo } => (
+                    Some(TransferBuild {
+                        to: to.to_string(),
+                        amount: amount.to_string(),
+                        memo: hex::encode(memo),
+                    }),
+                    None,
+                ),
+                Kind::Rotation { new_key } => (
+                    None,
+                    Some(RotationBuild {
+                        new_scheme: new_key.scheme,
+                        new_public_key: hex::encode(new_key.bytes),
+                    }),
+                ),
+            };
+            Some(TxBuild {
+                step,
+                network_id: params.network_id,
+                signer_xi: hex::encode(xi),
+                sender: tx.sender.to_string(),
+                nonce: tx.nonce.to_string(),
+                fee: tx.fee.to_string(),
+                with_public_key,
+                transfer,
+                rotation,
+            })
+        })
+        .collect();
+    for (step, vector) in steps.iter().enumerate() {
+        if vector.verdict == "ok" {
+            assert!(
+                builds.iter().any(|build| build.step == step),
+                "{}: an accepted step can be built again",
+                vector.note
+            );
+        }
+    }
+    builds
+}
+
+/// Amounts as typed and shown (`amount`), each checked here against the value it must have.
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct Amounts {
+    valid: Vec<AmountCase>,
+    invalid: Vec<InvalidAmount>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct AmountCase {
+    text: String,
+    /// In base units.
+    units: String,
+    /// `format_amount(units)`.
+    formatted: String,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct InvalidAmount {
+    text: String,
+    error: String,
+}
+
+fn generate_amounts() -> Amounts {
+    let valid = [
+        ("0", 0, "0"),
+        ("1", GOLD, "1"),
+        ("1.5", 150_000_000, "1.5"),
+        ("1.50000000", 150_000_000, "1.5"),
+        ("0.1", 10_000_000, "0.1"),
+        ("0.00000001", 1, "0.00000001"),
+        ("007.10", 710_000_000, "7.1"),
+        ("0.3125", 31_250_000, "0.3125"),
+        ("19687500", 19_687_500 * GOLD, "19687500"),
+        ("184467440737.09551615", u64::MAX, "184467440737.09551615"),
+    ]
+    .map(|(text, units, formatted)| {
+        assert_eq!(parse_amount(text), Ok(units), "{text}");
+        assert_eq!(format_amount(units), formatted, "{text}");
+        assert_eq!(parse_amount(formatted), Ok(units), "{text}: read back");
+        AmountCase {
+            text: text.into(),
+            units: units.to_string(),
+            formatted: formatted.into(),
+        }
+    });
+    use Error::{BadAmount, Overflow};
+    let invalid = [
+        ("", BadAmount),
+        (".", BadAmount),
+        ("1.", BadAmount),
+        (".5", BadAmount),
+        ("1.123456789", BadAmount),
+        ("1.2.3", BadAmount),
+        ("-1", BadAmount),
+        ("+1", BadAmount),
+        (" 1", BadAmount),
+        ("1 ", BadAmount),
+        ("1,5", BadAmount),
+        ("1e8", BadAmount),
+        ("0x10", BadAmount),
+        ("\u{ff11}", BadAmount),
+        ("184467440737.09551616", Overflow),
+        ("184467440738", Overflow),
+        ("99999999999999999999999", Overflow),
+    ]
+    .map(|(text, error)| {
+        assert_eq!(parse_amount(text), Err(error), "{text:?}");
+        InvalidAmount {
+            text: text.into(),
+            error: format!("{error:?}"),
+        }
+    });
+    Amounts {
+        valid: valid.into(),
+        invalid: invalid.into(),
+    }
 }
 
 /// The state tree (`smt`) on chosen keys and values, so no address has to be ground to get keys
