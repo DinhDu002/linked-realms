@@ -264,6 +264,31 @@ pub fn check_on_accounts(
     state: &impl StateView,
     tree: &impl SmtStore,
 ) -> Result<Changes, Error> {
+    let (root, changes) = after_block(params, block, state, tree)?;
+    match root == block.header.state_root {
+        true => Ok(changes),
+        false => Err(Error::WrongStateRoot),
+    }
+}
+
+/// The state root `block` leaves, whatever its header holds: what a Block template's header
+/// gets. Refused as `check_on_accounts` refuses, but for the state root.
+pub fn state_root_after(
+    params: &ChainParams,
+    block: &Block,
+    state: &impl StateView,
+    tree: &impl SmtStore,
+) -> Result<[u8; 32], Error> {
+    after_block(params, block, state, tree).map(|(root, _)| root)
+}
+
+/// The state root after `block`, and its changes.
+fn after_block(
+    params: &ChainParams,
+    block: &Block,
+    state: &impl StateView,
+    tree: &impl SmtStore,
+) -> Result<([u8; 32], Changes), Error> {
     let (header, height) = (&block.header, block.header.height);
     let mut after = Overlay {
         state,
@@ -293,15 +318,12 @@ pub fn check_on_accounts(
     for (key, value) in &leaves {
         smt::insert(&mut after, key, value);
     }
-    if smt::root(&after) != header.state_root {
-        return Err(Error::WrongStateRoot);
-    }
-    Ok(after.changes)
+    Ok((smt::root(&after), after.changes))
 }
 
 /// The median of the timestamps of the up to 11 Blocks before `height`: with an even number of
-/// them, the later of the two in the middle.
-fn median_time_past(chain: &(impl ChainView + ?Sized), height: u64) -> u64 {
+/// them, the later of the two in the middle. A Block's timestamp must be above it.
+pub fn median_time_past(chain: &(impl ChainView + ?Sized), height: u64) -> u64 {
     let mut times: Vec<u64> = (height.saturating_sub(MEDIAN_SPAN)..height)
         .map(|j| chain.header(j).timestamp)
         .collect();
@@ -566,6 +588,19 @@ mod tests {
         assert_eq!(state[&key(1).address()].balance, GOLD - 15);
         assert_eq!(state[&nobody(2)].balance, 5);
         assert_eq!(state[&nobody(3)].balance, reward(2) + 10);
+    }
+
+    #[test]
+    fn a_template_gets_the_state_root_its_block_leaves() {
+        let (_, state, tree, mut block) = setup();
+        let root = block.header.state_root;
+        block.header.state_root = [0; 32];
+        assert_eq!(state_root_after(&PARAMS, &block, &state, &tree), Ok(root));
+        block.txs[0].nonce = 1;
+        assert_eq!(
+            state_root_after(&PARAMS, &block, &state, &tree),
+            Err(Error::WrongNonce)
+        );
     }
 
     /// A change that makes one check fail, and its error.

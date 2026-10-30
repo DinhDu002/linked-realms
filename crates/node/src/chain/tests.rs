@@ -12,33 +12,33 @@ use linked_realms_core::{ADDRESS_LEN, SCHEME_ML_DSA_44, SigningKey};
 use super::*;
 
 /// Half of all hashes pass, and the Retarget is off, so every Block proves the same work.
-const PARAMS: ChainParams = ChainParams {
+pub(crate) const PARAMS: ChainParams = ChainParams {
     max_target: U256::ones(255),
     initial_target: U256::ones(255),
     ..DEV
 };
 
 /// Proof of Work by the nonce alone: 0 fails, anything else passes.
-fn fake_hash(header: &[u8], _key: &[u8; 32]) -> [u8; 32] {
+pub(crate) fn fake_hash(header: &[u8], _key: &[u8; 32]) -> [u8; 32] {
     match header[NONCE_OFFSET..] == [0; 8] {
         true => [0xff; 32],
         false => [0; 32],
     }
 }
 
-type Test = Chain<fn(&[u8], &[u8; 32]) -> [u8; 32]>;
+pub(crate) type Test = Chain<fn(&[u8], &[u8; 32]) -> [u8; 32]>;
 
 /// A database file of its own, removed when the test ends.
-struct File(PathBuf);
+pub(crate) struct File(PathBuf);
 
 impl File {
-    fn new(name: &str) -> Self {
+    pub(crate) fn new(name: &str) -> Self {
         let path = std::env::temp_dir().join(format!("lr-node-{}-{name}.redb", std::process::id()));
         let _ = std::fs::remove_file(&path);
         File(path)
     }
 
-    fn open(&self) -> Test {
+    pub(crate) fn open(&self) -> Test {
         Chain::open(
             &self.0,
             PARAMS,
@@ -55,7 +55,7 @@ impl Drop for File {
 }
 
 /// An address nobody has the key of.
-fn nobody(n: u8) -> Address {
+pub(crate) fn nobody(n: u8) -> Address {
     let mut bytes = [n; ADDRESS_LEN];
     bytes[..2].copy_from_slice(&[0, SCHEME_ML_DSA_44]);
     Address::from_bytes(&bytes).unwrap()
@@ -82,14 +82,14 @@ fn transfer(from: &SigningKey, nonce: u64, to: Address, amount: u64) -> Tx {
 type Accounts = HashMap<Address, Account>;
 
 /// Valid Blocks on any branch, from the accounts after each Block it built.
-struct Builder(HashMap<[u8; 32], Accounts>);
+pub(crate) struct Builder(HashMap<[u8; 32], Accounts>);
 
 impl Builder {
-    fn new() -> Self {
+    pub(crate) fn new() -> Self {
         Builder(HashMap::from([(PARAMS.genesis().id(), Accounts::new())]))
     }
 
-    fn genesis(&self) -> Block {
+    pub(crate) fn genesis(&self) -> Block {
         Block {
             header: PARAMS.genesis(),
             txs: Vec::new(),
@@ -97,7 +97,7 @@ impl Builder {
     }
 
     /// A Block on `parent` paying `reward_address`, with `txs`.
-    fn child(&mut self, parent: &Block, reward_address: Address, txs: Vec<Tx>) -> Block {
+    pub(crate) fn child(&mut self, parent: &Block, reward_address: Address, txs: Vec<Tx>) -> Block {
         let mut after = self.0[&parent.header.id()].clone();
         for tx in &txs {
             apply_tx(&PARAMS, &mut after, tx).unwrap();
@@ -132,7 +132,12 @@ impl Builder {
     }
 
     /// `n` Blocks on `parent` paying `reward_address`, lowest first.
-    fn branch(&mut self, parent: &Block, reward_address: Address, n: usize) -> Vec<Block> {
+    pub(crate) fn branch(
+        &mut self,
+        parent: &Block,
+        reward_address: Address,
+        n: usize,
+    ) -> Vec<Block> {
         let mut blocks: Vec<Block> = Vec::new();
         for _ in 0..n {
             let parent = blocks.last().unwrap_or(parent).clone();
@@ -142,13 +147,13 @@ impl Builder {
     }
 }
 
-fn submit_all(chain: &Test, blocks: &[Block]) {
+pub(crate) fn submit_all(chain: &Test, blocks: &[Block]) {
     for block in blocks {
         chain.submit_block(block).unwrap();
     }
 }
 
-fn balance(chain: &Test, address: &Address) -> Option<u64> {
+pub(crate) fn balance(chain: &Test, address: &Address) -> Option<u64> {
     chain
         .account(address)
         .unwrap()
