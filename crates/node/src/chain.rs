@@ -116,7 +116,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
 
     /// A Block on the best chain's tip paying `reward_address`, with `txs` in this order and its
     /// Proof of Work not done (`nonce` 0). Its timestamp is `now`, or the earliest the rules
-    /// allow if that is later. Refused if a rule refuses `txs` on the tip.
+    /// allow if that is later. Refused if a rule but the Proof of Work refuses it on the tip.
     pub fn template(
         &self,
         reward_address: Address,
@@ -144,6 +144,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
                 },
                 txs,
             };
+            check_block(&self.params, &block, &chain, |_, _| [0; 32]).map_err(Error::Rule)?;
             block.header.state_root = state_root_after(&self.params, &block, &t.accounts, &t.tree)
                 .map_err(Error::Rule)?;
             Ok(block)
@@ -218,6 +219,8 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
     }
 
     /// Runs `look` on the tables, then drops what it would change.
+    // ponytail: a write transaction for one view of every table, so it holds the writer for as
+    // long as `look` runs (a template's signature checks); add read-only tables if that shows.
     fn read<T>(&self, look: impl FnOnce(&Tables) -> Result<T, Error>) -> Result<T, Error> {
         let txn = self.db.begin_write()?;
         let seen = look(&Tables::open(&txn)?);

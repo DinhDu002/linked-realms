@@ -10,6 +10,10 @@ fn key(seed: u8) -> SigningKey {
 
 /// A transfer paying `rate` base units per byte, its key included with nonce 0.
 fn pay(from: &SigningKey, nonce: u64, to: Address, amount: u64, rate: u64) -> Tx {
+    pay_with(from, nonce, to, amount, rate, b"")
+}
+
+fn pay_with(from: &SigningKey, nonce: u64, to: Address, amount: u64, rate: u64, memo: &[u8]) -> Tx {
     let mut tx = Tx {
         scheme: SCHEME_ML_DSA_44,
         sender: from.address(),
@@ -18,7 +22,7 @@ fn pay(from: &SigningKey, nonce: u64, to: Address, amount: u64, rate: u64) -> Tx
         kind: Kind::Transfer {
             to,
             amount,
-            memo: Vec::new(),
+            memo: memo.to_vec(),
         },
         public_key: (nonce == 0).then(|| from.public_key().to_vec()),
         signature: Vec::new(),
@@ -195,6 +199,50 @@ fn evicts_the_lowest_fee_rate_with_the_senders_later_ones() {
     expected.sort_by_key(|(sender, nonce)| (sender.to_bytes(), *nonce));
     assert_eq!(held(&pool), expected);
     assert_eq!(pool.bytes, 3 * first);
+}
+
+#[test]
+fn a_refused_replacement_leaves_the_mempool_as_it_was() {
+    let first = pay(&key(0), 0, nobody(1), GOLD, 10).to_bytes().len();
+    let next = pay(&key(0), 1, nobody(1), GOLD, 10).to_bytes().len();
+    let policy = Policy {
+        max_bytes: 2 * first + next,
+        ..Policy::default()
+    };
+    let (_file, chain, mut pool, ..) = funded("refused", 2, policy);
+    let (a, b) = (key(0), key(1));
+    let f = funder().address();
+    let a0 = pay(&a, 0, f, 1, 20);
+    add(&mut pool, &chain, a0.clone()).unwrap();
+    add(&mut pool, &chain, pay(&a, 1, f, 1, 30)).unwrap();
+    add(&mut pool, &chain, pay(&b, 0, f, 1, 25)).unwrap();
+    let before = held(&pool);
+    // 10 % more per byte, but larger, and then the lowest held.
+    assert_eq!(
+        add(&mut pool, &chain, pay_with(&a, 0, f, 1, 22, b"memo")),
+        Err(Refused::Full)
+    );
+    assert_eq!(held(&pool), before);
+    assert_eq!(pool.senders[&a.address()][&0].tx, a0);
+    assert_eq!(pool.bytes, policy.max_bytes);
+}
+
+#[test]
+fn a_template_passes_every_check_but_the_proof_of_work() {
+    let (_file, chain, ..) = funded("checks", 0, Policy::default());
+    let f = funder().address();
+    let too_late = linked_realms_core::block::MAX_TIMESTAMP + 1;
+    assert!(matches!(
+        chain.template(f, Vec::new(), too_late),
+        Err(Error::Rule(RuleError::TimestampTooLate))
+    ));
+    // A clock behind the chain gets the earliest timestamp the rules allow.
+    let template = chain.template(f, Vec::new(), 0).unwrap();
+    assert_eq!(
+        template.header.timestamp,
+        chain.tip().unwrap().timestamp - 60 + 1
+    );
+    mine(&chain, template);
 }
 
 #[test]

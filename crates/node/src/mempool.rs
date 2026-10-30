@@ -60,7 +60,8 @@ pub enum Refused {
     TooMany,
     /// It has a held transaction's sender and nonce, without a fee rate higher by the margin.
     ReplacementTooCheap,
-    /// Evicted at once: what else is held pays a higher fee rate.
+    /// The mempool is full, and it pays no more per byte than the lowest held, or it went with
+    /// its sender's earlier one that paid the least.
     Full,
 }
 
@@ -148,7 +149,8 @@ impl Mempool {
         let first = state.account(&tx.sender).map_or(0, |account| account.nonce);
         let held = self.senders.get(&tx.sender);
         let count = held.map_or(0, BTreeMap::len);
-        match held.and_then(|held| held.get(&tx.nonce)) {
+        let replaced = held.and_then(|held| held.get(&tx.nonce));
+        match replaced {
             Some(old) if old.id == id => return Err(Refused::Known),
             Some(old) => {
                 let margin = u128::from(100 + self.policy.replace_margin);
@@ -163,6 +165,22 @@ impl Mempool {
             }
             None => {}
         }
+        // Full: refused before its signature is checked if it would go first. A refused
+        // transaction leaves the mempool as it was.
+        let (me, nonce) = (tx.sender, tx.nonce);
+        if self.bytes - replaced.map_or(0, |old| old.size) + size > self.policy.max_bytes {
+            // ponytail: another scan of every held transaction, only when the mempool is full.
+            let lowest = self
+                .senders
+                .iter()
+                .flat_map(|(sender, held)| held.iter().map(move |(n, h)| (*sender, *n, h)))
+                .filter(|(sender, n, _)| (*sender, *n) != (me, nonce))
+                .map(|(_, _, held)| held.rate())
+                .min();
+            if lowest.is_none_or(|lowest| Rate { fee: tx.fee, size } <= lowest) {
+                return Err(Refused::Full);
+            }
+        }
         let before = match held.and_then(|held| held.get(&tx.nonce.checked_sub(1)?)) {
             Some(previous) => Some(previous.after.clone()),
             None => state.account(&tx.sender),
@@ -175,7 +193,7 @@ impl Mempool {
         apply_tx(&self.params, &mut sender, &tx).map_err(Refused::Rule)?;
         let after = sender.account.expect("set by apply_tx");
 
-        let (address, nonce) = (tx.sender, tx.nonce);
+        let address = me;
         let later = self.take_from(&address, nonce);
         let held = Held {
             tx,
@@ -236,10 +254,20 @@ impl Mempool {
         reward_address: Address,
         now: u64,
     ) -> Result<Block, Error> {
-        self.follow(chain)?;
-        let (_, state) = chain.state()?;
-        let txs = self.select(&state, reward_address, MAX_BLOCK_SIZE - HEADER_LEN - 2);
-        chain.template(reward_address, txs, now)
+        loop {
+            self.follow(chain)?;
+            let (tip, state) = chain.state()?;
+            if self.tip != Some(tip) {
+                continue;
+            }
+            let txs = self.select(&state, reward_address, MAX_BLOCK_SIZE - HEADER_LEN - 2);
+            let template = chain.template(reward_address, txs, now);
+            // A rule refuses what was held for a tip that moved since: choose again.
+            if matches!(template, Err(Error::Rule(_))) && chain.state()?.0 != tip {
+                continue;
+            }
+            return template;
+        }
     }
 
     /// Greedy by fee rate: the sender whose next transaction pays the most per byte goes first.

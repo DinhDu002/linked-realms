@@ -88,12 +88,12 @@ All of these happen together, or none:
 Which transactions a Node holds, relays and puts in its Block templates is its own policy, not a chain rule: a Block may hold any transaction the checks above take. The defaults of `crates/node`:
 
 - **Minimum fee:** 10 base units per byte of the transaction's bytes, so a transfer of 2,517 bytes pays at least 25,170. The fee rate is the fee divided by those bytes.
-- **Dust:** a transfer that creates an Account moves at least 38,290 base units. That is what the new Account pays, at the minimum fee, for its first transfer (3,829 bytes, with its key); less is never worth moving on (ADR 0015, A').
+- **Dust:** a transfer to an address with no Account on the tip moves at least 38,290 base units. That is what the new Account pays, at the minimum fee, for its first transfer (3,829 bytes, with its key); less is never worth moving on (ADR 0015, A').
 - **Nonce chain:** a sender's transactions are held from its nonce on the tip, without a gap, at most 25 of them, each checked on the account the ones before it leave. The sender must exist on the tip: a transaction from an Account that a held transaction would create waits until a Block creates it.
 - **Replacement:** a transaction with a held one's sender and nonce replaces it only with a fee rate at least 10 % higher. The sender's later ones are checked again, and the first that fails goes with the rest.
-- **Size:** at most 20,000,000 bytes held. Past that, the lowest fee rate goes, with the sender's later transactions; among equal rates, the latest nonce first.
+- **Size:** at most 20,000,000 bytes held. Past that, the lowest fee rate goes, with the sender's later transactions; among equal rates, the latest nonce first. A transaction that would go first is refused before its signature is checked, and a refused one leaves the mempool as it was.
 - **A new tip:** every held transaction is checked again on it, with those of the Blocks a reorg took off the chain.
-- **Block template:** the sender whose next transaction pays the most per byte goes first, each sender's in nonce order, up to 1,000,000 bytes for the whole Block and 50 new Accounts, the reward address included. A transaction that does not fit leaves out its sender's later ones. The timestamp is the Node's clock, or the earliest the rules allow if that is later.
+- **Block template:** the sender whose next transaction pays the most per byte goes first, each sender's in nonce order, up to 1,000,000 bytes for the whole Block and 50 new Accounts, the reward address included. A transaction that does not fit leaves out its sender's later ones. The timestamp is the Node's clock, or the earliest the rules allow if that is later, and the template passes every check of `check_block` but the Proof of Work.
 
 ## State root
 
