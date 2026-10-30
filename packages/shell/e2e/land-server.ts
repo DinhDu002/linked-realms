@@ -48,7 +48,8 @@ const PAGE = `<!doctype html>
     nested.src = "http://9.localhost:${LAND_PORT}/nested?m=" + encodeURIComponent(JSON.stringify(m));
     document.body.append(nested);
   };
-  land.reload = () => location.reload();
+  // The old document lives on until the new one commits; connectedFrame must not take it.
+  land.reload = () => { land.reloading = true; location.reload(); };
 </script>
 `;
 

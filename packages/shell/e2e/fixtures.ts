@@ -15,6 +15,8 @@ interface LandApi {
   probe(): Promise<Record<string, unknown>>;
   shout(message: unknown): void;
   reload(): void;
+  /** Set by `reload()` on the document being left. */
+  reloading?: boolean;
 }
 declare global {
   var land: LandApi;
@@ -99,7 +101,9 @@ export async function connectedFrame(
           .find((f) => f.url().startsWith(landOrigin(landId)));
         if (!found) return false;
         try {
-          return await found.evaluate(() => land.count("init") > 0);
+          return await found.evaluate(
+            () => land.count("init") > 0 && !land.reloading,
+          );
         } catch {
           return false; // navigating
         }
