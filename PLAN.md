@@ -386,7 +386,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 - [ ] Phase 2 – Own chain, open source and testing
   - [x] 2A – Self-hosting, wallet and dashboard (EVM design)
   - [ ] 2B – World without the chain
-  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; item 1 of 27 built)
+  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; items 1 and 2 of 27 built)
   - [ ] 2D – Economy in the reference Land kit
   - [ ] 2E – NPCs
   - [ ] 2F – Audit before Phase 3
@@ -395,6 +395,8 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 ### Log
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
+
+- 2026-10-30: Step 2C item 2 on branch `phase-2/2c-2-tx`: transactions and accounts in `crates/core`. `tx::Tx` reads and writes the layout of the new mandatory `docs/protocols/transactions.md` (transfer with a memo of up to 80 bytes, key rotation, the public key only on the sender's first transaction), signs with the network id first in the signed bytes, and its id is the keccak256 of those bytes. `check_tx` and `apply_tx` run over the `StateView` and `State` traits, cheap checks first and the signature last, and write nothing on an error. `state::Account` has its 82-byte hashed form for the state root. A sender must already have an account (ADR 0011). `chain.json` gains a ledger of 27 steps replayed in order: every valid kind, every refusal (including a replay, the wrong network both ways, the old key after a rotation) and every format error, each asserted against its expected verdict, with a check that Gold is neither made nor lost.
 
 - 2026-10-30: Step 2C item 1 on branch `phase-2/2c-1-core`: in `crates/core`, `codec::Reader` (big-endian fixed-width fields, refusing truncated and trailing bytes), `Address::to_bytes` and `Address::from_bytes` (the 34-byte payload), `params::ChainParams` with `TESTNET` (1) and `DEV` (2), `issuance::reward` (genesis at height 0 pays nothing, halvings from height 1, exactly 19,687,500 GOLD before the tail) and `merkle::tx_root` (an odd node moves up unchanged). New vectors in `crates/core/test-vectors/chain.json`; the `tx_root` and issuance values were also recomputed once by hand in JavaScript (`@noble/hashes`, a scratch script not kept in the repo), and item 10's Vitest makes that check permanent. ADR 0011 records the encodings, the network id in signed bytes, the transaction id and the issuance.
 
