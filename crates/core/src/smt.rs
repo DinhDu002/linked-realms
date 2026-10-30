@@ -2,10 +2,12 @@
 //! over (key, value) pairs. It never reads a value; the state root uses an account's hashed
 //! bytes as the value of `state::tree_key(address)`.
 //!
-//! Storage keeps only what the root needs (a shortcut in storage, not in the hashes): an `Inner`
-//! entry for each node whose subtree holds two or more keys, and one `Leaf` entry at the highest
-//! node whose subtree holds a single key. A missing entry is an empty subtree. The entries depend
-//! only on the set of keys, never on the order of changes.
+//! Storage keeps only what the root needs (a shortcut in storage, not in the hashes; ADR 0015,
+//! R1): one entry at the root and one at each child of a branching node, the node where the keys
+//! below split. An `Inner` entry stands for the subtree down to the next branching node, so keys
+//! that share a long prefix add no entries for it; a `Leaf` entry stands for a subtree that holds
+//! a single key. A missing entry is an empty subtree. `n` keys take `2n - 1` entries, and the
+//! entries depend only on the set of keys, never on the order of changes.
 
 use std::collections::HashMap;
 use std::sync::OnceLock;
@@ -14,8 +16,13 @@ use crate::{Error, keccak256};
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Node {
-    /// A node whose subtree holds two or more keys.
-    Inner { hash: [u8; 32] },
+    /// A subtree that holds two or more keys: the hash at this node, and the branching node below
+    /// it where its keys split, at depth `split` on the path `branch` (bits from `split` on zero).
+    Inner {
+        hash: [u8; 32],
+        split: u16,
+        branch: [u8; 32],
+    },
     /// The highest node whose subtree holds only `key`: its leaf hash, and that leaf folded up to
     /// this node with empty siblings.
     Leaf {
@@ -28,7 +35,27 @@ pub enum Node {
 impl Node {
     pub fn hash(&self) -> [u8; 32] {
         match self {
-            Node::Inner { hash } | Node::Leaf { hash, .. } => *hash,
+            Node::Inner { hash, .. } | Node::Leaf { hash, .. } => *hash,
+        }
+    }
+
+    /// The same subtree as an entry higher up on its path, at `depth`.
+    fn raised(self, depth: u16, from: u16) -> Node {
+        match self {
+            Node::Inner {
+                hash,
+                split,
+                branch,
+            } => Node::Inner {
+                hash: fold(&branch, hash, from, depth),
+                split,
+                branch,
+            },
+            Node::Leaf { key, leaf, hash } => Node::Leaf {
+                key,
+                leaf,
+                hash: fold(&key, hash, from, depth),
+            },
         }
     }
 }
@@ -104,13 +131,34 @@ fn up(key: &[u8; 32], hash: &[u8; 32], depth: u16) -> [u8; 32] {
     join(key, depth, hash, &empty(255 - depth))
 }
 
+/// The hash at depth `to` above `hash` at depth `from` on `key`'s path, with empty siblings.
+fn fold(key: &[u8; 32], hash: [u8; 32], from: u16, to: u16) -> [u8; 32] {
+    (to..from).rev().fold(hash, |hash, d| up(key, &hash, d))
+}
+
 /// The `Leaf` entry of a subtree at `depth` that holds only `key`.
 fn single(key: &[u8; 32], leaf: [u8; 32], depth: u16) -> Node {
-    let hash = (depth..256).rev().fold(leaf, |hash, d| up(key, &hash, d));
     Node::Leaf {
         key: *key,
         leaf,
-        hash,
+        hash: fold(key, leaf, 256, depth),
+    }
+}
+
+/// `path` with bit `depth` flipped: the other child's path at `depth + 1`.
+fn sibling(path: &[u8; 32], depth: u16) -> [u8; 32] {
+    let mut sibling = *path;
+    sibling[usize::from(depth / 8)] ^= 0x80 >> (depth % 8);
+    sibling
+}
+
+/// The `Inner` entry at `depth` for the branching node at `split` on `key`'s path, whose children
+/// on and off that path have the hashes `mine` and `other`.
+fn branching(key: &[u8; 32], split: u16, mine: &[u8; 32], other: &[u8; 32], depth: u16) -> Node {
+    Node::Inner {
+        hash: fold(key, join(key, split, mine, other), split, depth),
+        split,
+        branch: path(key, split),
     }
 }
 
@@ -148,55 +196,35 @@ fn set(
             leaf.map(|leaf| single(key, leaf, depth))
         }
         (unchanged @ Some(Node::Leaf { .. }), None) => return unchanged,
-        (
-            Some(Node::Leaf {
-                key: other,
-                leaf: other_leaf,
-                ..
-            }),
-            Some(leaf),
-        ) => {
-            // A second key: both leaves go below the first bit where the keys differ, and every
-            // node from there up to `depth` holds both.
+        (Some(old @ Node::Leaf { key: other, .. }), Some(leaf)) => {
+            // A second key: the two leaves go below the first bit where the keys differ.
             let split = first_difference(key, &other);
-            let (mine, theirs) = (
-                single(key, leaf, split + 1),
-                single(&other, other_leaf, split + 1),
-            );
-            store.set_node(split + 1, path(key, split + 1), Some(mine));
-            store.set_node(split + 1, path(&other, split + 1), Some(theirs));
-            let mut hash = join(key, split, &mine.hash(), &theirs.hash());
-            for d in (depth..split).rev() {
-                store.set_node(d + 1, path(key, d + 1), Some(Node::Inner { hash }));
-                hash = up(key, &hash, d);
-            }
-            Some(Node::Inner { hash })
+            Some(split_off(store, key, leaf, old, &other, split, depth))
         }
-        (Some(Node::Inner { .. }), leaf) => {
-            let child = set(store, depth + 1, key, leaf);
-            let mut sibling_path = path(key, depth + 1);
-            sibling_path[usize::from(depth / 8)] ^= 0x80 >> (depth % 8);
-            let sibling = store.node(depth + 1, &sibling_path);
-            match (child, sibling) {
-                // A removal left one key below: its leaf moves up to this node.
-                (Some(Node::Leaf { key, leaf, hash }), None)
-                | (None, Some(Node::Leaf { key, leaf, hash })) => {
-                    store.set_node(depth + 1, path(&key, depth + 1), None);
-                    Some(Node::Leaf {
-                        key,
-                        leaf,
-                        hash: up(&key, &hash, depth),
-                    })
+        (Some(old @ Node::Inner { split, branch, .. }), leaf) => {
+            match (first_difference_before(key, &branch, split), leaf) {
+                // `key` is not below and stays out.
+                (Some(_), None) => return Some(old),
+                // `key` leaves the shared prefix above the branching node: a new one there.
+                (Some(at), Some(leaf)) => {
+                    Some(split_off(store, key, leaf, old, &branch, at, depth))
                 }
-                (None, None) => None,
-                (child, sibling) => Some(Node::Inner {
-                    hash: join(
-                        key,
-                        depth,
-                        &hash_or_empty(child, depth + 1),
-                        &hash_or_empty(sibling, depth + 1),
-                    ),
-                }),
+                (None, leaf) => {
+                    let child = set(store, split + 1, key, leaf);
+                    let other_path = sibling(&path(key, split + 1), split);
+                    let other = store.node(split + 1, &other_path);
+                    match (child, other) {
+                        (Some(child), Some(other)) => {
+                            Some(branching(key, split, &child.hash(), &other.hash(), depth))
+                        }
+                        // A removal left one subtree below: it moves up to this entry.
+                        (only, None) | (None, only) => {
+                            store.set_node(split + 1, path(key, split + 1), None);
+                            store.set_node(split + 1, other_path, None);
+                            only.map(|only| only.raised(depth, split + 1))
+                        }
+                    }
+                }
             }
         }
     };
@@ -207,6 +235,53 @@ fn set(
 fn first_difference(a: &[u8; 32], b: &[u8; 32]) -> u16 {
     let i = (0..32).find(|&i| a[i] != b[i]).expect("two different keys");
     (i * 8) as u16 + (a[i] ^ b[i]).leading_zeros() as u16
+}
+
+/// The first bit before `depth` where `a` and `b` differ, if any.
+fn first_difference_before(a: &[u8; 32], b: &[u8; 32], depth: u16) -> Option<u16> {
+    (path(a, depth) != path(b, depth)).then(|| first_difference(a, b))
+}
+
+/// The entry at `depth` once `key` (with the leaf hash `leaf`) is set where it leaves `old`, the
+/// entry at `depth` for a subtree on `old_path`, at the bit `split`: a branching node there, with
+/// `old` moved down to its child at `split + 1` and `key`'s leaf beside it.
+fn split_off(
+    store: &mut impl SmtStore,
+    key: &[u8; 32],
+    leaf: [u8; 32],
+    old: Node,
+    old_path: &[u8; 32],
+    split: u16,
+    depth: u16,
+) -> Node {
+    let mine = single(key, leaf, split + 1);
+    let theirs = lowered(store, old, split + 1);
+    store.set_node(split + 1, path(key, split + 1), Some(mine));
+    store.set_node(split + 1, path(old_path, split + 1), Some(theirs));
+    branching(key, split, &mine.hash(), &theirs.hash(), depth)
+}
+
+/// The same subtree as `node` as an entry lower on its path, at `depth`, still above its own
+/// branching node or leaf.
+fn lowered(store: &impl SmtStore, node: Node, depth: u16) -> Node {
+    match node {
+        Node::Leaf { key, leaf, .. } => single(&key, leaf, depth),
+        Node::Inner { split, branch, .. } => {
+            let child = |path: &[u8; 32]| hash_or_empty(store.node(split + 1, path), split + 1);
+            let left = path(&branch, split + 1);
+            let right = sibling(&left, split);
+            Node::Inner {
+                hash: fold(
+                    &branch,
+                    node_hash(&child(&left), &child(&right)),
+                    split,
+                    depth,
+                ),
+                split,
+                branch,
+            }
+        }
+    }
 }
 
 /// Builds the tree of a state snapshot in `store`, which must be empty, and checks it against
@@ -347,6 +422,12 @@ mod tests {
                 store_of(&entries),
                 "step {step}: the entries depend only on the set"
             );
+            // However long the prefixes the keys share.
+            assert_eq!(
+                store.len(),
+                (2 * entries.len()).saturating_sub(1),
+                "step {step}"
+            );
         }
     }
 
@@ -381,8 +462,12 @@ mod tests {
         let mut store = Store::new();
         insert(&mut store, &a, b"a");
         insert(&mut store, &b, b"b");
-        // Inner entries at depths 0 to 200, and the two leaves at depth 201.
-        assert_eq!(store.len(), 203);
+        // One Inner entry at the root for the whole shared prefix, and the two leaves at 201.
+        assert_eq!(store.len(), 3);
+        assert!(matches!(
+            store.node(0, &[0; 32]),
+            Some(Node::Inner { split: 200, .. })
+        ));
         assert!(matches!(
             store.node(201, &path(&a, 201)),
             Some(Node::Leaf { .. })
