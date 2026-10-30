@@ -131,6 +131,20 @@ impl Builder {
         block
     }
 
+    /// An empty Block on `parent` stamped `timestamp`.
+    pub(crate) fn stamped(
+        &mut self,
+        parent: &Block,
+        reward_address: Address,
+        timestamp: u64,
+    ) -> Block {
+        let mut block = self.child(parent, reward_address, Vec::new());
+        let after = self.0.remove(&block.header.id()).expect("just built");
+        block.header.timestamp = timestamp;
+        self.0.insert(block.header.id(), after);
+        block
+    }
+
     /// `n` Blocks on `parent` paying `reward_address`, lowest first.
     pub(crate) fn branch(
         &mut self,

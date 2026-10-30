@@ -3,6 +3,7 @@
 
 mod chain;
 mod mempool;
+pub mod p2p;
 mod store;
 
 use std::fmt;

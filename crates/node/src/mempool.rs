@@ -370,4 +370,4 @@ impl<S: StateView> State for Sender<'_, S> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

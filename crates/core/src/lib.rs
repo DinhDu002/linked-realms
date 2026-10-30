@@ -342,7 +342,7 @@ impl FromStr for Address {
 }
 
 /// keccak256 of `parts` written one after another.
-pub(crate) fn keccak256(parts: &[&[u8]]) -> [u8; 32] {
+pub fn keccak256(parts: &[&[u8]]) -> [u8; 32] {
     let mut hasher = Keccak256::new();
     for part in parts {
         hasher.update(part);
