@@ -78,14 +78,31 @@ jobs:
           git status --porcelain -- packages/shared/src/gen
           test -z "$(git status --porcelain -- packages/shared/src/gen)"
 
+  # On both architectures the image is built for, so RandomX's vectors run natively on each.
   rust:
-    runs-on: ubuntu-24.04
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-24.04, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    env:
+      # crates/randomx builds RandomX with these rather than the runner image's own CMake.
+      CMAKE: /usr/bin/cmake
+      CC: gcc-13
+      CXX: g++-13
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      # CMake at Ubuntu 24.04's only version; GCC 13 takes Ubuntu's fixes, so only its major is pinned.
+      - run: |
+          sudo apt-get update
+          sudo apt-get install -y --no-install-recommends cmake=3.28.3-1build7 g++-13
+          "$CMAKE" --version && "$CXX" --version
       - run: rustup toolchain install
       - run: cargo fmt --check
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
+      # The same vectors on musl, in the Dockerfile stage that builds lr-node for the Alpine image.
+      - run: docker build --target chain .
 
   image:
     runs-on: ubuntu-24.04

@@ -29,6 +29,17 @@ COPY crates crates
 RUN cargo build --locked -p linked-realms-core --features wasm --target wasm32-unknown-unknown --profile wasm \
  && wasm-bindgen --target web --out-dir /pkg target/wasm32-unknown-unknown/wasm/linked_realms_core.wasm
 
+# The chain on musl, as the final image: lr-node is built here from step 2C item 24. Until then,
+# crates/randomx's vectors, which prove the RandomX it links builds and hashes right on musl.
+# CMake and the C++ compiler come from the image's Alpine release, at these versions; without
+# linux-headers (asm/hwcap.h) RandomX quietly hashes with software AES on ARM.
+FROM rust:1.99.1-alpine3.24 AS chain
+RUN apk add --no-cache cmake~4.2 g++~15.2 make~4.4 linux-headers~7.0
+WORKDIR /src
+COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
+COPY crates crates
+RUN cargo test --locked -p linked-realms-randomx
+
 # The Land UI (packages/client) and the Shell.
 FROM --platform=$BUILDPLATFORM node:26.12.1-alpine3.24 AS build
 RUN npm install -g pnpm@11.3.0
