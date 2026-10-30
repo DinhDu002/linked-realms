@@ -16,8 +16,11 @@ pub const FRAME_HEADER_LEN: usize = 13;
 pub const PROTOCOL_VERSION: u32 = 1;
 /// Headers in one `headers` message, at most.
 pub const MAX_HEADERS: usize = 2_000;
-/// Ids in one `inv`, `getdata` or `notfound`, at most.
+/// Ids in one `inv`, at most.
 pub const MAX_IDS: usize = 500;
+/// Blocks one `getdata` asks for, and ids in a `notfound`, at most: a Node has no more than this
+/// on the way from one peer, so a peer that asks for more is not following the protocol.
+pub const IN_FLIGHT: usize = 16;
 /// Ids in a locator, at most.
 pub const MAX_LOCATOR: usize = 64;
 /// Addresses in one `nodes`, at most.
@@ -171,8 +174,8 @@ impl Message {
                 2 => Message::Ping(r.u64()?),
                 3 => Message::Pong(r.u64()?),
                 4 => Message::Inv(ids(&mut r, MAX_IDS)?),
-                5 => Message::GetData(ids(&mut r, MAX_IDS)?),
-                6 => Message::NotFound(ids(&mut r, MAX_IDS)?),
+                5 => Message::GetData(ids(&mut r, IN_FLIGHT)?),
+                6 => Message::NotFound(ids(&mut r, IN_FLIGHT)?),
                 7 => Message::GetHeaders(ids(&mut r, MAX_LOCATOR)?),
                 8 => {
                     let count = usize::from(r.u16()?);

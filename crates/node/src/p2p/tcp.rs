@@ -28,6 +28,8 @@ struct Writer {
     frames: Sender<Vec<u8>>,
     queued: Arc<AtomicUsize>,
     stream: TcpStream,
+    /// Shut down for not reading: what it sent since is not handled.
+    closed: bool,
 }
 
 pub struct Tcp {
@@ -48,9 +50,18 @@ impl Tcp {
             local = Some(listener.local_addr()?);
             let sender = sender.clone();
             thread::spawn(move || {
-                for stream in listener.incoming().flatten() {
-                    if sender.send(Incoming::Stream(stream, false)).is_err() {
-                        return;
+                for stream in listener.incoming() {
+                    match stream {
+                        Ok(stream) => {
+                            if sender.send(Incoming::Stream(stream, false)).is_err() {
+                                return;
+                            }
+                        }
+                        // Out of file descriptors, say: told, and slowed so it does not spin.
+                        Err(error) => {
+                            eprintln!("lr-node p2p: accepting a connection failed: {error}");
+                            thread::sleep(Duration::from_secs(1));
+                        }
                     }
                 }
             });
@@ -84,8 +95,10 @@ impl Tcp {
                         });
                     }
                 }
-                // Late bytes of a connection the Node dropped are not for it.
-                Incoming::Bytes(peer, bytes) if self.writers.contains_key(&peer) => {
+                // Late bytes of a connection that was dropped are not handled.
+                Incoming::Bytes(peer, bytes)
+                    if self.writers.get(&peer).is_some_and(|w| !w.closed) =>
+                {
                     return Some(Event::Received { peer, bytes });
                 }
                 Incoming::Bytes(..) => {}
@@ -132,6 +145,7 @@ impl Tcp {
             frames,
             queued,
             stream,
+            closed: false,
         };
         self.writers.insert(peer, writer);
         Ok(address)
@@ -140,12 +154,13 @@ impl Tcp {
 
 impl Network for Tcp {
     fn send(&mut self, peer: PeerId, frame: Vec<u8>) {
-        let Some(writer) = self.writers.get(&peer) else {
+        let Some(writer) = self.writers.get_mut(&peer).filter(|w| !w.closed) else {
             return;
         };
         let queued = writer.queued.fetch_add(frame.len(), Ordering::Relaxed) + frame.len();
         // A Node that does not read is dropped; `Disconnected` follows from its reader.
         if queued > MAX_QUEUED || writer.frames.send(frame).is_err() {
+            writer.closed = true;
             let _ = writer.stream.shutdown(Shutdown::Both);
         }
     }

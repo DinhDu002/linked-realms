@@ -177,6 +177,7 @@ impl Mesh {
 struct Recorder {
     sent: Vec<(PeerId, Message)>,
     dropped: Vec<PeerId>,
+    dialed: Vec<SocketAddr>,
 }
 
 impl Network for Recorder {
@@ -189,7 +190,9 @@ impl Network for Recorder {
         self.dropped.push(peer);
     }
 
-    fn dial(&mut self, _: SocketAddr) {}
+    fn dial(&mut self, address: SocketAddr) {
+        self.dialed.push(address);
+    }
 }
 
 fn frame(message: &Message) -> Vec<u8> {
@@ -245,7 +248,7 @@ fn every_message_reads_back_and_a_bad_frame_does_not() {
         Message::Ping(1),
         Message::Pong(2),
         Message::Inv(vec![[1; 32]]),
-        Message::GetData(vec![[2; 32]; MAX_IDS]),
+        Message::GetData(vec![[2; 32]; IN_FLIGHT]),
         Message::NotFound(Vec::new()),
         Message::GetHeaders(vec![[3; 32]; message::MAX_LOCATOR]),
         Message::Headers(vec![genesis.header, block.header]),
@@ -292,13 +295,14 @@ fn every_message_reads_back_and_a_bad_frame_does_not() {
         message::next_frame(&mut raw(2, &extra), magic),
         Err(Malformed::Payload)
     );
-    let too_many = [
-        ((MAX_IDS + 1) as u16).to_be_bytes().as_slice(),
-        &[0; 32 * (MAX_IDS + 1)],
-    ]
-    .concat();
+    let ids = |n: usize| [(n as u16).to_be_bytes().as_slice(), &vec![0; 32 * n]].concat();
     assert_eq!(
-        message::next_frame(&mut raw(5, &too_many), magic),
+        message::next_frame(&mut raw(4, &ids(MAX_IDS + 1)), magic),
+        Err(Malformed::Payload)
+    );
+    // A `getdata` asks for no more Blocks than a Node has on the way from one peer.
+    assert_eq!(
+        message::next_frame(&mut raw(5, &ids(IN_FLIGHT + 1)), magic),
         Err(Malformed::Payload)
     );
     let other = Message::Verack.to_frame(TESTNET.magic());
@@ -576,6 +580,23 @@ fn a_sync_that_runs_out_asks_for_the_next_headers() {
         net.sent.last(),
         Some(&(1, Message::GetData(vec![b1.header.id()])))
     );
+    // Asked once, however often it is announced.
+    let sent = net.sent.len();
+    receive(
+        &mut node,
+        &mut net,
+        1,
+        frame(&Message::Headers(vec![b1.header])),
+        now,
+    );
+    receive(
+        &mut node,
+        &mut net,
+        1,
+        frame(&Message::Inv(vec![b1.header.id(); 2])),
+        now,
+    );
+    assert_eq!(net.sent.len(), sent);
     // A batch of `MAX_HEADERS` ends like this one: the next headers come after the new tip.
     receive(
         &mut node,
@@ -586,6 +607,82 @@ fn a_sync_that_runs_out_asks_for_the_next_headers() {
     );
     let locator = vec![b1.header.id(), PARAMS.genesis().id()];
     assert_eq!(net.sent.last(), Some(&(1, Message::GetHeaders(locator))));
+}
+
+#[test]
+fn a_silent_peer_is_pinged_then_dropped() {
+    let file = File::new("p2p-silent");
+    let mut node = node(&file, 0, &[]);
+    let mut net = Recorder::default();
+    let now = PARAMS.genesis().timestamp;
+    let from = |last| SocketAddr::from(([10, 0, 0, last], 5000));
+    // Never sends `version`.
+    connect(&mut node, &mut net, 1, from(1), now);
+    // Ready, then silent; and ready, then answers the `ping`.
+    greet(&mut node, &mut net, 2, from(2), now);
+    greet(&mut node, &mut net, 3, from(3), now);
+    // Quiet for `PING_SECONDS`: pinged.
+    node.tick(&mut net, now + PING_SECONDS).unwrap();
+    assert!(net.dropped.is_empty());
+    node.tick(&mut net, now + HANDSHAKE_SECONDS + 1).unwrap();
+    assert_eq!(net.dropped, [1]);
+    // One `ping` each, until they answer.
+    for peer in [2, 3] {
+        let pings = net
+            .sent
+            .iter()
+            .filter(|(to, m)| *to == peer && matches!(m, Message::Ping(_)));
+        assert_eq!(pings.count(), 1);
+    }
+    let pong = frame(&Message::Pong(now + PING_SECONDS));
+    receive(&mut node, &mut net, 3, pong, now + PING_SECONDS + 2);
+    node.tick(&mut net, now + IDLE_SECONDS).unwrap();
+    assert_eq!(net.dropped, [1]);
+    node.tick(&mut net, now + IDLE_SECONDS + 1).unwrap();
+    assert_eq!(net.dropped, [1, 2]);
+}
+
+#[test]
+fn the_address_book_takes_usable_addresses_once_and_gives_each_a_turn() {
+    let file = File::new("p2p-addresses");
+    let seeds: Vec<SocketAddr> = (1..=9)
+        .map(|last| SocketAddr::from(([10, 0, 1, last], 9444)))
+        .collect();
+    let mut node = node(&file, 0, &seeds);
+    let mut net = Recorder::default();
+    let now = PARAMS.genesis().timestamp;
+    greet(
+        &mut node,
+        &mut net,
+        1,
+        SocketAddr::from(([10, 0, 0, 1], 5000)),
+        now,
+    );
+    let usable = SocketAddr::from(([10, 0, 2, 1], 9444));
+    let offered = vec![
+        usable,
+        SocketAddr::from(([10, 0, 2, 2], 0)),
+        SocketAddr::from(([0, 0, 0, 0], 9444)),
+        SocketAddr::from(([127, 0, 0, 1], 9444)),
+        SocketAddr::from(([224, 0, 0, 1], 9444)),
+    ];
+    receive(&mut node, &mut net, 1, frame(&Message::Nodes(offered)), now);
+    // Only in answer to `getnodes`.
+    let later = vec![SocketAddr::from(([10, 0, 2, 3], 9444))];
+    receive(&mut node, &mut net, 1, frame(&Message::Nodes(later)), now);
+    let mut known: Vec<SocketAddr> = node.known.keys().copied().collect();
+    known.sort();
+    assert_eq!(known, [&seeds[..], &[usable]].concat());
+
+    // 8 at a time, the least recently dialed first.
+    node.tick(&mut net, now).unwrap();
+    assert_eq!(net.dialed, seeds[..8]);
+    node.tick(&mut net, now + RETRY_SECONDS).unwrap();
+    assert_eq!(net.dialed[8..10], [seeds[8], usable]);
+    // A learned address that never finished `version` goes; seeds stay.
+    node.tick(&mut net, now + 2 * RETRY_SECONDS).unwrap();
+    assert!(!node.known.contains_key(&usable));
+    assert_eq!(node.known.len(), seeds.len());
 }
 
 /// Handles the next event, if one comes soon, then ticks.

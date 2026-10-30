@@ -15,7 +15,9 @@ use linked_realms_core::block::Block;
 use linked_realms_core::params::ChainParams;
 use linked_realms_core::tx::Tx;
 
-pub use message::{MAX_HEADERS, MAX_IDS, MAX_NODES, MAX_PAYLOAD, Malformed, Message, Version};
+pub use message::{
+    IN_FLIGHT, MAX_HEADERS, MAX_IDS, MAX_NODES, MAX_PAYLOAD, Malformed, Message, Version,
+};
 pub use tcp::Tcp;
 
 use crate::{Chain, Error, Mempool, Refused};
@@ -60,10 +62,14 @@ pub const OUTBOUND: usize = 8;
 pub const MAX_INBOUND: usize = 64;
 /// How long a banned IP address stays banned.
 pub const BAN_SECONDS: u64 = 24 * 60 * 60;
-/// Blocks asked of one peer and not yet come, at most.
-pub const IN_FLIGHT: usize = 16;
 /// A peer that sends none of the Blocks asked of it for this long is dropped.
 pub const STALL_SECONDS: u64 = 120;
+/// A peer that has not finished `version` and `verack` this long after it connected is dropped.
+pub const HANDSHAKE_SECONDS: u64 = 60;
+/// A peer that has sent no whole message for this long is sent a `ping`, and dropped if it
+/// still sends none `IDLE_SECONDS` after its last.
+pub const PING_SECONDS: u64 = 60;
+pub const IDLE_SECONDS: u64 = 180;
 /// How long before an address is dialed again.
 const RETRY_SECONDS: u64 = 60;
 /// Addresses of other Nodes kept, at most.
@@ -78,11 +84,26 @@ struct Peer {
     version: bool,
     /// Its `verack` came, so any message may follow.
     ready: bool,
+    /// When it connected, and when its last whole message came.
+    since: u64,
+    heard: u64,
+    /// A `ping` went to it since then.
+    pinged: bool,
+    /// It was asked for other Nodes' addresses and has not answered.
+    nodes_asked: bool,
     /// Blocks to ask it for, lowest first.
     wanted: VecDeque<[u8; 32]>,
     /// Blocks asked of it and not yet come, and when it was last asked.
-    asked: usize,
+    asked: HashSet<[u8; 32]>,
     asked_at: u64,
+}
+
+/// An address another Node takes connections on.
+struct Known {
+    /// When this Node last dialed it, or 0.
+    tried: u64,
+    /// A seed, or a Node it has finished `version` with, so it is kept.
+    good: bool,
 }
 
 pub struct Node<H> {
@@ -97,8 +118,8 @@ pub struct Node<H> {
     peers: HashMap<PeerId, Peer>,
     /// Banned IP addresses, until when.
     banned: HashMap<IpAddr, u64>,
-    /// Addresses other Nodes take connections on, with when this Node last dialed each.
-    known: HashMap<SocketAddr, u64>,
+    /// Addresses other Nodes take connections on.
+    known: HashMap<SocketAddr, Known>,
     /// Addresses that turned out to be this Node.
     own: HashSet<SocketAddr>,
     /// Counts ticks, to ask each peer for headers in turn.
@@ -125,7 +146,18 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
             now: 0,
             peers: HashMap::new(),
             banned: HashMap::new(),
-            known: seeds.iter().map(|seed| (*seed, 0)).collect(),
+            known: seeds
+                .iter()
+                .map(|seed| {
+                    (
+                        *seed,
+                        Known {
+                            tried: 0,
+                            good: true,
+                        },
+                    )
+                })
+                .collect(),
             own: HashSet::new(),
             ticks: 0,
         }
@@ -156,8 +188,12 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                     buffer: Vec::new(),
                     version: false,
                     ready: false,
+                    since: now,
+                    heard: now,
+                    pinged: false,
+                    nodes_asked: false,
                     wanted: VecDeque::new(),
-                    asked: 0,
+                    asked: HashSet::new(),
                     asked_at: 0,
                 };
                 self.peers.insert(peer, state);
@@ -177,7 +213,11 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                 state.buffer.extend_from_slice(&bytes);
                 // Until the buffer holds no whole frame, or the peer is gone.
                 while let Some(state) = self.peers.get_mut(&peer) {
-                    match message::next_frame(&mut state.buffer, self.magic) {
+                    let frame = message::next_frame(&mut state.buffer, self.magic);
+                    if let Ok(Some(_)) = frame {
+                        (state.heard, state.pinged) = (now, false);
+                    }
+                    match frame {
                         Ok(None) => break,
                         Ok(Some(None)) => {}
                         Ok(Some(Some(message))) => self.on_message(net, peer, message)?,
@@ -195,37 +235,58 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
     }
 
     /// What this Node does on its own at the time `now`: lifts bans that ended, drops peers
-    /// that stall, dials more Nodes, and asks one idle peer for headers, which also takes a
-    /// Block once the clock catches up with it and asks again for a body this Node dropped.
+    /// that stall or go silent and pings quiet ones, dials more Nodes, and asks one idle peer
+    /// for headers, which also takes a Block once the clock catches up with it and asks again
+    /// for a body this Node dropped.
     pub fn tick(&mut self, net: &mut impl Network, now: u64) -> Result<(), Error> {
         self.now = now;
         self.banned.retain(|_, until| *until > now);
-        let stalled: Vec<PeerId> = self
+        let late: Vec<PeerId> = self
             .peers
             .iter()
-            .filter(|(_, p)| p.asked > 0 && p.asked_at.saturating_add(STALL_SECONDS) < now)
+            .filter(|(_, p)| {
+                let stalled = !p.asked.is_empty() && p.asked_at.saturating_add(STALL_SECONDS) < now;
+                let silent = match p.ready {
+                    true => p.heard.saturating_add(IDLE_SECONDS) < now,
+                    false => p.since.saturating_add(HANDSHAKE_SECONDS) < now,
+                };
+                stalled || silent
+            })
             .map(|(id, _)| *id)
             .collect();
-        stalled
-            .into_iter()
-            .for_each(|peer| self.drop_peer(net, peer));
+        late.into_iter().for_each(|peer| self.drop_peer(net, peer));
+        let quiet: Vec<PeerId> = self
+            .peers
+            .iter()
+            .filter(|(_, p)| p.ready && !p.pinged && p.heard.saturating_add(PING_SECONDS) <= now)
+            .map(|(id, _)| *id)
+            .collect();
+        for peer in quiet {
+            self.peers.get_mut(&peer).expect("a peer").pinged = true;
+            self.send(net, peer, &Message::Ping(now));
+        }
 
+        // An address dialed once that never finished `version` goes, so addresses that lead
+        // nowhere cannot crowd out the rest.
+        self.known
+            .retain(|_, k| k.good || k.tried == 0 || k.tried.saturating_add(RETRY_SECONDS) > now);
         let outbound = self.peers.values().filter(|p| p.outbound).count();
         let connected: HashSet<IpAddr> = self.peers.values().map(|p| p.address.ip()).collect();
-        let mut dial: Vec<SocketAddr> = self
+        let mut dial: Vec<(u64, SocketAddr)> = self
             .known
             .iter()
-            .filter(|(address, tried)| {
-                tried.saturating_add(RETRY_SECONDS) <= now
+            .filter(|(address, k)| {
+                k.tried.saturating_add(RETRY_SECONDS) <= now
                     && !connected.contains(&address.ip())
                     && !self.banned.contains_key(&address.ip())
                     && !self.own.contains(*address)
             })
-            .map(|(address, _)| *address)
+            .map(|(address, k)| (k.tried, *address))
             .collect();
+        // The least recently dialed first, so each address gets its turn.
         dial.sort();
-        for address in dial.into_iter().take(OUTBOUND.saturating_sub(outbound)) {
-            self.known.insert(address, now);
+        for (_, address) in dial.into_iter().take(OUTBOUND.saturating_sub(outbound)) {
+            self.known.get_mut(&address).expect("a known address").tried = now;
             net.dial(address);
         }
 
@@ -240,7 +301,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
             let peer = ready[self.ticks % ready.len()];
             self.ticks += 1;
             let state = &self.peers[&peer];
-            if state.asked == 0 && state.wanted.is_empty() {
+            if state.asked.is_empty() && state.wanted.is_empty() {
                 let locator = self.chain.locator()?;
                 self.send(net, peer, &Message::GetHeaders(locator));
             }
@@ -291,14 +352,19 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                     return Ok(());
                 }
                 state.version = true;
+                let (address, outbound) = (state.address, state.outbound);
+                if outbound && let Some(known) = self.known.get_mut(&address) {
+                    known.good = true;
+                }
                 if version.listen != 0 {
-                    let address = SocketAddr::new(state.address.ip(), version.listen);
-                    self.learn(address);
+                    let listen = SocketAddr::new(address.ip(), version.listen);
+                    self.learn(listen, address.ip());
                 }
                 self.send(net, peer, &Message::Verack);
             }
             Message::Verack => {
-                self.peers.get_mut(&peer).expect("a peer").ready = true;
+                let state = self.peers.get_mut(&peer).expect("a peer");
+                (state.ready, state.nodes_asked) = (true, true);
                 let locator = self.chain.locator()?;
                 self.send(net, peer, &Message::GetHeaders(locator));
                 self.send(net, peer, &Message::GetCheckpoint);
@@ -326,7 +392,9 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
             }
             Message::NotFound(ids) => {
                 let state = self.peers.get_mut(&peer).expect("a peer");
-                state.asked = state.asked.saturating_sub(ids.len());
+                for id in &ids {
+                    state.asked.remove(id);
+                }
                 self.ask(net, peer)?;
             }
             Message::GetHeaders(locator) => {
@@ -354,8 +422,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
             }
             Message::Block(block) => {
                 let state = self.peers.get_mut(&peer).expect("a peer");
-                let syncing = state.asked > 0;
-                state.asked = state.asked.saturating_sub(1);
+                let syncing = state.asked.remove(&block.header.id());
                 let mut more = false;
                 if block.header.timestamp <= self.now.saturating_add(MAX_AHEAD) {
                     let tip = self.chain.tip()?.id();
@@ -373,7 +440,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                 self.ask(net, peer)?;
                 let state = &self.peers[&peer];
                 // A sync that ran out asks where to go on from the new tip.
-                if more || (syncing && state.asked == 0 && state.wanted.is_empty()) {
+                if more || (syncing && state.asked.is_empty() && state.wanted.is_empty()) {
                     let locator = self.chain.locator()?;
                     self.send(net, peer, &Message::GetHeaders(locator));
                 }
@@ -402,12 +469,21 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                 }
             }
             Message::GetNodes => {
-                let mut addresses: Vec<SocketAddr> = self.known.keys().copied().collect();
-                addresses.sort();
-                addresses.truncate(MAX_NODES);
+                // Those this Node has finished `version` with first.
+                let mut known: Vec<(bool, SocketAddr)> =
+                    self.known.iter().map(|(a, k)| (!k.good, *a)).collect();
+                known.sort();
+                let addresses = known.into_iter().take(MAX_NODES).map(|(_, a)| a).collect();
                 self.send(net, peer, &Message::Nodes(addresses));
             }
-            Message::Nodes(addresses) => addresses.into_iter().for_each(|a| self.learn(a)),
+            // Taken once, in answer to `getnodes`: a peer adds at most `MAX_NODES` addresses.
+            Message::Nodes(addresses) => {
+                let state = self.peers.get_mut(&peer).expect("a peer");
+                if std::mem::take(&mut state.nodes_asked) {
+                    let from = state.address.ip();
+                    addresses.into_iter().for_each(|a| self.learn(a, from));
+                }
+            }
         }
         Ok(())
     }
@@ -422,16 +498,20 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                 return Ok(());
             };
             let room = IN_FLIGHT
-                .saturating_sub(state.asked)
+                .saturating_sub(state.asked.len())
                 .min(state.wanted.len());
             if room == 0 {
                 return Ok(());
             }
             let next: Vec<[u8; 32]> = state.wanted.drain(..room).collect();
-            let ids = self.chain.missing(&next)?;
+            let missing = self.chain.missing(&next)?;
+            let state = self.peers.get_mut(&peer).expect("a peer");
+            // Each once, and none already on the way.
+            let ids: Vec<[u8; 32]> = missing
+                .into_iter()
+                .filter(|id| state.asked.insert(*id))
+                .collect();
             if !ids.is_empty() {
-                let state = self.peers.get_mut(&peer).expect("a peer");
-                state.asked += ids.len();
                 state.asked_at = self.now;
                 self.send(net, peer, &Message::GetData(ids));
             }
@@ -464,9 +544,21 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
         Ok(())
     }
 
-    fn learn(&mut self, address: SocketAddr) {
-        if self.known.len() < MAX_KNOWN && !self.own.contains(&address) {
-            self.known.entry(address).or_insert(0);
+    /// Keeps `address`, heard from the Node at `from`, to dial later.
+    fn learn(&mut self, address: SocketAddr, from: IpAddr) {
+        let ip = address.ip();
+        // Not an address a Node takes connections on, or one that would point this Node at
+        // services on its own host.
+        let unusable = address.port() == 0
+            || ip.is_unspecified()
+            || ip.is_multicast()
+            || (ip.is_loopback() && !from.is_loopback());
+        if !unusable && self.known.len() < MAX_KNOWN && !self.own.contains(&address) {
+            let known = Known {
+                tried: 0,
+                good: false,
+            };
+            self.known.entry(address).or_insert(known);
         }
     }
 
