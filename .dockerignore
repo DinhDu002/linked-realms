@@ -15,3 +15,5 @@ deploy
 **/*.md
 **/test-results
 **/playwright-report
+# RandomX, vendored byte for byte: a test checks every file (crates/randomx).
+!crates/randomx/vendor/**

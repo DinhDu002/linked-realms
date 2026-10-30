@@ -18,4 +18,8 @@ fn main() {
     let os = std::env::var("CARGO_CFG_TARGET_OS").unwrap();
     let runtime = if os == "macos" { "c++" } else { "stdc++" };
     println!("cargo:rustc-link-lib={runtime}");
+    // On musl Rust links no libgcc, which has the `__clear_cache` GCC calls for the ARM JIT.
+    if std::env::var("CARGO_CFG_TARGET_ENV").unwrap() == "musl" {
+        println!("cargo:rustc-link-lib=gcc");
+    }
 }
