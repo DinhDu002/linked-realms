@@ -20,7 +20,7 @@ A header is 187 bytes, integers big-endian, in this order:
 
 A Block's id is `keccak256(header)`. Its Proof-of-Work hash is RandomX v2 over the same 187 bytes, with the key below, read as a 256-bit big-endian number; the nonce is a Solution when that number is below `target`. The id is not the Proof-of-Work hash, so it cannot be mined lower by chance.
 
-**RandomX key.** The key of the Block at height `h` is the id of the Block at height `key_height(h)` on the same chain: 0 for `h < 2112`, otherwise `floor((h - 64) / 2048) · 2048`. A key changes every 2048 Blocks and is used from 64 Blocks after its Block. This follows Monero's pattern, not checked against Monero's code (**UNVERIFIED**); plan item 9 fixes its edges in ADR 0012, with vectors.
+**RandomX key.** The key of the Block at height `h` is the id of the Block at height `key_height(h)` on the same chain: 0 for `h < 2112`, otherwise `floor((h - 64) / 2048) · 2048`. A key changes every 2048 Blocks and is used from 64 Blocks after its Block. This is Monero's pattern, 2048 and 64, but not its formula: Monero's `rx_seedheight` switches one Block later, at `h = 2113`. ADR 0012 fixes this formula, and `chain.json` its edges (`keyHeights`: 2111, 2112, 4159, 4160).
 
 ## Block
 
@@ -36,7 +36,7 @@ A Node checks a Block on top of its parent and against the accounts after the pa
 4. **Proof of Work.** The Proof-of-Work hash is below `target` (`InsufficientWork`). It is the expensive check of the header, so it runs before the transactions.
 5. **Transactions, reward and state.** `tx_root` is the root of the transaction ids in Block order (`WrongTxRoot`). Each transaction in order is then checked and applied as `docs/protocols/transactions.md` says (its errors). After all of them, the reward address is credited `reward(height)` plus the Block's fees, so a reward address that also sends in the Block cannot spend that credit there. A sum past `2^64 - 1` gives `Overflow`. After each transaction and after the credit, the Block may have created at most 50 Accounts (`TooManyNewAccounts`, "New Accounts" below). Last, `state_root` is the state root of the accounts after the Block (`WrongStateRoot`).
 
-**The genesis** (height 0) is checked by no rule. A Node starts from the genesis in its network's values and accepts only Blocks on top of it; the genesis and its check arrive with plan item 9.
+**The genesis** (height 0) is checked by no rule: the network's values fix it. Its header is version 1, height 0, a `prev_id` of 32 zero bytes, the network's genesis timestamp and initial Target, the `tx_root` of no transaction, the state root of no account (`E[256]`), a reward address nobody holds (version 0, scheme 1, a hash of 32 zero bytes) and nonce 0; it has no transactions, pays nothing and needs no Proof of Work. A Node starts from it, accepts only Blocks on top of it, and takes no other Block at height 0 (`WrongGenesis`). The header holds no network id, so a reset of a network changes the genesis timestamp as well as the id (ADR 0012).
 
 **Median of the last 11.** Take the timestamps of the Blocks at heights `max(0, h - 11)` to `h - 1`, sort them, and take the one at position `floor(count / 2)`, counting from 0. Below height 11 there are fewer than 11; with an even number, this is the later of the two in the middle.
 
@@ -58,11 +58,13 @@ Each network fixes:
 |---|---|---|
 | `T`, the goal time between Blocks | 60 seconds | 60 seconds |
 | `N`, the window | 60 Blocks | 60 Blocks |
-| maximum Target | `2^240 - 1` | `2^240 - 1` |
-| initial Target | set by plan item 9 | set by plan item 9 |
+| maximum Target | `2^240 - 1` | `2^246 - 1` |
+| initial Target | `2^240 - 1` | `2^246 - 1` |
 | Retarget | on | off |
+| genesis timestamp | 1,793,318,400 (2026-10-30 00:00 UTC) | the same |
+| Checkpoint signer key | the project owner's (`crates/core/keys/testnet-checkpoint.hex`) | from the published seed of 32 bytes `0x02` (`crates/core/keys/dev-checkpoint.hex`) |
 
-`N` and the clamps below were set by the simulation of plan item 6 (`crates/core/tests/retarget_simulation.rs`); the initial Targets come from plan item 9 (ADR 0012).
+`N` and the clamps below were set by the simulation of plan item 6 (`crates/core/tests/retarget_simulation.rs`). The Targets come from plan item 9's measurement (ADR 0012): about 65,536 hashes a Block at the test network's easiest, which the project owner's M5 finds in about 13 seconds on every thread in fast mode, and about 1,024 on the dev network, where Blocks come in seconds on one thread without running ahead of the clock.
 
 The Target of the Block at height `h`:
 
@@ -76,4 +78,16 @@ The Target of the Block at height `h`:
 
 Solvetimes of exactly `T` give `weighted = k`, so equal Targets stay the same.
 
-**Sizes.** With valid headers (Targets at most `2^240 - 1`; timestamps at most `2^62`, check 3), `sum` is below `2^246`, `weighted` is at most 658,800, and `floor(sum / N) · weighted` can pass `2^256`, so that product needs at least 320 bits; `next` stays below `2^243`. A counted timestamp is at most `2^62 + N`, so it fits in an unsigned 64-bit number.
+**Sizes.** With valid headers of the test network (Targets at most `2^240 - 1`; the dev network has no Retarget; timestamps at most `2^62`, check 3), `sum` is below `2^246`, `weighted` is at most 658,800, and `floor(sum / N) · weighted` can pass `2^256`, so that product needs at least 320 bits; `next` stays below `2^243`. A counted timestamp is at most `2^62 + N`, so it fits in an unsigned 64-bit number.
+
+## Checkpoints
+
+Every 10 Blocks the Checkpoint signer signs a Block's id, and no Node takes a history that changes a Block a Checkpoint names (ADR 0006 point 9, ADR 0015). The signer signs, with ML-DSA-44 under the context `linked-realms/checkpoint/v1`, these 44 bytes:
+
+| Field | Bytes |
+|---|---|
+| `network_id` | 4 |
+| `height` | 8 |
+| `block_id` | 32 |
+
+A Checkpoint is valid when its height is a multiple of 10 (`CheckpointHeight`) and the signature verifies under the network's Checkpoint signer key (`BadSignature`). A branch matches it when it holds a Block at that height with that id; a branch that does not reach the height does not. Which branch a Node follows is the Node's choice: the most work among the branches that match its latest Checkpoint.

@@ -6,11 +6,15 @@ use std::collections::HashMap;
 use std::path::PathBuf;
 
 use linked_realms_core::block::{
-    Block, HEADER_LEN, Header, MAX_BLOCK_SIZE, MAX_NEW_ACCOUNTS, NONCE_OFFSET, validate_block,
+    Block, HEADER_LEN, Header, MAX_BLOCK_SIZE, MAX_NEW_ACCOUNTS, NONCE_OFFSET, check_genesis,
+    key_height, validate_block,
+};
+use linked_realms_core::checkpoint::{
+    CHECKPOINT_CONTEXT, CHECKPOINT_INTERVAL, Checkpoint, signed_bytes, verify_checkpoint,
 };
 use linked_realms_core::issuance::{BASE_UNITS_PER_GOLD, HALVING_INTERVAL, reward};
 use linked_realms_core::merkle::tx_root;
-use linked_realms_core::params::{ChainParams, DEV, TESTNET};
+use linked_realms_core::params::{ChainParams, DEV, DEV_CHECKPOINT_SEED, TESTNET};
 use linked_realms_core::retarget::next_target;
 use linked_realms_core::smt::{self, Node};
 use linked_realms_core::state::{Account, PublicKey, tree_key};
@@ -433,6 +437,9 @@ struct Chain {
     state_snapshots: StateSnapshots,
     retarget: Retarget,
     blocks: Blocks,
+    key_heights: Vec<KeyHeight>,
+    genesis: Vec<GenesisCase>,
+    checkpoints: Checkpoints,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -440,6 +447,12 @@ struct Chain {
 struct Network {
     name: String,
     network_id: u32,
+    max_target: String,
+    initial_target: String,
+    /// The genesis Block: its header, then a transaction count of 0.
+    genesis: String,
+    genesis_id: String,
+    checkpoint_signer_key: String,
 }
 
 #[derive(Serialize, Deserialize, PartialEq, Debug)]
@@ -488,6 +501,11 @@ fn generate_chain() -> Chain {
         .map(|(name, params)| Network {
             name: name.into(),
             network_id: params.network_id,
+            max_target: hex::encode(params.max_target.to_be_bytes()),
+            initial_target: hex::encode(params.initial_target.to_be_bytes()),
+            genesis: hex::encode(genesis_block(params).to_bytes()),
+            genesis_id: hex::encode(params.genesis().id()),
+            checkpoint_signer_key: hex::encode(params.checkpoint_signer_key),
         })
         .collect();
 
@@ -572,6 +590,191 @@ fn generate_chain() -> Chain {
         state_snapshots,
         retarget: generate_retarget(),
         blocks: generate_blocks(),
+        key_heights: [0, 1, 2111, 2112, 4159, 4160]
+            .into_iter()
+            .map(|height| KeyHeight {
+                height,
+                key_height: key_height(height),
+            })
+            .collect(),
+        genesis: generate_genesis(),
+        checkpoints: generate_checkpoints(),
+    }
+}
+
+fn genesis_block(params: &ChainParams) -> Block {
+    Block {
+        header: params.genesis(),
+        txs: Vec::new(),
+    }
+}
+
+/// `block::key_height`: the height of the Block whose id is the RandomX key (ADR 0012).
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct KeyHeight {
+    height: u64,
+    key_height: u64,
+}
+
+/// `block::check_genesis`: the only Block a Node takes at height 0 is its network's genesis.
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+struct GenesisCase {
+    note: String,
+    network: String,
+    bytes: String,
+    verdict: String,
+}
+
+fn generate_genesis() -> Vec<GenesisCase> {
+    let key = SigningKey::from_seed(&[0x61; 32]);
+    let tx = Tx::from_bytes(&signed(
+        &TESTNET,
+        &key,
+        key.address(),
+        0,
+        1,
+        send(key.address(), 1, b""),
+        Some(&key),
+    ))
+    .unwrap();
+    let changed = |f: &dyn Fn(&mut Block)| {
+        let mut block = genesis_block(&TESTNET);
+        f(&mut block);
+        block
+    };
+    [
+        (
+            "the test network's genesis",
+            "testnet",
+            genesis_block(&TESTNET),
+        ),
+        ("the dev network's genesis", "dev", genesis_block(&DEV)),
+        (
+            "the test network's genesis on the dev network",
+            "dev",
+            genesis_block(&TESTNET),
+        ),
+        (
+            "a nonzero prev_id",
+            "testnet",
+            changed(&|b| b.header.prev_id = [1; 32]),
+        ),
+        ("another nonce", "testnet", changed(&|b| b.header.nonce = 1)),
+        (
+            "a transaction",
+            "testnet",
+            changed(&|b| b.txs.push(tx.clone())),
+        ),
+    ]
+    .into_iter()
+    .map(|(note, network, block)| {
+        let params = if network == "dev" { &DEV } else { &TESTNET };
+        GenesisCase {
+            note: note.into(),
+            network: network.into(),
+            bytes: hex::encode(block.to_bytes()),
+            verdict: check_genesis(params, &block)
+                .map_or_else(|error| format!("{error:?}"), |()| "ok".into()),
+        }
+    })
+    .collect()
+}
+
+/// Checkpoints (`checkpoint::verify_checkpoint`), signed with `rnd` of zeros by the dev network's
+/// key from its published seed `devSeed`, except where a case says otherwise. The signer signs
+/// `signedBytes` (networkId u32 ‖ height u64 ‖ blockId) under `context`.
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct Checkpoints {
+    context: String,
+    interval: u64,
+    dev_seed: String,
+    cases: Vec<CheckpointCase>,
+}
+
+#[derive(Serialize, Deserialize, PartialEq, Debug)]
+#[serde(rename_all = "camelCase")]
+struct CheckpointCase {
+    note: String,
+    network: String,
+    height: u64,
+    block_id: String,
+    signed_bytes: String,
+    signature: String,
+    verdict: String,
+}
+
+fn generate_checkpoints() -> Checkpoints {
+    let signer = SigningKey::from_seed(&DEV_CHECKPOINT_SEED);
+    let block_id = DEV.genesis().id();
+    let signed = Checkpoint::sign(&DEV, &signer, 20, block_id, &[0; 32]).unwrap();
+    // A signature over any bytes and context, for the cases `Checkpoint::sign` refuses to make.
+    let raw = |key: &SigningKey, context: &[u8], height: u64| Checkpoint {
+        height,
+        block_id,
+        signature: key
+            .sign(context, &signed_bytes(&DEV, height, &block_id), &[0; 32])
+            .unwrap(),
+    };
+    let changed = |f: &dyn Fn(&mut Checkpoint)| {
+        let mut checkpoint = signed.clone();
+        f(&mut checkpoint);
+        checkpoint
+    };
+    let cases = [
+        ("valid", "dev", signed.clone()),
+        (
+            "signed for the dev network, checked on the test network",
+            "testnet",
+            signed.clone(),
+        ),
+        ("another Block id", "dev", changed(&|c| c.block_id[0] ^= 1)),
+        (
+            "another height, a multiple of 10",
+            "dev",
+            changed(&|c| c.height = 30),
+        ),
+        (
+            "height 25, signed: not a multiple of 10",
+            "dev",
+            raw(&signer, CHECKPOINT_CONTEXT, 25),
+        ),
+        (
+            "signed by another key",
+            "dev",
+            raw(&SigningKey::from_seed(&[0x62; 32]), CHECKPOINT_CONTEXT, 20),
+        ),
+        (
+            "signed under the transaction context",
+            "dev",
+            raw(&signer, b"linked-realms/tx/v1", 20),
+        ),
+    ];
+    Checkpoints {
+        context: String::from_utf8(CHECKPOINT_CONTEXT.to_vec()).unwrap(),
+        interval: CHECKPOINT_INTERVAL,
+        dev_seed: hex::encode(DEV_CHECKPOINT_SEED),
+        cases: cases
+            .into_iter()
+            .map(|(note, network, checkpoint)| {
+                let params = if network == "dev" { &DEV } else { &TESTNET };
+                CheckpointCase {
+                    note: note.into(),
+                    network: network.into(),
+                    height: checkpoint.height,
+                    block_id: hex::encode(checkpoint.block_id),
+                    signed_bytes: hex::encode(signed_bytes(
+                        params,
+                        checkpoint.height,
+                        &checkpoint.block_id,
+                    )),
+                    signature: hex::encode(checkpoint.signature),
+                    verdict: verify_checkpoint(params, &checkpoint)
+                        .map_or_else(|error| format!("{error:?}"), |()| "ok".into()),
+                }
+            })
+            .collect(),
     }
 }
 

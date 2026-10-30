@@ -15,6 +15,7 @@ use sha3::{Digest, Keccak256};
 use zeroize::{Zeroize, Zeroizing};
 
 pub mod block;
+pub mod checkpoint;
 pub mod codec;
 pub mod issuance;
 pub mod merkle;
@@ -99,6 +100,11 @@ pub enum Error {
     WrongTxRoot,
     /// The Block creates more than 50 Accounts.
     TooManyNewAccounts,
+    /// A Block at height 0 that is not the network's genesis.
+    WrongGenesis,
+    // Checkpoints (docs/protocols/blocks.md).
+    /// A Checkpoint at a height that is not a multiple of 10.
+    CheckpointHeight,
 }
 
 impl fmt::Display for Error {
@@ -135,6 +141,8 @@ impl fmt::Display for Error {
             Error::InsufficientWork => "Proof-of-Work hash not below the Target",
             Error::WrongTxRoot => "wrong transaction root",
             Error::TooManyNewAccounts => "more than 50 new Accounts",
+            Error::WrongGenesis => "not the network's genesis",
+            Error::CheckpointHeight => "Checkpoint height not a multiple of 10",
         })
     }
 }

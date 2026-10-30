@@ -48,13 +48,10 @@ fn hex(bytes: &[u8]) -> String {
 
 fn input(vector: usize) -> Vec<u8> {
     let text = VECTORS[vector].1;
-    if vector < 4 {
-        return text.as_bytes().to_vec();
+    match vector {
+        0..4 => text.as_bytes().to_vec(),
+        _ => unhex(text),
     }
-    (0..text.len())
-        .step_by(2)
-        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
-        .collect()
 }
 
 /// Checks every vector of `key` on `vm`.
@@ -117,6 +114,40 @@ fn fast_mode_gives_the_official_v2_hashes() {
         for (flags, name) in flag_sets() {
             let mut vm = Vm::with_flags(Memory::Fast(dataset.clone()), flags).unwrap();
             check(&mut vm, key, &format!("fast, {name}"));
+        }
+    }
+}
+
+/// Our own vector: a header as Nodes hash it (the first Block of `blocks.chain` in
+/// `crates/core/test-vectors/chain.json`), keyed by its genesis id, `blocks.genesis.id`. Its hash
+/// came from this binding; every mode, the CPUs of CI and musl must agree on it (ADR 0012).
+const HEADER: (&str, &str, &str) = (
+    "be163207bfdccbc1f5af6dc89c701561343dce989de8c8c262dd2c71f78728b8",
+    "010000000000000001be163207bfdccbc1f5af6dc89c701561343dce989de8c8c262dd2c71f78728b8000000006b49d23c7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470bb45aeb130a0adbeea5c34b5776bd04d9d8cbbfaaac8ba79b4c87c550f7497050001097abe538d6a49cd3b7921e92749328f6330e99e30fda5a88eb5f4760bd360b90000000000000002",
+    "767f1394c4f827b2f44a5468fc75ac6b66a701763dd87d7565fb8c1d57630357",
+);
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_header_hashes_the_same_in_every_mode() {
+    let (key, header, hash) = (unhex(HEADER.0), unhex(HEADER.1), HEADER.2);
+    assert_eq!(header.len(), 187);
+    let cache = Arc::new(Cache::new(&key).unwrap());
+    let threads = std::thread::available_parallelism().unwrap();
+    let dataset = Arc::new(Dataset::new(&cache, threads).unwrap());
+    for (memory, mode) in [
+        (Memory::Light(cache), "light"),
+        (Memory::Fast(dataset), "fast"),
+    ] {
+        for (flags, name) in flag_sets() {
+            let mut vm = Vm::with_flags(memory.clone(), flags).unwrap();
+            assert_eq!(hex(&vm.hash(&header)), hash, "{mode}, {name}");
         }
     }
 }
@@ -197,4 +228,61 @@ fn the_vendored_tree_is_unchanged() {
         hex(&Sha256::digest(listing)),
         "c1e66fb2a030454c97df05753a6df9c62dbbd21ed31111041d006fdcecc87f1b"
     );
+}
+
+/// `cargo test --release -p linked-realms-randomx -- --ignored --nocapture hash_rate`
+///
+/// Hashes per second with the JIT, in light and fast mode, on 1 thread and on every thread (one
+/// VM each), and how long the Cache and the Dataset take to build. Plan item 9 sets
+/// `INITIAL_TARGET` from it (ADR 0012).
+#[test]
+#[ignore = "a measurement, run in release"]
+fn hash_rate() {
+    use std::time::{Duration, Instant};
+    let all = std::thread::available_parallelism().unwrap();
+    let start = Instant::now();
+    let cache = Arc::new(Cache::new(b"hash rate").unwrap());
+    println!("Cache: {:.2} s", start.elapsed().as_secs_f64());
+    let start = Instant::now();
+    let dataset = Arc::new(Dataset::new(&cache, all).unwrap());
+    println!(
+        "Dataset on {all} threads: {:.1} s",
+        start.elapsed().as_secs_f64()
+    );
+    // Each thread hashes a 187-byte header, its last 8 bytes counting, for `time`.
+    let rate = |memory: &Memory, threads: usize, time: Duration| {
+        let hashes: u64 = std::thread::scope(|scope| {
+            let runs: Vec<_> = (0..threads)
+                .map(|thread| {
+                    let memory = memory.clone();
+                    scope.spawn(move || {
+                        let mut vm = Vm::new(memory, true).unwrap();
+                        assert!(vm.jit());
+                        let mut header = [thread as u8; 187];
+                        let start = Instant::now();
+                        let mut n = 0u64;
+                        while start.elapsed() < time {
+                            header[179..].copy_from_slice(&n.to_be_bytes());
+                            vm.hash(&header);
+                            n += 1;
+                        }
+                        n
+                    })
+                })
+                .collect();
+            runs.into_iter().map(|run| run.join().unwrap()).sum()
+        });
+        hashes as f64 / time.as_secs_f64()
+    };
+    let light = Memory::Light(cache);
+    let fast = Memory::Fast(dataset);
+    for (name, memory) in [("light", &light), ("fast", &fast)] {
+        for threads in [1, all.get()] {
+            let total = rate(memory, threads, Duration::from_secs(5));
+            println!(
+                "{name} on {threads} threads: {total:.0} H/s, {:.0} H/s a thread",
+                total / threads as f64
+            );
+        }
+    }
 }
