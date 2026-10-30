@@ -18,6 +18,8 @@ pub mod codec;
 pub mod issuance;
 pub mod merkle;
 pub mod params;
+pub mod state;
+pub mod tx;
 #[cfg(feature = "wasm")]
 mod wasm;
 
@@ -51,6 +53,26 @@ pub enum Error {
     Truncated,
     /// Bytes left over after the last field.
     TrailingBytes,
+    // Transactions (docs/protocols/transactions.md).
+    UnknownVersion,
+    UnknownKind,
+    MemoTooLong,
+    /// The byte before the public key is neither 0 nor 1.
+    BadKeyFlag,
+    ZeroAmount,
+    /// The sender has never received Gold.
+    NoAccount,
+    WrongNonce,
+    /// The sender's first transaction carries no public key.
+    MissingKey,
+    /// A public key on a transaction after the sender's first.
+    RepeatedKey,
+    /// The public key is not the one the sender's address was made from.
+    KeyMismatch,
+    /// A sum passes `u64::MAX`.
+    Overflow,
+    InsufficientBalance,
+    BadSignature,
 }
 
 impl fmt::Display for Error {
@@ -63,6 +85,19 @@ impl fmt::Display for Error {
             Error::ContextTooLong => "context longer than 255 bytes",
             Error::Truncated => "bytes end too early",
             Error::TrailingBytes => "bytes left over",
+            Error::UnknownVersion => "unknown version",
+            Error::UnknownKind => "unknown kind of transaction",
+            Error::MemoTooLong => "memo longer than 80 bytes",
+            Error::BadKeyFlag => "public key flag is neither 0 nor 1",
+            Error::ZeroAmount => "amount is zero",
+            Error::NoAccount => "the sender has no account",
+            Error::WrongNonce => "wrong nonce",
+            Error::MissingKey => "the first transaction must carry the public key",
+            Error::RepeatedKey => "only the first transaction carries the public key",
+            Error::KeyMismatch => "the public key does not match the sender",
+            Error::Overflow => "amount too large",
+            Error::InsufficientBalance => "not enough Gold",
+            Error::BadSignature => "bad signature",
         })
     }
 }
