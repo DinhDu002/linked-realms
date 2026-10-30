@@ -22,7 +22,7 @@ Step 2C writes the chain rules in `crates/core` (P9). Transaction ids, signature
 4. **A transaction's id is the keccak256 of its signed bytes.**
    - The id includes the network id and leaves out the signature. ML-DSA signatures are hedged (fresh random bytes each time), so an id over the signature would change each time the same transaction is signed.
    - The layout, the checks and how a transaction changes the accounts are in `docs/protocols/transactions.md`, which follows decisions 1 to 3.
-   - A sender must already have an account, that is, must have received Gold. Otherwise a transaction with a fee of 0 could make accounts that never held any Gold. (Chosen while building plan item 2; waiting for the project owner's confirmation.)
+   - A sender must already have an account, that is, must have received Gold. Otherwise a transaction with a fee of 0 could make accounts that never held any Gold. (Chosen while building plan item 2; confirmed by the project owner on 2026-10-30.)
 5. **Heights and issuance.**
    - The genesis Block is height 0 and pays nothing; the first mined Block is height 1.
    - 1 GOLD is 100,000,000 base units, in a `u64`.
