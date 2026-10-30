@@ -1,11 +1,11 @@
 # CLAUDE.md — linked-realms
 
-A game made of many Lands: each player hosts their own Land, and the Lands join into one shared world through the company's Hub, which only connects Lands and lets Characters and NPCs travel. Gold is mined by Proof of Work on the game's own chain, like Bitcoin: every Land runs a Node and can switch its Mines on and off. Players' keys stay in the Shell, and each Land makes its own rules. Test network only. The project owner decides every merge.
+A game made of many Lands: each player hosts their own Land, and the Lands join into one shared world through the company's Hub, which only connects Lands and lets Characters and NPCs travel. Gold is mined by Proof of Work on LR, the project's own chain, like Bitcoin: every Land runs a Node and can switch its Mines on and off. Players' keys stay in the Shell, and each Land makes its own rules. The main network starts after step 2C. The project owner decides every merge.
 
 ## Required
 
 - The full plan is in `PLAN.md`. Before doing anything, read section 2 (principles), section 3 (architecture), section 5 (rules) and the current phase.
-- Use the terms defined in `CONTEXT.md`; do not introduce synonyms for them.
+- Use the terms defined in `CONTEXT.md` (the game) and `crates/CONTEXT.md` (LR, the chain); `CONTEXT-MAP.md` says which covers what. Do not introduce synonyms for them.
 - After each completed task, update section 12 (Progress) and the Log in `PLAN.md`.
 
 ## Principles that must never be broken
@@ -18,7 +18,7 @@ Summary; details in `PLAN.md` section 2.
 4. Gold is created only on a fixed schedule: halvings, then a small constant reward per Block forever; no premine.
 5. Mining runs only when its owner turns it on, with a CPU limit, and never covertly.
 6. A Land's code runs only in an isolated frame; the Shell shows every signing request outside it.
-7. Test network only. Never launch a main network.
+7. The main network starts after step 2C, only the project owner launches it, and it is never reset; rules change only through network upgrades.
 8. The chain holds only money; Lands, names, items, stats and heavy data live with the Hub or the Lands.
 9. Chain rules are defined once in `crates/core`, tested against fixed vectors, and used by the Node, the Mine and the Shell.
 10. Transactions and addresses carry a version and a scheme id so they can be extended.

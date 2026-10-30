@@ -2,7 +2,7 @@
 
 Your Land is a Map server running on your machine. It links out to the world's relay, so you do not open any port. It takes one command, which the Shell writes for you.
 
-Test network only (P7). There is no Gold yet: the chain, the Node and the Mine arrive in step 2C.
+There is no Gold yet: the chain, the Node and the Mine arrive in step 2C, and the main network starts after it (P7).
 
 ## What you need
 
