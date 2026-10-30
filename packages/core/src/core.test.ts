@@ -224,5 +224,28 @@ describe("keys", () => {
     expect(() => addressFromPublicKey(2, new Uint8Array(1312))).toThrow(
       "unknown signature scheme",
     );
+    // Out of range, not taken modulo 2^bits: index 2^32 + 1 is not Character 1, scheme 257 not 1.
+    const entropy = bytes(vectors.characters[0]!.entropy);
+    for (const index of [-1, 2 ** 32 + 1, 1.5, NaN]) {
+      expect(() => Key.fromEntropy(entropy, index)).toThrow(
+        "index is not an integer in range",
+      );
+    }
+    expect(() => addressFromPublicKey(257, new Uint8Array(1312))).toThrow(
+      "scheme is not an integer in range",
+    );
+    const s = vectors.statements[0]!;
+    const verifyAs = (scheme: number) =>
+      verify(
+        scheme,
+        bytes(s.publicKey),
+        s.context,
+        utf8(s.statement),
+        bytes(s.signature),
+      );
+    expect([
+      verifyAs(SCHEME_ML_DSA_44),
+      verifyAs(SCHEME_ML_DSA_44 + 256),
+    ]).toEqual([true, false]);
   });
 });

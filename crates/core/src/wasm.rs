@@ -9,8 +9,25 @@ use crate::state::PublicKey;
 use crate::tx::{Kind, MAX_MEMO_LEN, Tx};
 use crate::{Address, Error, SCHEME_ML_DSA_44, SigningKey};
 
-fn params(network_id: u32) -> Result<&'static ChainParams, JsError> {
-    by_network_id(network_id).ok_or_else(|| JsError::new("unknown network id"))
+fn params(network_id: f64) -> Result<&'static ChainParams, JsError> {
+    by_network_id(integer("networkId", network_id)?)
+        .ok_or_else(|| JsError::new("unknown network id"))
+}
+
+/// wasm-bindgen's own integer arguments take any JavaScript value modulo 2^bits, so `-1n` would
+/// sign the nonce 2^64 - 1 and the network id 2^32 + 1 would be the test network. Integers come
+/// in as a `number` or a `bigint` instead, and are refused out of range.
+fn integer<T: TryFrom<u64>>(name: &str, value: f64) -> Result<T, JsError> {
+    (value >= 0.0 && value.fract() == 0.0)
+        .then(|| T::try_from(value as u64).ok())
+        .flatten()
+        .ok_or_else(|| JsError::new(&format!("{name} is not an integer in range")))
+}
+
+/// Base units, from a `bigint` (see `integer`).
+fn units(name: &str, value: JsValue) -> Result<u64, JsError> {
+    u64::try_from(value)
+        .map_err(|_| JsError::new(&format!("{name} is not a bigint from 0 to 2^64 - 1")))
 }
 
 fn array<const N: usize>(bytes: &[u8]) -> Result<&[u8; N], JsError> {
@@ -33,8 +50,8 @@ impl Key {
 
     /// Character `index` behind the entropy of 24 words.
     #[wasm_bindgen(js_name = fromEntropy)]
-    pub fn from_entropy(entropy: &[u8], index: u32) -> Result<Key, JsError> {
-        let xi = crate::character_seed(array(entropy)?, index);
+    pub fn from_entropy(entropy: &[u8], index: f64) -> Result<Key, JsError> {
+        let xi = crate::character_seed(array(entropy)?, integer("index", index)?);
         Ok(Key(SigningKey::from_seed(&xi)))
     }
 
@@ -62,12 +79,12 @@ impl Key {
     #[allow(clippy::too_many_arguments)] // wasm-bindgen takes no options object without serde.
     pub fn sign_transfer(
         &self,
-        network_id: u32,
+        network_id: f64,
         sender: &str,
-        nonce: u64,
-        fee: u64,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] nonce: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] fee: JsValue,
         to: &str,
-        amount: u64,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] amount: JsValue,
         memo: &[u8],
         with_public_key: bool,
         rnd: &[u8],
@@ -77,7 +94,7 @@ impl Key {
         }
         let kind = Kind::Transfer {
             to: to.parse()?,
-            amount,
+            amount: units("amount", amount)?,
             memo: memo.to_vec(),
         };
         self.sign_tx(network_id, sender, nonce, fee, kind, with_public_key, rnd)
@@ -89,18 +106,18 @@ impl Key {
     #[allow(clippy::too_many_arguments)] // wasm-bindgen takes no options object without serde.
     pub fn sign_rotation(
         &self,
-        network_id: u32,
+        network_id: f64,
         sender: &str,
-        nonce: u64,
-        fee: u64,
-        new_scheme: u8,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] nonce: JsValue,
+        #[wasm_bindgen(unchecked_param_type = "bigint")] fee: JsValue,
+        new_scheme: f64,
         new_public_key: &[u8],
         with_public_key: bool,
         rnd: &[u8],
     ) -> Result<Vec<u8>, JsError> {
         let kind = Kind::Rotation {
             new_key: PublicKey {
-                scheme: new_scheme,
+                scheme: integer("newScheme", new_scheme)?,
                 bytes: new_public_key.to_vec(),
             },
         };
@@ -112,10 +129,10 @@ impl Key {
     #[allow(clippy::too_many_arguments)] // The arguments of the two calls above.
     fn sign_tx(
         &self,
-        network_id: u32,
+        network_id: f64,
         sender: &str,
-        nonce: u64,
-        fee: u64,
+        nonce: JsValue,
+        fee: JsValue,
         kind: Kind,
         with_public_key: bool,
         rnd: &[u8],
@@ -123,8 +140,8 @@ impl Key {
         let mut tx = Tx {
             scheme: SCHEME_ML_DSA_44,
             sender: sender.parse()?,
-            nonce,
-            fee,
+            nonce: units("nonce", nonce)?,
+            fee: units("fee", fee)?,
             kind,
             public_key: with_public_key.then(|| self.0.public_key().to_vec()),
             signature: Vec::new(),
@@ -140,8 +157,9 @@ impl Key {
 /// The id of the transaction `bytes` on the network `networkId`. Throws if they are not a
 /// transaction.
 #[wasm_bindgen(js_name = transactionId)]
-pub fn transaction_id(network_id: u32, bytes: &[u8]) -> Result<Vec<u8>, JsError> {
-    Ok(Tx::from_bytes(bytes)?.id(params(network_id)?).to_vec())
+pub fn transaction_id(network_id: f64, bytes: &[u8]) -> Result<Vec<u8>, JsError> {
+    let params = params(network_id)?;
+    Ok(Tx::from_bytes(bytes)?.id(params).to_vec())
 }
 
 /// Base units from GOLD as typed: digits, then optionally a dot and 1 to 8 digits.
@@ -152,8 +170,10 @@ pub fn parse_amount_js(text: &str) -> Result<u64, JsError> {
 
 /// Base units as GOLD, without trailing zeros.
 #[wasm_bindgen(js_name = formatAmount)]
-pub fn format_amount_js(units: u64) -> String {
-    format_amount(units)
+pub fn format_amount_js(
+    #[wasm_bindgen(unchecked_param_type = "bigint")] units: JsValue,
+) -> Result<String, JsError> {
+    Ok(format_amount(self::units("units", units)?))
 }
 
 /// The 34-byte payload of `address`.
@@ -179,18 +199,20 @@ pub fn entropy_from_words(words: &str) -> Result<Vec<u8>, JsError> {
 
 #[wasm_bindgen]
 pub fn verify(
-    scheme: u8,
+    scheme: f64,
     public_key: &[u8],
     context: &str,
     message: &[u8],
     signature: &[u8],
 ) -> bool {
-    crate::verify(scheme, public_key, context.as_bytes(), message, signature)
+    integer("scheme", scheme).is_ok_and(|scheme| {
+        crate::verify(scheme, public_key, context.as_bytes(), message, signature)
+    })
 }
 
 #[wasm_bindgen(js_name = addressFromPublicKey)]
-pub fn address_from_public_key(scheme: u8, public_key: &[u8]) -> Result<String, JsError> {
-    Ok(Address::from_public_key(scheme, public_key)?.to_string())
+pub fn address_from_public_key(scheme: f64, public_key: &[u8]) -> Result<String, JsError> {
+    Ok(Address::from_public_key(integer("scheme", scheme)?, public_key)?.to_string())
 }
 
 /// Whether `text` is an address in its only valid form: lowercase, `tlr`, a known scheme.

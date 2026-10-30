@@ -142,6 +142,55 @@ describe("transactions", () => {
     expect(() => rotate(SCHEME_ML_DSA_44, 1311)).toThrow();
     expect(() => rotate(2, 1312)).toThrow("unknown signature scheme");
   });
+
+  // wasm-bindgen would take them modulo 2^bits: -1n as the nonce 2^64 - 1, 2^32 + 1 as network 1.
+  it("refuses integers out of range instead of wrapping them", () => {
+    using key = Key.fromSeed(zeros);
+    const memo = new Uint8Array();
+    const sign = (network: number, nonce: bigint, fee = 0n, amount = 1n) =>
+      key.signTransfer(
+        network,
+        key.address,
+        nonce,
+        fee,
+        key.address,
+        amount,
+        memo,
+        true,
+        zeros,
+      );
+    expect(sign(1, 2n ** 64n - 1n, 2n ** 64n - 1n, 2n ** 64n - 1n).length).toBe(
+      3829,
+    );
+    for (const network of [2 ** 32 + 1, -1, 1.5, NaN, Infinity]) {
+      expect(() => sign(network, 0n)).toThrow(
+        "networkId is not an integer in range",
+      );
+      expect(() => transactionId(network, new Uint8Array())).toThrow(
+        "networkId",
+      );
+    }
+    for (const out of [-1n, 2n ** 64n]) {
+      expect(() => sign(1, out)).toThrow(
+        "nonce is not a bigint from 0 to 2^64 - 1",
+      );
+      expect(() => sign(1, 0n, out)).toThrow("fee is not a bigint");
+      expect(() => sign(1, 0n, 0n, out)).toThrow("amount is not a bigint");
+      expect(() => formatAmount(out)).toThrow("units is not a bigint");
+    }
+    expect(() =>
+      key.signRotation(
+        1,
+        key.address,
+        0n,
+        0n,
+        257,
+        new Uint8Array(1312),
+        false,
+        zeros,
+      ),
+    ).toThrow("newScheme is not an integer in range");
+  });
 });
 
 describe("amounts", () => {
