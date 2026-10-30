@@ -8,3 +8,5 @@ packages/shared/src/gen/
 # Data kept as written: the statement vectors and the Tiled map.
 packages/shared/test-vectors/
 maps/empty-land.json
+# RandomX, vendored byte for byte (crates/randomx).
+crates/randomx/vendor/
