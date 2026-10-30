@@ -10,12 +10,16 @@ use std::path::Path;
 
 use linked_realms_core::Address;
 use linked_realms_core::Error as RuleError;
-use linked_realms_core::block::{Block, Header, check_block, check_on_accounts};
+use linked_realms_core::block::{
+    Block, ChainView, Header, check_block, check_on_accounts, median_time_past, state_root_after,
+};
 use linked_realms_core::checkpoint::{Checkpoint, verify_checkpoint};
+use linked_realms_core::merkle::tx_root;
 use linked_realms_core::params::ChainParams;
-use linked_realms_core::retarget::work;
+use linked_realms_core::retarget::{next_target, work};
 use linked_realms_core::smt;
 use linked_realms_core::state::{Account, State, StateView, tree_key};
+use linked_realms_core::tx::Tx;
 use linked_realms_core::u256::U256;
 use redb::{Database, ReadableDatabase};
 
@@ -80,6 +84,70 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
     pub fn account(&self, address: &Address) -> Result<Option<Account>, Error> {
         let txn = self.db.begin_read()?;
         Ok(Accounts(txn.open_table(ACCOUNTS)?).account(address))
+    }
+
+    /// The best chain's tip id and its accounts, read at the same moment.
+    pub fn state(&self) -> Result<([u8; 32], impl StateView + use<H>), Error> {
+        let txn = self.db.begin_read()?;
+        let id = tip_id(&txn.open_table(META)?);
+        Ok((id, Accounts(txn.open_table(ACCOUNTS)?)))
+    }
+
+    /// The transactions of the Blocks that the branch ending with `old_tip` holds above the best
+    /// chain: what a move to another branch took off it, lowest first. None for an unknown id.
+    pub fn txs_left_since(&self, old_tip: &[u8; 32]) -> Result<Vec<Tx>, Error> {
+        self.read(|t| {
+            let mut blocks = Vec::new();
+            let mut id = *old_tip;
+            while let Some(stored) = t.header(&id) {
+                if t.on_best_chain(&id, stored.header.height) {
+                    break;
+                }
+                blocks.push(t.block(&id).expect("a Block that was on the best chain"));
+                id = stored.header.prev_id;
+            }
+            Ok(blocks
+                .into_iter()
+                .rev()
+                .flat_map(|block| block.txs)
+                .collect())
+        })
+    }
+
+    /// A Block on the best chain's tip paying `reward_address`, with `txs` in this order and its
+    /// Proof of Work not done (`nonce` 0). Its timestamp is `now`, or the earliest the rules
+    /// allow if that is later. Refused if a rule refuses `txs` on the tip.
+    pub fn template(
+        &self,
+        reward_address: Address,
+        txs: Vec<Tx>,
+        now: u64,
+    ) -> Result<Block, Error> {
+        self.read(|t| {
+            let tip = t.tip();
+            let chain = Branch::new(t, &tip)?;
+            let height = chain.tip_height() + 1;
+            let ids: Vec<_> = txs.iter().map(|tx| tx.id(&self.params)).collect();
+            let mut block = Block {
+                header: Header {
+                    height,
+                    prev_id: tip,
+                    timestamp: now.max(median_time_past(&chain, height) + 1),
+                    target: next_target(&self.params, height, |j| {
+                        let header = chain.header(j);
+                        (header.timestamp, header.target)
+                    }),
+                    tx_root: tx_root(&ids),
+                    state_root: [0; 32],
+                    reward_address,
+                    nonce: 0,
+                },
+                txs,
+            };
+            block.header.state_root = state_root_after(&self.params, &block, &t.accounts, &t.tree)
+                .map_err(Error::Rule)?;
+            Ok(block)
+        })
     }
 
     /// Stores `block` if `block::check_block` passes on the branch it extends, then follows the
@@ -147,6 +215,14 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
         let done = change(&mut Tables::open(&txn)?)?;
         txn.commit().map_err(Error::from)?;
         Ok(done)
+    }
+
+    /// Runs `look` on the tables, then drops what it would change.
+    fn read<T>(&self, look: impl FnOnce(&Tables) -> Result<T, Error>) -> Result<T, Error> {
+        let txn = self.db.begin_write()?;
+        let seen = look(&Tables::open(&txn)?);
+        txn.abort()?;
+        seen
     }
 
     /// Moves to the best branch. A Block a rule refuses on the way is marked and the choice made
@@ -319,4 +395,4 @@ fn ancestor(t: &Tables, mut id: [u8; 32], height: u64) -> [u8; 32] {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

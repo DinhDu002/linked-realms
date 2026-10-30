@@ -2,11 +2,13 @@
 //! and follows its best branch. Every chain rule is a call into `crates/core`.
 
 mod chain;
+mod mempool;
 mod store;
 
 use std::fmt;
 
 pub use chain::Chain;
+pub use mempool::{Mempool, Policy, Refused};
 
 #[derive(Debug)]
 pub enum Error {
@@ -49,5 +51,6 @@ storage_errors!(
     redb::DatabaseError,
     redb::TransactionError,
     redb::TableError,
-    redb::CommitError
+    redb::CommitError,
+    redb::StorageError
 );
