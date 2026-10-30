@@ -14,6 +14,7 @@ use sha2::Sha512;
 use sha3::{Digest, Keccak256};
 use zeroize::{Zeroize, Zeroizing};
 
+pub mod block;
 pub mod codec;
 pub mod issuance;
 pub mod merkle;
@@ -78,8 +79,26 @@ pub enum Error {
     BadSignature,
     /// A state snapshot's keys are not in ascending order, each once.
     SnapshotOrder,
-    /// A state snapshot does not give the state root it should.
+    /// A state snapshot or a Block does not give the state root it should.
     WrongStateRoot,
+    // Blocks (docs/protocols/blocks.md).
+    /// A Block of more than 1,000,000 bytes.
+    BlockTooLarge,
+    /// The height is not the parent's plus 1.
+    WrongHeight,
+    /// `prev_id` is not the parent's id.
+    WrongParent,
+    /// The timestamp is not after the median of the 11 before it.
+    TimestampTooEarly,
+    /// The timestamp is after 2^62.
+    TimestampTooLate,
+    /// The Target is not the one the Retarget gives.
+    WrongTarget,
+    /// The Proof-of-Work hash is not below the Target.
+    InsufficientWork,
+    WrongTxRoot,
+    /// The Block creates more than 50 Accounts.
+    TooManyNewAccounts,
 }
 
 impl fmt::Display for Error {
@@ -107,6 +126,15 @@ impl fmt::Display for Error {
             Error::BadSignature => "bad signature",
             Error::SnapshotOrder => "state snapshot out of order",
             Error::WrongStateRoot => "wrong state root",
+            Error::BlockTooLarge => "Block larger than 1,000,000 bytes",
+            Error::WrongHeight => "wrong height",
+            Error::WrongParent => "wrong parent",
+            Error::TimestampTooEarly => "timestamp not after the median of the last 11",
+            Error::TimestampTooLate => "timestamp after 2^62",
+            Error::WrongTarget => "wrong Target",
+            Error::InsufficientWork => "Proof-of-Work hash not below the Target",
+            Error::WrongTxRoot => "wrong transaction root",
+            Error::TooManyNewAccounts => "more than 50 new Accounts",
         })
     }
 }

@@ -28,6 +28,10 @@ impl<'a> Reader<'a> {
         Ok(u8::from_be_bytes(self.array()?))
     }
 
+    pub fn u16(&mut self) -> Result<u16, Error> {
+        Ok(u16::from_be_bytes(self.array()?))
+    }
+
     pub fn u32(&mut self) -> Result<u32, Error> {
         Ok(u32::from_be_bytes(self.array()?))
     }
