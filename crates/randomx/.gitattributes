@@ -1,0 +1,3 @@
+# The vendored RandomX tree is kept byte for byte (its checksum test reads it), so git must not
+# change its line endings.
+vendor/** -text
