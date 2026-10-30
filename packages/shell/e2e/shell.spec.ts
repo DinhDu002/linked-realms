@@ -597,9 +597,10 @@ test.describe("locking", () => {
     await expect
       .poll(async () => (await received(frame, "signResult")).at(-1))
       .toEqual({ type: "signResult", id: "c", error: "denied" });
-    expect((await hubState(character.address)).signIns).toBeGreaterThan(
-      signIns,
-    );
+    // The sign-in after an unlock runs in the background, so it may land after the answer.
+    await expect
+      .poll(async () => (await hubState(character.address)).signIns)
+      .toBeGreaterThan(signIns);
   });
 
   test("a wrong password in the modal does not unlock", async ({ page }) => {
