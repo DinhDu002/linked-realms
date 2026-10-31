@@ -79,6 +79,11 @@ services:
         VITE_HUB_URL: https://${HUB_DOMAIN}
         # The Map server image the Shell's "Your Land" command runs.
         VITE_LAND_IMAGE: ${LAND_IMAGE:-ghcr.io/dinhdu002/linked-realms-node:latest}
+        # The Public node's RPC, behind the Caddy in front of the chain (runbook, section 7).
+        # convention-exception: no `:?`, so a world without the chain yet still runs every other
+        # compose command; while RPC_DOMAIN is unset, the Shell's build fails naming VITE_NODE_URL.
+        VITE_NODE_URL: https://${RPC_DOMAIN}
+        VITE_NETWORK: ${LR_NETWORK:-test}
     image: linked-realms-shell:public
     restart: unless-stopped
 

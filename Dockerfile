@@ -3,7 +3,8 @@
 #   Map server (docs/self-hosting.md); compose.yaml names the command for the other services.
 # - `shell` (docker build --target shell): the Shell's static pages behind Caddy with its headers.
 #   The Hub's URL is fixed when it is built: --build-arg VITE_HUB_URL=https://hub.example.org, and
-#   so is the Map server image its "Your Land" command runs: --build-arg VITE_LAND_IMAGE=<image>.
+#   so are the Map server image its "Your Land" command runs (--build-arg VITE_LAND_IMAGE=<image>),
+#   the Public node's RPC (VITE_NODE_URL=https://rpc.example.org) and its network (VITE_NETWORK).
 # - `lr-node` (docker build --target lr-node): a Node of LR alone, for the company's seed, Public
 #   node, archive and Checkpoint signer (deploy/compose.chain.yaml, deploy/compose.signer.yaml).
 # Node 26 runs the services' TypeScript directly; only the WebAssembly core and the two web pages
@@ -62,6 +63,8 @@ COPY --from=wasm /pkg packages/core/pkg
 RUN pnpm install --frozen-lockfile
 ARG VITE_HUB_URL=http://localhost:8787
 ARG VITE_LAND_IMAGE
+ARG VITE_NODE_URL=http://localhost:9445
+ARG VITE_NETWORK=test
 RUN pnpm --filter @linked-realms/client build \
  && pnpm --filter @linked-realms/shell build \
  && node packages/shell/scripts/caddy-headers.ts > packages/shell/headers.caddy
