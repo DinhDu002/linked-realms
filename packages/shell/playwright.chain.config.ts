@@ -23,9 +23,9 @@ export default defineConfig({
       // A fresh dev chain each run; `exec` leaves lr-node as the process Playwright stops.
       command:
         `cargo build --release -q -p linked-realms-node --bin lr-node && ` +
-        `exec ../../target/release/lr-node --network dev --data "$(mktemp -d)" ` +
-        `--rpc 127.0.0.1:${NODE_PORT} mine --reward-address ${MINER.address} ` +
-        `--threads ${threads} --mode light`,
+        `exec ../../target/release/lr-node mine --reward-address ${MINER.address} ` +
+        `--threads ${threads} --mode light --network dev --data "$(mktemp -d)" ` +
+        `--rpc 127.0.0.1:${NODE_PORT}`,
       port: NODE_PORT,
       reuseExistingServer: false,
       timeout: 600_000,
