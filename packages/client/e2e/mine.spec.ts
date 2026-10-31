@@ -6,7 +6,12 @@ import { readFileSync } from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { fileURLToPath } from "node:url";
-import { expect, test, type Browser } from "@playwright/test";
+import {
+  expect,
+  test,
+  type Browser,
+  type BrowserContext,
+} from "@playwright/test";
 import { Key } from "@linked-realms/core";
 import { parseLandMap } from "@linked-realms/shared";
 import { signStatement } from "@linked-realms/shared/identity";
@@ -40,12 +45,12 @@ const mapText = readFileSync(
 );
 const nowSeconds = () => Math.floor(Date.now() / 1000);
 
-/** A Node the test drives: the calls it got, its status, and its wins. */
+/** A Node the test drives: the calls it got, its status (undefined: out of reach), and its wins. */
 function fakeNode() {
   const changed: (() => void)[] = [];
   const won: ((found: BlockFound) => void)[] = [];
-  let status = OFF;
-  const change = (next: MineStatus) => {
+  let status: MineStatus | undefined = OFF;
+  const change = (next: MineStatus | undefined) => {
     status = next;
     for (const listener of changed) listener();
   };
@@ -55,13 +60,19 @@ function fakeNode() {
     status: () => status,
     async start(rewardAddress, threads) {
       calls.push(["start", rewardAddress, threads]);
-      change({ ...OFF, state: "starting", threads, rewardAddress });
-      return status;
+      const starting = {
+        ...OFF,
+        state: "starting" as const,
+        threads,
+        rewardAddress,
+      };
+      change(starting);
+      return starting;
     },
     async stop() {
       calls.push(["stop"]);
       change(OFF);
-      return status;
+      return OFF;
     },
     onChange: (listener) => void changed.push(listener),
     onWon: (listener) => void won.push(listener),
@@ -80,6 +91,8 @@ let landUrl: string;
 const shells = new Map<string, string>();
 let shellServer: Server;
 let shellOrigin: string;
+// Each test's browsers, closed after it so their Lands stop drawing.
+const contexts: BrowserContext[] = [];
 
 test.beforeAll(async () => {
   shellServer = createServer((request, response) => {
@@ -109,7 +122,10 @@ test.beforeEach(async () => {
   landUrl = `http://127.0.0.1:${await server.listen(0, "127.0.0.1")}`;
 });
 
-test.afterEach(() => server.close());
+test.afterEach(async () => {
+  for (const context of contexts.splice(0)) await context.close();
+  await server.close();
+});
 
 /** The handoff the Shell gives the Land UI: the Hub's Travel ticket and the Character's arrival. */
 function handoff(character: Key) {
@@ -143,14 +159,18 @@ function handoff(character: Key) {
  * sandbox shell-land-ui.md requires (no forms). Each signMessage is signed with the Character's
  * key as a Land message, or denied, as `answer` says.
  */
+type Answer = "approve" | "deny";
+
 async function openLand(
   browser: Browser,
   character: Key,
-  answer: () => "approve" | "deny" = () => "approve",
+  answer: () => Answer | Promise<Answer> = () => "approve",
 ) {
-  const page = await (await browser.newContext()).newPage();
-  await page.exposeFunction("signLand", (text: string) =>
-    answer() === "deny"
+  const context = await browser.newContext();
+  contexts.push(context);
+  const page = await context.newPage();
+  await page.exposeFunction("signLand", async (text: string) =>
+    (await answer()) === "deny"
       ? { error: "denied" }
       : {
           signed: signStatement(
@@ -248,4 +268,71 @@ test("a visitor sees the Mine run and the win flash, but has no switch", async (
       "The Mine won Block #1240 (+5.00004 GOLD)",
     );
   await expect(visiting.locator("#mine-open")).toBeHidden();
+});
+
+test("the Land owner's form offers the other state with the Mine's threads, holds them to the Node's ceiling, and Cancel closes it", async ({
+  browser,
+}) => {
+  let asked = 0;
+  const land = await openLand(browser, owner, () => (asked++, "approve"));
+  node.change({
+    state: "on",
+    threads: 3,
+    mode: "fast",
+    hashRate: 900,
+    blocksWon: 0,
+    rewardAddress: owner.address,
+  });
+  await expect(land.locator("#hud-mine")).toContainText("Mine ON · 3 threads");
+  await land.getByRole("button", { name: "Switch the Mine" }).click();
+  const threads = land.getByLabel("Threads");
+  const sign = land.getByRole("button", { name: "Sign in the Shell" });
+  await expect(land.getByLabel("Off", { exact: true })).toBeChecked();
+  await expect(threads).toHaveValue("3");
+  await expect(threads).toBeDisabled();
+  await expect(threads).toHaveAttribute("max", "4");
+  await expect(sign).toBeFocused();
+
+  await land.getByLabel("On", { exact: true }).check();
+  await expect(threads).toBeEnabled();
+  await threads.fill("5");
+  await sign.click();
+  await expect(land.locator("#hud-notice")).toHaveText(
+    "Choose 1 to 4 threads.",
+  );
+  expect(asked).toBe(0);
+  expect(node.calls).toEqual([]);
+
+  await land.getByRole("button", { name: "Cancel" }).click();
+  await expect(land.locator("#mine-form")).toBeHidden();
+  await expect(
+    land.getByRole("button", { name: "Switch the Mine" }),
+  ).toBeVisible();
+});
+
+test("while the Shell asks, the form is disabled; when the Node goes out of reach, it closes and the switch is disabled", async ({
+  browser,
+}) => {
+  let approve!: (answer: Answer) => void;
+  const approved = new Promise<Answer>((resolve) => (approve = resolve));
+  const land = await openLand(browser, owner, () => approved);
+  const open = land.getByRole("button", { name: "Switch the Mine" });
+  await open.click();
+  const sign = land.getByRole("button", { name: "Sign in the Shell" });
+  await sign.click();
+  await expect(land.locator("#hud-notice")).toHaveText(
+    "Approve the switch in the Shell's prompt.",
+  );
+  await expect(sign).toBeDisabled();
+  await expect(land.getByLabel("Threads")).toBeDisabled();
+  approve("approve");
+  await expect(land.locator("#hud-notice")).toHaveText("The Mine is starting.");
+  expect(node.calls).toEqual([["start", owner.address, 1]]);
+
+  await open.click();
+  await expect(land.locator("#mine-form")).toBeVisible();
+  node.change(undefined);
+  await expect(land.locator("#hud-mine")).toContainText("unavailable");
+  await expect(land.locator("#mine-form")).toBeHidden();
+  await expect(open).toBeDisabled();
 });

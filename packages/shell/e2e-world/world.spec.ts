@@ -197,9 +197,11 @@ test("the Land owner switches the Mine on in the Shell, a visitor sees it win, a
   const land = page.frameLocator("#frame-area iframe");
   const visiting = visitorPage.frameLocator("#frame-area iframe");
   // Off after every start; available once map-1's Node has the seed and its chain (P5).
-  await expect(land.locator("#hud-mine")).toHaveText("Mine OFF", {
-    timeout: 60_000,
-  });
+  for (const view of [land, visiting])
+    await expect(view.locator("#hud-mine")).toHaveText("Mine OFF", {
+      timeout: 60_000,
+    });
+  // The visitor's frame is loaded, so a hidden switch is one it was not given.
   await expect(visiting.locator("#mine-open")).toBeHidden();
 
   // map-1 has 3 CPUs, so 2 threads, and room for fast mode (compose.yaml).
