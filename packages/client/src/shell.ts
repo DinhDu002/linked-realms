@@ -18,9 +18,16 @@ export interface TravelRefusedMessage {
   landId?: number;
 }
 
+export type SignError =
+  "denied" | "busy" | "blocked" | "invalid" | "failed" | "locked";
+
+/** The Shell's answer to `signMessage`: the signed Land message, or why there is none. */
+export type SignAnswer = { signed: SignedStatement } | { error: SignError };
+
 export type ShellMessage =
   | ({ type: "init" } & InitMessage)
-  | ({ type: "travelRefused" } & TravelRefusedMessage);
+  | ({ type: "travelRefused" } & TravelRefusedMessage)
+  | ({ type: "signResult"; id: string } & SignAnswer);
 
 const REASONS: readonly string[] = [
   "no-land",
@@ -29,6 +36,15 @@ const REASONS: readonly string[] = [
   "busy",
   "rate-limited",
   "error",
+];
+
+const SIGN_ERRORS: readonly string[] = [
+  "denied",
+  "busy",
+  "blocked",
+  "invalid",
+  "failed",
+  "locked",
 ];
 
 const isObject = (v: unknown): v is Record<string, unknown> =>
@@ -108,6 +124,16 @@ export function parseShellMessage(data: unknown): ShellMessage | undefined {
       ...(Number.isSafeInteger(landId) ? { landId: landId as number } : {}),
     };
   }
+  if (data.type === "signResult") {
+    // This page asks only signMessage, so a txId is no answer to it.
+    const { id, signed, error } = data;
+    if (typeof id !== "string") return undefined;
+    if (signed !== undefined && error !== undefined) return undefined;
+    const statement = readStatement(signed);
+    if (statement) return { type: "signResult", id, signed: statement };
+    if (typeof error === "string" && SIGN_ERRORS.includes(error))
+      return { type: "signResult", id, error: error as SignError };
+  }
   return undefined;
 }
 
@@ -131,17 +157,43 @@ export function travelRefusedText(m: TravelRefusedMessage): string {
   }
 }
 
+/** What the Player reads when the Shell signed nothing. */
+export function signErrorText(error: SignError): string {
+  switch (error) {
+    case "denied":
+      return "You did not sign, so nothing changed.";
+    case "busy":
+      return "The Shell is busy or you said no a moment ago. Wait 10 seconds and try again.";
+    case "blocked":
+      return "You said no 3 times, so the Shell refuses this Land's requests until you reload it.";
+    case "locked":
+      return "The Shell is locked. Unlock it and try again.";
+    case "invalid":
+      return "The Shell could not read this page's request. Reload the Land.";
+    case "failed":
+      return "The Shell could not sign. Try again.";
+  }
+}
+
 export interface ShellHandlers {
   onInit(init: InitMessage): void;
   onTravelRefused(m: TravelRefusedMessage): void;
 }
 
-/** Waits for the Shell's connect message (only the first counts), then relays init and travelRefused. */
-export function startShell(
-  win: Window,
-  handlers: ShellHandlers,
-): { travel(direction: Direction): void } {
+export interface ShellLink {
+  travel(direction: Direction): void;
+  /** Asks the Player to sign `text` as a Land message in the Shell's own prompt. */
+  signMessage(text: string): Promise<SignAnswer>;
+}
+
+/**
+ * Waits for the Shell's connect message (only the first counts), then relays init and
+ * travelRefused, and settles each signMessage with the signResult of its id.
+ */
+export function startShell(win: Window, handlers: ShellHandlers): ShellLink {
   let port: MessagePort | undefined;
+  let lastId = 0;
+  const waiting = new Map<string, (answer: SignAnswer) => void>();
   win.addEventListener("message", (event) => {
     if (port) return;
     const accepted = acceptConnect(event, win.parent);
@@ -151,11 +203,23 @@ export function startShell(
       const m = parseShellMessage(e.data);
       if (m?.type === "init") handlers.onInit(m);
       else if (m?.type === "travelRefused") handlers.onTravelRefused(m);
+      else if (m?.type === "signResult") {
+        const settle = waiting.get(m.id);
+        waiting.delete(m.id);
+        settle?.("signed" in m ? { signed: m.signed } : { error: m.error });
+      }
     };
   });
   return {
     travel(direction) {
       port?.postMessage({ type: "travel", direction });
+    },
+    signMessage(text) {
+      // Init comes through the port, so a page that has its Land always has one.
+      if (!port) return Promise.resolve({ error: "failed" });
+      const id = String(++lastId);
+      port.postMessage({ type: "signMessage", id, text });
+      return new Promise((resolve) => waiting.set(id, resolve));
     },
   };
 }

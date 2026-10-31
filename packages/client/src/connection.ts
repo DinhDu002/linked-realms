@@ -6,7 +6,7 @@ import {
   ServerMessageSchema,
   type ServerMessage,
 } from "@linked-realms/shared/land-protocol";
-import type { Handoff } from "@linked-realms/shared/identity";
+import type { Handoff, SignedStatement } from "@linked-realms/shared/identity";
 
 const FULL_ERROR_TEXT: Record<string, string> = {
   full: "This Land is full",
@@ -56,6 +56,19 @@ export function encodeInput(
   ).slice();
 }
 
+/** The Land owner's Mine switch: the Land message the Shell signed (map-server-node.md). */
+export function encodeMineSwitch(
+  signed: SignedStatement,
+): Uint8Array<ArrayBuffer> {
+  // slice: a plain ArrayBuffer-backed copy, which WebSocket.send accepts
+  return toBinary(
+    ClientMessageSchema,
+    create(ClientMessageSchema, {
+      message: { case: "mineSwitch", value: { signed } },
+    }),
+  ).slice();
+}
+
 /** A decoded frame, or undefined when it is not a binary protobuf ServerMessage (Map servers are untrusted). */
 export function decodeServerMessage(data: unknown): ServerMessage | undefined {
   if (!(data instanceof ArrayBuffer)) return undefined;
@@ -74,6 +87,7 @@ export interface ConnectionHandlers {
 
 export interface Connection {
   sendInput(dx: number, dy: number, seq: number): void;
+  sendMineSwitch(signed: SignedStatement): void;
   close(): void;
 }
 
@@ -103,6 +117,9 @@ export function connect(
   return {
     sendInput(dx, dy, seq) {
       if (ws.readyState === WebSocket.OPEN) ws.send(encodeInput(dx, dy, seq));
+    },
+    sendMineSwitch(signed) {
+      if (ws.readyState === WebSocket.OPEN) ws.send(encodeMineSwitch(signed));
     },
     close() {
       problem = true; // closing on purpose is not a problem to report

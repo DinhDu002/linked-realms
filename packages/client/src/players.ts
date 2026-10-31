@@ -32,7 +32,9 @@ export function readCharacter(value: unknown): CharacterState | undefined {
 }
 
 /** The name, or the short address when the name shows nothing (arrival.md). */
-export function characterLabel(c: CharacterState): string {
+export function characterLabel(
+  c: Pick<CharacterState, "name" | "address">,
+): string {
   // Control characters (newlines, bidi marks) would let a name fake extra label text.
   const name = [...c.name.replace(/[\p{Cc}\p{Cf}\p{Zl}\p{Zp}]/gu, "").trim()]
     .slice(0, NAME_MAX_CODE_POINTS)
