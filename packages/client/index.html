@@ -102,7 +102,9 @@
       <div id="hud-land"></div>
       <div id="hud-mine"></div>
       <div id="hud-mine-won"></div>
-      <!-- The Land owner's Mine switch: shown only to them (map-server-node.md). -->
+      <!-- The Land owner's Mine switch: shown only to them (map-server-node.md). The Shell's frame
+           has no allow-forms (shell-land-ui.md), so this form never submits: the switch is signed
+           on a click. -->
       <button id="mine-open" type="button" hidden>Switch the Mine</button>
       <form id="mine-form" hidden>
         <fieldset id="mine-fields">
@@ -116,7 +118,7 @@
             <input id="mine-threads" type="number" min="1" step="1" required />
           </label>
           <div>
-            <button type="submit">Sign in the Shell</button>
+            <button id="mine-sign" type="button">Sign in the Shell</button>
             <button id="mine-cancel" type="button">Cancel</button>
           </div>
         </fieldset>

@@ -63,7 +63,7 @@ if (isOutsideFrame(window)) {
     );
     mineFormEl.hidden = false;
     showMineControl();
-    mineFieldsEl.querySelector<HTMLElement>("button[type=submit]")?.focus();
+    el("mine-sign").focus();
   };
   mineOpenEl.addEventListener("click", openMineForm);
   mineFormEl.addEventListener("change", showMineControl);
@@ -71,8 +71,7 @@ if (isOutsideFrame(window)) {
     mineFormEl.hidden = true;
     showMineControl();
   });
-  mineFormEl.addEventListener("submit", (event) => {
-    event.preventDefault();
+  el("mine-sign").addEventListener("click", () => {
     if (!mine || signing) return;
     const on = mineOnEl.checked;
     const built = switchLine(mine, on, Number(mineThreadsEl.value));
