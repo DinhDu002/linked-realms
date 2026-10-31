@@ -1,4 +1,5 @@
-// The Land in Phaser. Thin glue: logic lives in tiles.ts, input.ts, interpolate.ts, players.ts.
+// The Land in Phaser. Thin glue: logic lives in tiles.ts, input.ts, interpolate.ts, players.ts,
+// mine.ts.
 import Phaser from "phaser";
 import {
   CHARACTER_HALF_SIZE_PX,
@@ -11,6 +12,17 @@ import {
 import type { ServerMessage } from "@linked-realms/shared/land-protocol";
 import { createInputDiffer, type PressedKeys } from "./input.ts";
 import { approach } from "./interpolate.ts";
+import {
+  mineHudText,
+  mineMotion,
+  readMineState,
+  readMineWon,
+  rewardText,
+  rewardsTo,
+  winText,
+  type MineView,
+  type WinView,
+} from "./mine.ts";
 import {
   characterLabel,
   characterMarks,
@@ -32,6 +44,21 @@ export interface SceneLink {
   hud(text: string): void;
   notice(text: string): void;
   onMapError(message: string): void;
+  /** A valid MineState, whether this page's Character is the Land owner, and the Mine's HUD line. */
+  mine(view: MineView, owner: boolean, line: string): void;
+  /** The HUD line of a Block the Mine won. */
+  won(line: string): void;
+  /** The Character tapped the Mine. */
+  onMineTap(): void;
+}
+
+interface MineArt {
+  glow: Phaser.GameObjects.Arc;
+  gear: Phaser.GameObjects.Graphics;
+  /** The Mine's centre and size on the map. */
+  x: number;
+  y: number;
+  size: number;
 }
 
 export class LandScene extends Phaser.Scene {
@@ -54,6 +81,18 @@ export class LandScene extends Phaser.Scene {
   private seq = 0;
   private following = false;
   private hudText = "";
+  private owner = { address: "", name: "" };
+  private mineView?: MineView;
+  private mineArt?: MineArt;
+  /** The running Mine's pulse, and its glow and period ("" while still). */
+  private pulse?: Phaser.Tweens.Tween;
+  private pulseKey = "";
+  /** Sparks owed since the last frame, carried so a slow rate still sparks. */
+  private sparkDue = 0;
+  private spin = 0;
+  private readonly reducedMotion =
+    globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
+    false;
 
   private readonly link: SceneLink;
 
@@ -74,6 +113,10 @@ export class LandScene extends Phaser.Scene {
       case "welcome": {
         this.selfId = m.value.you;
         this.landId = m.value.land?.landId;
+        this.owner = {
+          address: m.value.land?.owner ?? "",
+          name: m.value.land?.ownerName ?? "",
+        };
         this.characters.clear();
         for (const c of m.value.characters) this.addCharacter(c);
         this.pendingTiled = m.value.map;
@@ -98,6 +141,23 @@ export class LandScene extends Phaser.Scene {
       case "notice":
         this.link.notice(m.value.text);
         break;
+      case "mineState": {
+        const view = readMineState(m.value);
+        if (!view) break;
+        this.mineView = view;
+        this.animateMine();
+        const self = this.characters.get(this.selfId ?? -1);
+        const label = rewardsTo(view.rewardAddress, this.owner);
+        this.link.mine(view, self?.isOwner === true, mineHudText(view, label));
+        break;
+      }
+      case "mineWon": {
+        const win = readMineWon(m.value);
+        if (!win) break;
+        this.link.won(winText(win));
+        this.playWin(win);
+        break;
+      }
     }
   }
 
@@ -132,18 +192,10 @@ export class LandScene extends Phaser.Scene {
     this.textures.addCanvas("ground", paintGround(map));
     this.add.image(0, 0, "ground").setOrigin(0, 0).setDepth(0);
 
-    // The Mine: a generated graphic, not an asset.
-    const mine = map.mine;
-    const g = this.add.graphics().setDepth(1);
-    const mx = mine.tileX * map.tileSize;
-    const my = mine.tileY * map.tileSize;
-    const mw = mine.width * map.tileSize;
-    const mh = mine.height * map.tileSize;
-    g.fillStyle(0x4a3b2a).fillRect(mx, my, mw, mh);
-    g.fillStyle(0xf2c230).fillCircle(mx + mw / 2, my + mh / 2, mw / 4);
-    g.lineStyle(3, 0x1e150c).strokeRect(mx, my, mw, mh);
+    this.drawMine(map);
 
     // Gates: stepping on one travels to the neighbouring Land.
+    const g = this.add.graphics().setDepth(1);
     for (const d of DIRECTIONS) {
       const gate = map.gates[d];
       g.fillStyle(0x6fa8dc).fillRect(
@@ -157,8 +209,138 @@ export class LandScene extends Phaser.Scene {
     this.cameras.main.setBounds(0, 0, size, size);
   }
 
+  /** The Mine in its own container: generated graphics, not assets. */
+  private drawMine(map: LandMap): void {
+    const mw = map.mine.width * map.tileSize;
+    const mh = map.mine.height * map.tileSize;
+    const x = map.mine.tileX * map.tileSize + mw / 2;
+    const y = map.mine.tileY * map.tileSize + mh / 2;
+    const glow = this.add.circle(0, 0, mw * 0.6, 0xf2c230).setAlpha(0);
+    const base = this.add.graphics();
+    base.fillStyle(0x4a3b2a).fillRect(-mw / 2, -mh / 2, mw, mh);
+    base.fillStyle(0xf2c230).fillCircle(0, 0, mw / 4);
+    base.lineStyle(3, 0x1e150c).strokeRect(-mw / 2, -mh / 2, mw, mh);
+    // A gear over the coin while the Mine runs.
+    const gear = this.add.graphics().setVisible(false);
+    gear.fillStyle(0x1e150c);
+    for (let i = 0; i < 8; i++) {
+      const a = (i * Math.PI) / 4;
+      gear.fillCircle(
+        Math.cos(a) * mw * 0.2,
+        Math.sin(a) * mw * 0.2,
+        mw * 0.05,
+      );
+    }
+    gear.lineStyle(mw * 0.06, 0x1e150c).strokeCircle(0, 0, mw * 0.15);
+    const tap = this.add
+      .zone(0, 0, mw, mh)
+      .setInteractive({ useHandCursor: true })
+      .on("pointerdown", () => this.link.onMineTap());
+    this.add.container(x, y, [glow, base, gear, tap]).setDepth(1);
+    this.mineArt = { glow, gear, x, y, size: mw };
+    this.animateMine();
+  }
+
+  /** Starts, changes or stops the Mine's pulse for the last MineState (P5); update() spins and sparks. */
+  private animateMine(): void {
+    const art = this.mineArt;
+    if (!art) return;
+    const motion = mineMotion(this.mineView);
+    art.gear.setVisible(motion !== undefined);
+    // prefers-reduced-motion: no pulse, spin or sparks; the HUD line says it all.
+    const moving = this.reducedMotion ? undefined : motion;
+    // A MineState comes every 2 seconds: the pulse restarts only when its look changes.
+    const key = moving ? `${moving.glow}/${moving.pulseMs}` : "";
+    if (key !== this.pulseKey) {
+      this.pulseKey = key;
+      this.pulse?.remove();
+      this.pulse = undefined;
+      art.glow.setAlpha(moving ? moving.glow * 0.3 : 0).setScale(1);
+      if (moving)
+        this.pulse = this.tweens.add({
+          targets: art.glow,
+          alpha: moving.glow,
+          scale: 1.15,
+          duration: moving.pulseMs / 2,
+          yoyo: true,
+          repeat: -1,
+          ease: "Sine.easeInOut",
+        });
+    }
+  }
+
+  /** One small gold spark from (x, y), moving by (dx, dy) as it fades. */
+  private spark(x: number, y: number, dx: number, dy: number): void {
+    const dot = this.add.rectangle(x, y, 3, 3, 0xffe066).setDepth(4);
+    this.tweens.add({
+      targets: dot,
+      x: x + dx,
+      y: y + dy,
+      alpha: 0,
+      duration: 900,
+      onComplete: () => dot.destroy(),
+    });
+  }
+
+  /** The win everyone in the Land sees: a ring, a burst and "+N GOLD" rising (decision 2). */
+  private playWin(win: WinView): void {
+    const art = this.mineArt;
+    if (!art) return;
+    const text = this.add
+      .text(art.x, art.y, rewardText(win), {
+        fontSize: "20px",
+        fontStyle: "bold",
+        color: "#f2c230",
+        stroke: "#1e150c",
+        strokeThickness: 4,
+      })
+      .setOrigin(0.5)
+      .setDepth(10);
+    this.tweens.add({
+      targets: text,
+      y: this.reducedMotion ? art.y : art.y - 48,
+      alpha: 0,
+      duration: 1600,
+      onComplete: () => text.destroy(),
+    });
+    if (this.reducedMotion) return;
+    const ring = this.add
+      .circle(art.x, art.y, art.size / 2)
+      .setStrokeStyle(3, 0xf2c230)
+      .setDepth(4);
+    this.tweens.add({
+      targets: ring,
+      scale: 4,
+      alpha: 0,
+      duration: 600,
+      onComplete: () => ring.destroy(),
+    });
+    const reach = art.size * 1.2;
+    for (let i = 0; i < 12; i++) {
+      const a = (i * Math.PI) / 6;
+      this.spark(art.x, art.y, Math.cos(a) * reach, Math.sin(a) * reach);
+    }
+  }
+
   update(_time: number, deltaMs: number): void {
     this.sendInput();
+    const motion = mineMotion(this.mineView);
+    const art = this.mineArt;
+    if (motion && art && !this.reducedMotion) {
+      this.spin =
+        (this.spin + (motion.spinDegPerSecond * deltaMs) / 1000) % 360;
+      art.gear.setAngle(this.spin);
+      // ponytail: at most 2 owed sparks, so a tab back from the background does not burst.
+      this.sparkDue = Math.min(
+        2,
+        this.sparkDue + (motion.sparksPerSecond * deltaMs) / 1000,
+      );
+      for (; this.sparkDue >= 1; this.sparkDue--) {
+        const half = (art.size / 2) * 0.6;
+        const x = art.x + Phaser.Math.Between(-half, half);
+        this.spark(x, art.y, 0, -Phaser.Math.Between(24, 40));
+      }
+    }
     this.syncViews();
     for (const [id, view] of this.views) {
       view.body.x = approach(view.body.x, view.target.x, deltaMs);

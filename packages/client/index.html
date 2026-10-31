@@ -41,6 +41,20 @@
         color: #f88;
         overflow-wrap: anywhere;
       }
+      #hud-mine-won {
+        color: #f2c230;
+      }
+      #hud button,
+      #mine-form fieldset {
+        margin-top: 6px;
+      }
+      #mine-form fieldset {
+        border: 1px solid #555;
+        border-radius: 4px;
+      }
+      #mine-threads {
+        width: 4em;
+      }
       /* The touch pad: hold a finger on it and slide the way to walk. Touch screens only. */
       #pad {
         display: none;
@@ -86,6 +100,27 @@
     </div>
     <div id="hud">
       <div id="hud-land"></div>
+      <div id="hud-mine"></div>
+      <div id="hud-mine-won"></div>
+      <!-- The Land owner's Mine switch: shown only to them (map-server-node.md). -->
+      <button id="mine-open" type="button" hidden>Switch the Mine</button>
+      <form id="mine-form" hidden>
+        <fieldset id="mine-fields">
+          <legend>The Mine</legend>
+          <label
+            ><input id="mine-on" type="radio" name="mine" checked /> On</label
+          >
+          <label><input id="mine-off" type="radio" name="mine" /> Off</label>
+          <label>
+            Threads
+            <input id="mine-threads" type="number" min="1" step="1" required />
+          </label>
+          <div>
+            <button type="submit">Sign in the Shell</button>
+            <button id="mine-cancel" type="button">Cancel</button>
+          </div>
+        </fieldset>
+      </form>
       <div id="status"></div>
       <div id="hud-notice"></div>
       <div id="error"></div>
