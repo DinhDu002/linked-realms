@@ -1,5 +1,5 @@
 import { createServer, type Server } from "node:http";
-import type { AddressInfo } from "node:net";
+import { connect, type AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
 import { loadConfig } from "./config.ts";
 import { computeDashboard, renderDashboard } from "./dashboard.ts";
@@ -253,7 +253,7 @@ describe("readInput", () => {
         status: 200,
         body: { lands: [{ landId: "1", owner: ADDRESS, online: true }] },
       },
-      "/down/directory": { status: 503, body: {} },
+      "/down/directory": { status: 503, body: DIRECTORY },
     });
     for (const hub of [
       `${node.url}/bad`,
@@ -400,6 +400,26 @@ describe("createDashboardServer", () => {
     expect(await head.text()).toBe("");
   });
 
+  it("answers any request target without falling over", async () => {
+    const { url } = await dashboard(chain(2));
+    const { port } = new URL(url);
+    for (const target of ["//", "//[", "http://x/", "/%zz", "*"]) {
+      const status = await new Promise<string>((resolve, reject) => {
+        const socket = connect(Number(port), "127.0.0.1", () =>
+          socket.write(
+            `GET ${target} HTTP/1.1\r\nHost: x\r\nConnection: close\r\n\r\n`,
+          ),
+        );
+        let answer = "";
+        socket.on("data", (data: Buffer) => (answer += data.toString()));
+        socket.on("end", () => resolve(answer.split("\r\n")[0]!));
+        socket.on("error", reject);
+      });
+      expect(status, target).toMatch(/^HTTP\/1\.1 4\d\d/);
+    }
+    expect((await fetch(url)).status).toBe(200);
+  });
+
   it("reads the Public node once for everyone until the page is 10 seconds old", async () => {
     let ms = 0;
     const { node, url } = await dashboard(chain(2), () => ms);
@@ -455,6 +475,12 @@ describe("loadConfig", () => {
     expect(() => loadConfig({ NODE_RPC_URL: "ftp://user:pw@x" })).toThrow(
       "NODE_RPC_URL is not a valid http or https URL",
     );
+    expect(() =>
+      loadConfig({ NODE_RPC_URL: "https://user:secret@rpc.example" }),
+    ).toThrow(/^NODE_RPC_URL must not carry credentials$/);
+    expect(() =>
+      loadConfig({ NODE_RPC_URL: "http://x", HUB_URL: "http://:secret@hub" }),
+    ).toThrow(/^HUB_URL must not carry credentials$/);
     expect(() => loadConfig({ NODE_RPC_URL: "nope" })).toThrow(
       /^NODE_RPC_URL is not/,
     );

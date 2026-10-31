@@ -9,15 +9,18 @@ export interface Config {
 function url(env: NodeJS.ProcessEnv, name: string): string | undefined {
   const value = env[name];
   if (!value) return undefined;
-  let protocol: string | undefined;
+  let url: URL | undefined;
   try {
-    protocol = new URL(value).protocol;
+    url = new URL(value);
   } catch {
     // reported below
   }
   // never echo the value: URLs can carry credentials
-  if (protocol !== "http:" && protocol !== "https:")
+  if (url?.protocol !== "http:" && url?.protocol !== "https:")
     throw new Error(`${name} is not a valid http or https URL`);
+  // fetch refuses such a URL, and its error would put them in the log
+  if (url.username || url.password)
+    throw new Error(`${name} must not carry credentials`);
   return value.replace(/\/+$/, "");
 }
 
