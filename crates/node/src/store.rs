@@ -4,8 +4,10 @@
 use linked_realms_core::block::{Block, ChainView, HEADER_LEN, Header};
 use linked_realms_core::checkpoint::Checkpoint;
 use linked_realms_core::codec::Reader;
+use linked_realms_core::params::ChainParams;
 use linked_realms_core::smt::{Node, SmtStore};
 use linked_realms_core::state::{Account, PublicKey, State, StateView, tree_key};
+use linked_realms_core::tx::Kind;
 use linked_realms_core::u256::U256;
 use linked_realms_core::{ADDRESS_LEN, Address};
 use redb::{ReadableTable, StorageError, Table, TableDefinition, WriteTransaction};
@@ -31,6 +33,13 @@ const SNAPSHOT: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("snapsho
 const SMT: TableDefinition<[u8; 34], &[u8]> = TableDefinition::new("smt");
 /// Checkpoints by height: the Block id, then the signature.
 const CHECKPOINTS: TableDefinition<u64, &[u8]> = TableDefinition::new("checkpoints");
+/// The best chain's transactions by id: the Block's id and the transaction's place in it. Kept as
+/// long as the Block's body.
+const TXS: TableDefinition<[u8; 32], ([u8; 32], u32)> = TableDefinition::new("txs");
+/// The best chain's transactions by each address they move Gold from or to: the address's key in
+/// the state tree, the Block's height and the transaction's place in it. Kept as long as the
+/// Block's body, like `txs`.
+const ADDR_TXS: TableDefinition<([u8; 32], u64, u32), ()> = TableDefinition::new("addr_txs");
 /// Where branches end: each stored Block with no stored child, as it was stored.
 const TIPS: TableDefinition<[u8; 32], ()> = TableDefinition::new("tips");
 /// `network`: the network id; `tip`: the id of the best chain's last Block; `pruned`: the
@@ -237,6 +246,8 @@ pub struct Tables<'t> {
     pub tree: Tree<'t>,
     pub snapshot: Table<'t, [u8; 32], &'static [u8]>,
     checkpoints: Table<'t, u64, &'static [u8]>,
+    txs: Table<'t, [u8; 32], ([u8; 32], u32)>,
+    addr_txs: Table<'t, ([u8; 32], u64, u32), ()>,
     tips: Table<'t, [u8; 32], ()>,
     pub meta: Table<'t, &'static str, &'static [u8]>,
 }
@@ -252,6 +263,8 @@ impl<'t> Tables<'t> {
             tree: Tree(txn.open_table(SMT)?),
             snapshot: txn.open_table(SNAPSHOT)?,
             checkpoints: txn.open_table(CHECKPOINTS)?,
+            txs: txn.open_table(TXS)?,
+            addr_txs: txn.open_table(ADDR_TXS)?,
             tips: txn.open_table(TIPS)?,
             meta: txn.open_table(META)?,
         })
@@ -321,6 +334,59 @@ impl<'t> Tables<'t> {
 
     pub fn remove_block(&mut self, id: &[u8; 32]) {
         db(self.blocks.remove(id));
+    }
+
+    /// Puts the transactions of `block`, the best chain's Block `id`, in `txs` and `addr_txs`, or
+    /// with `add` false takes them out.
+    pub fn index(&mut self, params: &ChainParams, id: &[u8; 32], block: &Block, add: bool) {
+        let height = block.header.height;
+        for (place, tx) in (0..).zip(&block.txs) {
+            let mut keys = vec![tree_key(&tx.sender)];
+            if let Kind::Transfer { to, .. } = &tx.kind {
+                keys.push(tree_key(to));
+            }
+            let tx_id = tx.id(params);
+            match add {
+                true => drop(db(self.txs.insert(tx_id, (*id, place)))),
+                false => drop(db(self.txs.remove(tx_id))),
+            }
+            for key in keys {
+                match add {
+                    true => drop(db(self.addr_txs.insert((key, height, place), ()))),
+                    false => drop(db(self.addr_txs.remove((key, height, place)))),
+                }
+            }
+        }
+    }
+
+    /// Empties `txs` and `addr_txs`, for a best chain without bodies.
+    pub fn clear_index(&mut self) {
+        db(self.txs.retain(|_, _| false));
+        db(self.addr_txs.retain(|_, _| false));
+    }
+
+    /// Where the best chain holds the transaction `id`: its Block's id and its place there.
+    pub fn tx_place(&self, id: &[u8; 32]) -> Option<([u8; 32], u32)> {
+        db(self.txs.get(id)).map(|place| place.value())
+    }
+
+    /// Where the best chain holds the transactions from or to `address` (height and place),
+    /// newest first, before the height and place `before`: `max` at most.
+    pub fn address_txs(
+        &self,
+        address: &Address,
+        before: (u64, u32),
+        max: usize,
+    ) -> Vec<(u64, u32)> {
+        let key = tree_key(address);
+        db(self.addr_txs.range((key, 0, 0)..(key, before.0, before.1)))
+            .rev()
+            .take(max)
+            .map(|entry| {
+                let (_, height, place) = db(entry).0.value();
+                (height, place)
+            })
+            .collect()
     }
 
     /// Makes the stored Block `id` a branch's end, though it may have a child: a candidate to

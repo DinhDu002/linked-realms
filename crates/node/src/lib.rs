@@ -4,11 +4,13 @@
 mod chain;
 mod mempool;
 pub mod p2p;
+pub mod rpc;
+pub mod run;
 mod store;
 
 use std::fmt;
 
-pub use chain::Chain;
+pub use chain::{Chain, Placed};
 pub use mempool::{Mempool, Policy, Refused};
 
 #[derive(Debug)]

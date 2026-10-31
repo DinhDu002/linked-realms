@@ -87,6 +87,55 @@ fn later(chain: &Test) -> u64 {
 }
 
 #[test]
+fn finds_a_held_transaction_and_what_its_sender_has_left() {
+    let (_file, chain, mut pool, ..) = funded("lookups", 1, Policy::default());
+    let (a, f) = (key(0), funder().address());
+    let (first, second) = (pay(&a, 0, f, 1, 10), pay(&a, 1, f, 2, 10));
+    add(&mut pool, &chain, first.clone()).unwrap();
+    add(&mut pool, &chain, second.clone()).unwrap();
+    assert_eq!(pool.get(&second.id(&PARAMS)), Some(&second));
+    assert_eq!(pool.get(&[0; 32]), None);
+    let left = pool.pending(&a.address()).unwrap();
+    assert_eq!(left.nonce, 2);
+    assert_eq!(left.balance, GOLD / 10 - 3 - first.fee - second.fee);
+    assert!(left.key.is_some());
+    assert_eq!(pool.pending(&f), None);
+    assert_eq!(pool.held(), (2, pool.bytes));
+}
+
+#[test]
+fn estimates_the_fee_rate_that_reaches_the_next_block() {
+    let policy = Policy {
+        per_sender: 100,
+        ..Policy::default()
+    };
+    let (_file, chain, mut pool, ..) = funded("fee-rate", 10, policy);
+    let f = funder().address();
+    assert_eq!(pool.fee_rate(), 10);
+    // Sender `i` pays 20 + `i` per byte; all but the cheapest fit one Block beside a transfer.
+    let room = MAX_BLOCK_SIZE - HEADER_LEN - 2 - LARGEST_TRANSFER_LEN;
+    let mut senders: Vec<u8> = (0..10).collect();
+    senders.rotate_left(1);
+    let mut beside_the_transfer = false;
+    for i in senders {
+        for nonce in 0..40 {
+            add(
+                &mut pool,
+                &chain,
+                pay(&key(i), nonce, f, 1, 20 + u64::from(i)),
+            )
+            .unwrap();
+            let expected = if pool.bytes <= room { 10 } else { 21 };
+            assert_eq!(pool.fee_rate(), expected, "{} bytes held", pool.bytes);
+            beside_the_transfer |= pool.bytes > room && pool.bytes <= room + LARGEST_TRANSFER_LEN;
+        }
+    }
+    // Once, what is held fit a Block only without room for the largest transfer.
+    assert!(beside_the_transfer);
+    assert!(pool.bytes > room);
+}
+
+#[test]
 fn takes_what_the_policy_and_the_rules_take() {
     let policy = Policy {
         per_sender: 3,

@@ -22,6 +22,18 @@ enum Incoming {
     Stream(TcpStream, bool),
     Bytes(PeerId, Vec<u8>),
     Closed(PeerId),
+    Wake,
+}
+
+/// Makes the `Tcp` it came from return from `next` now, so its owner can do something else.
+#[derive(Clone)]
+pub struct Waker(SyncSender<Incoming>);
+
+impl Waker {
+    pub fn wake(&self) {
+        // Full: the owner has a backlog to get through, and returns soon anyway.
+        let _ = self.0.try_send(Incoming::Wake);
+    }
 }
 
 struct Writer {
@@ -75,12 +87,16 @@ impl Tcp {
         })
     }
 
+    pub fn waker(&self) -> Waker {
+        Waker(self.sender.clone())
+    }
+
     /// The address it takes connections on.
     pub fn local_addr(&self) -> Option<SocketAddr> {
         self.local
     }
 
-    /// The next event, or `None` if none came within `wait`.
+    /// The next event, or `None` if none came within `wait` or a `Waker` woke it.
     pub fn next(&mut self, wait: Duration) -> Option<Event> {
         loop {
             match self.incoming.recv_timeout(wait).ok()? {
@@ -107,6 +123,7 @@ impl Tcp {
                         return Some(Event::Disconnected { peer });
                     }
                 }
+                Incoming::Wake => return None,
             }
         }
     }

@@ -308,6 +308,81 @@ fn follows_the_most_work_and_undoes_the_branch_it_leaves() {
 }
 
 #[test]
+fn the_transaction_index_follows_the_best_chain() {
+    let file = File::new("index");
+    let chain = file.open();
+    let mut build = Builder::new();
+    let genesis = build.genesis();
+    let key = SigningKey::from_seed(&[1; 32]);
+    let a1 = build.child(&genesis, key.address(), Vec::new());
+    let a2 = build.child(&a1, nobody(1), vec![transfer(&key, 0, nobody(2), 5)]);
+    let txs = vec![
+        transfer(&key, 1, nobody(2), 6),
+        transfer(&key, 2, nobody(3), 7),
+    ];
+    let a3 = build.child(&a2, nobody(1), txs);
+    submit_all(&chain, &[a1.clone(), a2.clone(), a3.clone()]);
+    let at = |block: &Block, place: u32| Placed {
+        tx: block.txs[place as usize].clone(),
+        block: block.header.id(),
+        height: block.header.height,
+        place,
+    };
+    let first = a2.txs[0].id(&PARAMS);
+    assert_eq!(chain.transaction(&first).unwrap(), Some(at(&a2, 0)));
+    assert_eq!(chain.transaction(&[7; 32]).unwrap(), None);
+    // Newest first, by sender and by recipient; a reward is not a transaction.
+    let of = |address: &Address, before, max| chain.address_txs(address, before, max).unwrap();
+    let all = vec![at(&a3, 1), at(&a3, 0), at(&a2, 0)];
+    assert_eq!(of(&key.address(), None, 20), all);
+    assert_eq!(of(&nobody(2), None, 20), [at(&a3, 0), at(&a2, 0)]);
+    assert_eq!(of(&nobody(3), None, 20), [at(&a3, 1)]);
+    assert!(of(&nobody(1), None, 20).is_empty());
+    // A page at a time, each from where the last ended.
+    assert_eq!(of(&key.address(), None, 2), all[..2]);
+    assert_eq!(of(&key.address(), Some((3, 1)), 20), all[1..]);
+    assert_eq!(of(&key.address(), Some((3, 0)), 20), all[2..]);
+    assert!(of(&key.address(), Some((2, 0)), 20).is_empty());
+
+    // Off the best chain, out of the index; back on it, back in.
+    let b = build.branch(&genesis, nobody(4), 4);
+    submit_all(&chain, &b);
+    assert_eq!(chain.tip().unwrap(), b[3].header);
+    assert_eq!(chain.transaction(&first).unwrap(), None);
+    assert!(of(&key.address(), None, 20).is_empty());
+    assert!(of(&nobody(2), None, 20).is_empty());
+    let a = build.branch(&a3, nobody(4), 2);
+    submit_all(&chain, &a);
+    assert_eq!(chain.tip().unwrap(), a[1].header);
+    assert_eq!(of(&key.address(), None, 20), all);
+}
+
+#[test]
+fn the_transaction_index_keeps_what_the_bodies_keep() {
+    let file = File::new("index-prune");
+    let chain = file.open().pruning(2);
+    let mut build = Builder::new();
+    let miner = SigningKey::from_seed(&[1; 32]);
+    let blocks = ledger(&mut build, &miner);
+    submit_all(&chain, &blocks);
+    let (early, late) = (blocks[14].txs[0].id(&PARAMS), blocks[21].txs[0].id(&PARAMS));
+    assert!(chain.transaction(&early).unwrap().is_some());
+    chain
+        .add_checkpoint(&checkpoint(20, blocks[19].header.id()))
+        .unwrap();
+    assert_eq!(chain.pruned().unwrap(), 18);
+    assert_eq!(chain.transaction(&early).unwrap(), None);
+    assert!(chain.transaction(&late).unwrap().is_some());
+    let heights: Vec<u64> = chain
+        .address_txs(&miner.address(), None, 20)
+        .unwrap()
+        .iter()
+        .map(|placed| placed.height)
+        .collect();
+    assert_eq!(heights, [22]);
+}
+
+#[test]
 fn a_block_a_rule_refuses_is_never_followed() {
     let file = File::new("refused");
     let chain = file.open();
@@ -731,7 +806,7 @@ fn starts_from_a_state_snapshot_and_refuses_a_bad_one() {
     // A Node part of the way along the same branch drops the Blocks it had: none is undone.
     let file = File::new("snapshot-along");
     let c = file.open();
-    submit_all(&c, &blocks[..2]);
+    submit_all(&c, &blocks[..16]);
     c.add_checkpoint(&checkpoint(20, blocks[19].header.id()))
         .unwrap();
     c.submit_headers(&headers).unwrap();
@@ -740,6 +815,10 @@ fn starts_from_a_state_snapshot_and_refuses_a_bad_one() {
     c.finish_snapshot(20).unwrap();
     assert_eq!(c.tip().unwrap(), blocks[19].header);
     assert_eq!(c.block(&blocks[0].header.id()).unwrap(), None);
+    // Nor are their transactions found: the index went with the bodies.
+    let paid = blocks[14].txs[0].id(&PARAMS);
+    assert_eq!(c.transaction(&paid).unwrap(), None);
+    assert!(c.address_txs(&nobody(5), None, 20).unwrap().is_empty());
     assert!(!c.read(|t| Ok(t.has_undo(&blocks[0].header.id()))).unwrap());
     // A part taken before a stop is gone after it.
     c.add_snapshot(&good).unwrap();
