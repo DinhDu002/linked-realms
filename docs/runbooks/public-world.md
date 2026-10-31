@@ -106,6 +106,16 @@ docker compose -f deploy/compose.signer.yaml logs -f   # "checkpoint <height> <B
 
 `LR_SEED` is the chain server's name, or its address, and the P2P port. A name is looked up when the signer starts, so restart the signer after the server's address changes.
 
+## 8. The check with three Players
+
+Step 2C ends when three Players on three machines play on the test network (`PLAN.md`, 2C "Done when"). With the world (sections 3 to 6) and the chain (section 7) running, and the signer printing Checkpoints:
+
+1. Each Player, on their own machine, opens the Shell, makes a Character, and runs the command under "Your Land" with `-e NODE_SEEDS=seed.example.org:9444` (self-hosting, steps 1 to 5). Each Land is online in the Directory within about 15 seconds.
+2. In their own Land, each switches the Mine on and signs the switch in the Shell. Each Mine wins Blocks: every visitor sees the flash, and the Shell's balance grows.
+3. Each sends Gold with a memo to another through the Shell's Send. The recipient sees it as received once a Block holds it.
+4. Each walks into another's Land, through a Gate or from the Directory.
+5. Record the date, the three machines, and a Block each Mine won and a transfer each Player sent in `PLAN.md`'s Log.
+
 ## Everyday tasks
 
 | Task | Command |

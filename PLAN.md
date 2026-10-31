@@ -259,14 +259,14 @@ Built on Solidity contracts; superseded on 2026-10-29 by ADR 0006–0008. Step 2
 
 #### 2C – The chain (ADR 0006)
 
-- [ ] `crates/core`: transfers with a memo, key rotation, the Block format with a state root, issuance with halvings and the tail reward, LWMA Retarget, fee and size rules, the RandomX v2 binding (v2.0.1 pinned) with the official vectors on x86 and ARM.
-- [ ] `crates/node`: Block and transaction checks, a mempool with the fee auction and minimum relay fee, `redb` storage, pruning from Checkpoint snapshots, TCP P2P behind an interface, JSON-RPC (`jsonrpsee`), Checkpoint checks.
-- [ ] The Mine: one per Land, switched on and off by the Land owner in the Land, CPU limit, fast or light mode by available memory, rewards to the Land owner's address; the effect everyone in the Land sees when it wins a Block. LR's standalone mine command (ADR 0015).
-- [ ] Services: the Checkpoint signer (the project owner's key, on a separate machine); the company's seed nodes, Public node and archive.
-- [ ] Shell: balance, send Gold with a memo, key rotation, prompts for payments a Land asks for.
-- [ ] Docker stack: Map server, Node (on by default, can be turned off) and Mine (off); self-hosting guide updated; Map server ↔ Node protocol specified.
-- [ ] Dashboard rebuilt on the Public node and the Hub.
-- [ ] Simulation: hash rate rises and falls and Block time returns to about 60 seconds; Checkpoints stop deeper rewrites.
+- [x] `crates/core`: transfers with a memo, key rotation, the Block format with a state root, issuance with halvings and the tail reward, LWMA Retarget, fee and size rules, the RandomX v2 binding (v2.0.1 pinned) with the official vectors on x86 and ARM.
+- [x] `crates/node`: Block and transaction checks, a mempool with the fee auction and minimum relay fee, `redb` storage, pruning from Checkpoint snapshots, TCP P2P behind an interface, JSON-RPC (`jsonrpsee`), Checkpoint checks.
+- [x] The Mine: one per Land, switched on and off by the Land owner in the Land, CPU limit, fast or light mode by available memory, rewards to the Land owner's address; the effect everyone in the Land sees when it wins a Block. LR's standalone mine command (ADR 0015).
+- [ ] Services: the Checkpoint signer (the project owner's key, on a separate machine); the company's seed nodes, Public node and archive. Built (`deploy/compose.chain.yaml`, `deploy/compose.signer.yaml`, `docs/runbooks/public-world.md`); they run once the project owner deploys them.
+- [x] Shell: balance, send Gold with a memo, key rotation, prompts for payments a Land asks for. The rotation button stays out until an ADR says how the Hub and statements treat a rotated key (the step plan's Answer 6); rotation itself is in `crates/core` and the Node.
+- [x] Docker stack: Map server, Node (on by default, can be turned off) and Mine (off); self-hosting guide updated; Map server ↔ Node protocol specified.
+- [x] Dashboard rebuilt on the Public node and the Hub.
+- [x] Simulation: hash rate rises and falls and Block time returns to about 60 seconds; Checkpoints stop deeper rewrites.
 - [ ] After the Done-when check below: LR moves to its own repository with `git filter-repo` (ADR 0015), before the genesis.
 - [ ] The main network launch, by the project owner only (P7): a genesis without premine, the main network's id, the `lr` address prefix and the Checkpoint end height 1,051,200 in the genesis code; the test network stops.
 
@@ -393,7 +393,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 - [ ] Phase 2 – Own chain, open source and testing
   - [x] 2A – Self-hosting, wallet and dashboard (EVM design)
   - [ ] 2B – World without the chain
-  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; items 1 to 26 of 29 built; ends with the repository split and the main network launch)
+  - [ ] 2C – The chain (plan approved on 2026-10-30: `docs/plans/phase-2c-the-chain.md`; items 1 to 27 of 29 built, but for item 27's check with three Players on three machines, which needs the project owner; ends with the repository split and the main network launch)
   - [ ] 2D – Economy in the reference Land kit
   - [ ] 2E – NPCs
   - [ ] 2F – Audit (after the genesis)
@@ -402,6 +402,7 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
 
+- 2026-10-31: Step 2C item 27 on branch `phase-2/2c-27-close-out`: the close-out, but for the check with three Players, which needs the project owner. `pnpm e2e:chain` now runs against the `world` profile. Land 1's owner switches the Mine on and the other Character sees it win. The Land owner then sends 1.25 GOLD with a memo to the other Character through the Shell's prompt, and the Mine is off after `map-1` restarts. It passed twice against the real stack. `README.md` gives the step's status, section 6 ticks the parts of 2C that are built, and the public-world runbook lists the steps of the check with three Players. Defaults are in the plan's item 27.
 - 2026-10-31: Step 2C item 26 on branch `phase-2/2c-26-simulation`: the network simulation. Three Nodes on the in-memory `Network` mine 1,200 Blocks of the dev network with the Retarget on while the hash rate rises four times and falls to half, and the mean Block time returns to about 60 seconds after each change. A branch with more work that parts below a Checkpoint wins until the Checkpoint comes, then loses its bodies on every Node, and a later Block pushed on it stays a header. Defaults and a finding are in the plan's item 26.
 - 2026-10-31: Step 2C item 25 on branch `phase-2/2c-25-dashboard`: the dashboard. The Public node's RPC has `lr_getNewAccountCounts`, which counts the Accounts each Block of the best chain created from the record the Node keeps to take Blocks off it; it is null where that record is gone. `packages/dashboard` reads the last 2000 Blocks, their counts and the Hub's Directory, and serves one page with no script: Lands online, Mines mining in 24 hours, Block time and the estimated hash rate over the last 100 gaps, new Accounts, the top 20 winners with Others, and the latest Blocks. The `world` profile runs it on port 8790 against the seed and the Hub. Its figures are tested on Blocks recorded from two real Mines and a transfer, and the page was checked against the stack's seed. Defaults are in the plan's item 25.
 - 2026-10-31: Step 2C item 22 on branch `phase-2/2c-22-client`: the Land side of the Mine in the reference Land UI. `packages/client/src/shell.ts` asks the Shell for `signMessage` and settles each request with the `signResult` of its id. The HUD always shows the Mine's line from `MineState`. The Mine on the map pulses, spins and sparks while the Land says it runs, and everyone sees a ring and "+N GOLD" when it wins. Only the Land owner sees the switch: on or off and the threads, signed in the Shell's prompt and sent as `mine_switch`. Both are driven in a real browser by a fake Shell and a fake Map server. Defaults are in the plan's item 22. The review's three defects are fixed: a switch claimed as sent when the socket was closed, a looping spark timer leaked on each `MineState`, and a form that could not be closed while the Node was down.
