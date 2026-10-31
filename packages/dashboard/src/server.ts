@@ -30,8 +30,9 @@ export function createDashboardServer(config: Config, now = Date.now) {
       };
     }
   };
-  return createServer(async (request, response) => {
-    const path = new URL(request.url ?? "/", "http://dashboard").pathname;
+  return createServer((request, response) => {
+    // The target is read as text: parsing it as a URL throws on some, such as "//".
+    const path = (request.url ?? "/").split("?")[0];
     if (
       path !== "/" ||
       (request.method !== "GET" && request.method !== "HEAD")
@@ -45,12 +46,14 @@ export function createDashboardServer(config: Config, now = Date.now) {
       readAt = now();
       page = read();
     }
-    const { status, html } = await page;
-    response
-      .writeHead(status, {
-        "content-type": "text/html; charset=utf-8",
-        "cache-control": "no-store",
-      })
-      .end(request.method === "HEAD" ? undefined : html);
+    // read settles every failure itself, so this never rejects. Node sends no body to HEAD.
+    void page.then(({ status, html }) =>
+      response
+        .writeHead(status, {
+          "content-type": "text/html; charset=utf-8",
+          "cache-control": "no-store",
+        })
+        .end(html),
+    );
   });
 }

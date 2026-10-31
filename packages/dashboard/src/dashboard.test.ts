@@ -43,7 +43,7 @@ const input = (fields: Partial<DashboardInput>): DashboardInput => ({
 describe("work", () => {
   it("is 2^256 / (Target + 1), as crates/core", () => {
     expect(work((1n << 256n) - 1n)).toBe(1n);
-    expect(work(0n)).toBe(1n << 256n);
+    expect(work(0n)).toBe((1n << 256n) - 1n);
     expect(work(BigInt(`0x${target(10)}`))).toBe(1024n);
     expect(work(2n)).toBe((1n << 256n) / 3n);
   });
@@ -116,9 +116,24 @@ describe("computeDashboard", () => {
     );
     expect(same).toMatchObject({
       gaps: 1,
-      blockSeconds: 0,
+      blockSeconds: undefined,
       hashRate: undefined,
     });
+    // A Block's time need only pass the median of the ones before it, so it can go back.
+    const back = computeDashboard(
+      input({
+        blocks: [
+          block(1, { timestamp: NOW }),
+          block(2, { timestamp: NOW - 10 }),
+        ],
+      }),
+    );
+    expect(back).toMatchObject({
+      gaps: 1,
+      blockSeconds: undefined,
+      hashRate: undefined,
+    });
+    expect(renderDashboard(back, NOW)).not.toContain("-10");
   });
 
   it("counts the Mines that won a Block in the last 24 hours, and says when the Blocks read cover less", () => {
@@ -206,7 +221,10 @@ describe("computeDashboard", () => {
     expect(d.winners.reduce((s, w) => s + w.blocks, 0)).toBe(465);
 
     const page = renderDashboard(d, NOW);
-    expect(page).toContain("<td>Land 7</td>");
+    // Land 7's Mine has 1 uncounted Block of 30: its count shows, not "–".
+    expect(page).toContain(
+      '<td>Land 7</td><td class="mono">tlr1000030…000030</td><td class="num">30</td><td class="num">6.5%</td><td class="num">0</td>',
+    );
     expect(page).toContain("<td>Others</td>");
     expect(page).toContain("could not count the new Accounts of 1 Block.");
     expect(page).toContain("created by the last 464 Blocks counted");

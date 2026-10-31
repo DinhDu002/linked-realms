@@ -64,7 +64,7 @@ export interface Dashboard {
   minesMining: number;
   /** Whether the Blocks read go back 24 hours; if not, minesMining covers less. */
   coversDay: boolean;
-  /** Mean seconds between the last BLOCK_TIME_SAMPLE + 1 Blocks. */
+  /** Mean seconds between the last BLOCK_TIME_SAMPLE + 1 Blocks; undefined unless time passed. */
   blockSeconds: number | undefined;
   /** The work of those Blocks over the time they took, in hashes a second. */
   hashRate: number | undefined;
@@ -81,7 +81,8 @@ const TWO_256 = 1n << 256n;
 
 /** The expected hashes for a Block of this Target: 2^256 / (Target + 1), as `crates/core`'s `work`. */
 export function work(target: bigint): bigint {
-  return TWO_256 / (target + 1n);
+  // crates/core caps a Target of 0 at 2^256 - 1, the most a U256 holds.
+  return target === 0n ? TWO_256 - 1n : TWO_256 / (target + 1n);
 }
 
 export function computeDashboard(input: DashboardInput): Dashboard {
@@ -144,7 +145,8 @@ export function computeDashboard(input: DashboardInput): Dashboard {
     landsOnline: input.lands?.filter((land) => land.online).length,
     minesMining: active.size,
     coversDay: blocks.length > 0 && blocks[0]!.timestamp <= since,
-    blockSeconds: gaps > 0 ? seconds / gaps : undefined,
+    // A Block's time need only be above the median of the 11 before it, so this can be 0 or less.
+    blockSeconds: seconds > 0 ? seconds / gaps : undefined,
     hashRate: seconds > 0 ? Number(done) / seconds : undefined,
     gaps,
     newAccounts: ranked.reduce((n, m) => n + m.newAccounts, 0),
