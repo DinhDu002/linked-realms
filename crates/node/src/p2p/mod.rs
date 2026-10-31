@@ -815,4 +815,4 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

@@ -1,12 +1,17 @@
-use std::io::{Read, Write};
+use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::os::unix::net::UnixStream;
+use std::time::{SystemTime, UNIX_EPOCH};
+
+use linked_realms_core::params::DEV;
 
 use super::*;
-use crate::chain::tests::File;
-use crate::mempool::tests::key;
+use crate::chain::tests::{Builder, File, submit_all};
+use crate::mempool::tests::{key, pay};
 use crate::mine::max_threads;
 use crate::mine::tests::dev_node;
+use crate::p2p::tests::greet;
+use crate::p2p::{Event, Message};
 use crate::pow::Keys;
 
 /// A directory with the mode `mode`, removed after.
@@ -193,18 +198,18 @@ fn the_control_socket_serves_the_node_and_its_mine() {
     let started = call("mine_start", start("land", &address, cap))["result"].clone();
     assert_eq!(started["state"], "starting");
     assert_eq!(started["rewardAddress"], json!(address));
-    let mut states = Vec::new();
-    let found = loop {
+    let (mut states, mut found) = (Vec::new(), None);
+    while found.is_none() || !states.contains(&json!("on")) {
         let message = ws.next();
         assert_eq!(message["params"]["subscription"], subscription);
         let result = message["params"]["result"].clone();
         match message["method"].as_str() {
-            Some("mine_blockFound") => break result,
+            Some("mine_blockFound") => found = found.or(Some(result)),
             Some("mine_status") => states.push(result["state"].clone()),
             other => panic!("{other:?}"),
         }
-    };
-    assert!(states.contains(&json!("on")), "{states:?}");
+    }
+    let found = found.unwrap();
     let id = bytes32(found["hash"].as_str().unwrap());
     let header = (running.call_blocking(move |node, _| node.chain.header(&id).unwrap())).unwrap();
     let header = header.unwrap();
@@ -298,6 +303,45 @@ fn a_control_socket_is_refused_where_another_could_take_its_place() {
 }
 
 #[test]
+fn a_node_still_catching_up_cannot_start_its_mine() {
+    let (file, dir) = (File::new("control-behind"), Dir::new("behind", 0o700));
+    let keys = Arc::new(Keys::default());
+    let running = dev_node(&file, &keys);
+    let mine = Arc::new(Mine::new(running.clone(), keys, 1));
+    let path = dir.0.join("control.sock");
+    let control = Control::start(running.clone(), mine.clone(), Listen::Unix(path.clone()));
+    let _control = control.unwrap();
+    // A peer announces a Block the Node has not got, and never sends it.
+    let announced = running.call_blocking(|node, net| {
+        let now = SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_secs();
+        greet(node, net, 1, SocketAddr::from(([10, 0, 0, 9], 5000)), now);
+        let bytes = Message::Inv(vec![[1; 32]]).to_frame(DEV.magic());
+        node.handle(net, Event::Received { peer: 1, bytes }, now)
+            .unwrap();
+    });
+    announced.unwrap();
+    let call = |method: &str, params: Value| {
+        post(UnixStream::connect(&path).unwrap(), "", method, params).1
+    };
+    assert_eq!(
+        call("node_info", json!([]))["result"]["synced"],
+        json!(false)
+    );
+    let address = key(1).address().to_string();
+    let refused = call("mine_start", start("land", &address, 1));
+    assert_eq!(
+        (&refused["error"]["code"], &refused["error"]["message"]),
+        (&json!(-32002), &json!("node-unavailable"))
+    );
+    assert_eq!(mine.status().state, State::Off);
+    drop(mine);
+    running.stop().unwrap();
+}
+
+#[test]
 fn a_tcp_control_listener_checks_the_secret_on_every_request() {
     let (file, keys) = (File::new("control-tcp"), Arc::new(Keys::default()));
     let running = dev_node(&file, &keys);
@@ -339,6 +383,98 @@ fn a_tcp_control_listener_checks_the_secret_on_every_request() {
     drop(control);
     drop(mine);
     running.stop().unwrap();
+}
+
+#[test]
+fn a_tcp_control_listener_bounds_the_connections_without_the_secret() {
+    let (file, keys) = (File::new("control-open"), Arc::new(Keys::default()));
+    let running = dev_node(&file, &keys);
+    let mine = Arc::new(Mine::new(running.clone(), keys, 1));
+    let secret = vec![7; MIN_SECRET];
+    let any = SocketAddr::from(([127, 0, 0, 1], 0));
+    let listen = Listen::Tcp(any, secret.clone());
+    let control = Control::start(running.clone(), mine.clone(), listen).unwrap();
+    let address = control.local_addr().unwrap();
+    let bearer = format!("Authorization: Bearer {}\r\n", hex::encode(&secret));
+    // One request on a connection kept open: its status code.
+    let ask = |mut stream: &TcpStream| -> u16 {
+        let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "mine_status", "params": { "id": "land" } });
+        let body = body.to_string();
+        write!(
+            stream,
+            "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n{bearer}\
+             Content-Length: {}\r\n\r\n{body}",
+            body.len()
+        )
+        .unwrap();
+        let mut reader = BufReader::new(stream);
+        let (mut head, mut length) = (String::new(), 0);
+        loop {
+            let mut line = String::new();
+            reader.read_line(&mut line).unwrap();
+            if line == "\r\n" {
+                break;
+            }
+            let lower = line.to_ascii_lowercase();
+            if let Some(value) = lower.strip_prefix("content-length:") {
+                length = value.trim().parse().unwrap();
+            }
+            head.push_str(&line);
+        }
+        reader.read_exact(&mut vec![0; length]).unwrap();
+        head[9..12].parse().unwrap()
+    };
+    let kept = TcpStream::connect(address).unwrap();
+    assert_eq!(ask(&kept), 200);
+    let opened = Instant::now();
+    let idle: Vec<_> = (1..MAX_OPEN)
+        .map(|_| TcpStream::connect(address).unwrap())
+        .collect();
+    let closed = |mut stream: &TcpStream, within: Duration| {
+        stream.set_read_timeout(Some(within)).unwrap();
+        match stream.read(&mut [0]) {
+            Ok(read) => read == 0,
+            Err(error) => error.kind() == std::io::ErrorKind::ConnectionReset,
+        }
+    };
+    // One more is closed at once, even one that would send the secret.
+    let more = TcpStream::connect(address).unwrap();
+    assert!(closed(&more, Duration::from_secs(5)));
+
+    // Those that never send the secret are closed, long before jsonrpsee's own 30 seconds; the
+    // one that sent it stays open.
+    for stream in &idle {
+        assert!(closed(stream, SECRET_WITHIN + Duration::from_secs(5)));
+    }
+    assert!(opened.elapsed() < SECRET_WITHIN + Duration::from_secs(5));
+    assert_eq!(ask(&kept), 200);
+    assert_eq!(ask(&TcpStream::connect(address).unwrap()), 200);
+    drop(control);
+    drop(mine);
+    running.stop().unwrap();
+}
+
+#[test]
+fn a_block_found_is_told_with_its_reward_and_its_fees() {
+    let file = File::new("control-found");
+    let chain = file.open();
+    let mut build = Builder::new();
+    let genesis = build.genesis();
+    let first = build.child(&genesis, key(1).address(), Vec::new());
+    let tx = pay(&key(1), 0, key(2).address(), 1_000_000, 10);
+    let fee = tx.fee;
+    let second = build.child(&first, key(3).address(), vec![tx]);
+    submit_all(&chain, &[first, second.clone()]);
+    let id = second.header.id();
+    let expected = json!({
+        "id": "land",
+        "height": 2,
+        "hash": hex::encode(id),
+        "reward": (reward(2) + fee).to_string(),
+        "rewardAddress": key(3).address().to_string(),
+        "time": second.header.timestamp,
+    });
+    assert_eq!(block_found(&chain, id).unwrap(), expected);
 }
 
 #[test]

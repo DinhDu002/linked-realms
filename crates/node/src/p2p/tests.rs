@@ -229,17 +229,31 @@ fn receive(node: &mut TestNode, net: &mut Recorder, peer: PeerId, bytes: Vec<u8>
 }
 
 /// Connects `peer` from `from` and goes through `version` and `verack`.
-fn greet(node: &mut TestNode, net: &mut Recorder, peer: PeerId, from: SocketAddr, now: u64) {
-    connect(node, net, peer, from, now);
+pub(crate) fn greet<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]>(
+    node: &mut Node<H>,
+    net: &mut impl Network,
+    peer: PeerId,
+    from: SocketAddr,
+    now: u64,
+) {
+    let connected = Event::Connected {
+        peer,
+        address: from,
+        outbound: false,
+    };
+    node.handle(net, connected, now).unwrap();
     let version = Version {
         version: message::PROTOCOL_VERSION,
-        genesis: PARAMS.genesis().id(),
+        genesis: node.genesis,
         height: 0,
         listen: 0,
         nonce: 7,
     };
-    receive(node, net, peer, frame(&Message::Version(version)), now);
-    receive(node, net, peer, frame(&Message::Verack), now);
+    for message in [Message::Version(version), Message::Verack] {
+        let bytes = message.to_frame(node.magic);
+        node.handle(net, Event::Received { peer, bytes }, now)
+            .unwrap();
+    }
 }
 
 #[test]

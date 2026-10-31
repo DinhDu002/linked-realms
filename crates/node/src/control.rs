@@ -10,6 +10,7 @@ use std::os::unix::fs::{FileTypeExt, MetadataExt, PermissionsExt};
 use std::path::{Path, PathBuf};
 use std::str::FromStr;
 use std::sync::Arc;
+use std::sync::atomic::{AtomicBool, Ordering};
 use std::time::{Duration, Instant};
 
 use http::header::AUTHORIZATION;
@@ -23,9 +24,12 @@ use linked_realms_core::Address;
 use linked_realms_core::issuance::reward;
 use serde::Deserialize;
 use serde_json::{Value, json};
+use tokio::io::{AsyncRead, AsyncWrite};
 use tokio::runtime::Runtime;
+use tokio::sync::Semaphore;
 use tower::Service;
 
+use crate::Chain;
 use crate::mine::{self, Memory, Mine, Mode, Refused, State, Status};
 use crate::run::Running;
 
@@ -37,6 +41,10 @@ pub const MIN_SECRET: usize = 32;
 const STATUS_EVERY: Duration = Duration::from_secs(2);
 /// How often a subscription looks for a change, and so for a Block won.
 const LOOK_EVERY: Duration = Duration::from_millis(250);
+/// Connections open at once, with the secret or not; more are closed as they come.
+const MAX_OPEN: usize = 32;
+/// A TCP connection that has not sent the secret by then is closed.
+const SECRET_WITHIN: Duration = Duration::from_secs(5);
 
 pub enum Listen {
     /// A Unix socket at this path, which only this user may open.
@@ -102,17 +110,23 @@ impl Control {
             }
         };
         let (stopped, stop) = stop_channel();
+        let open = Arc::new(Semaphore::new(MAX_OPEN));
         runtime.spawn(async move {
             loop {
                 let (builder, methods, stopped2) =
                     (builder.clone(), methods.clone(), stopped.clone());
                 let secret = secret.clone();
+                let authorized = Arc::new(AtomicBool::new(secret.is_none()));
+                let sent_secret = authorized.clone();
                 let service = tower::service_fn(move |request: http::Request<_>| {
                     let mut service = builder.clone().build(methods.clone(), stopped2.clone());
                     let allowed = secret.as_ref().is_none_or(|secret| {
                         let sent = request.headers().get(AUTHORIZATION);
                         sent.is_some_and(|sent| same(sent.as_bytes(), secret))
                     });
+                    if allowed {
+                        sent_secret.store(true, Ordering::Relaxed);
+                    }
                     async move {
                         if !allowed {
                             return Ok(unauthorized());
@@ -121,14 +135,23 @@ impl Control {
                         Ok::<_, Box<dyn std::error::Error + Send + Sync>>(response)
                     }
                 });
-                let shutdown = stopped.clone().shutdown();
                 let accepted = tokio::select! {
-                    accepted = listener.accept(service, shutdown) => accepted,
+                    accepted = listener.accept() => accepted,
                     _ = stopped.clone().shutdown() => return,
                 };
-                if let Err(error) = accepted {
-                    eprintln!("lr-node control: accepting a connection failed: {error}");
-                    tokio::time::sleep(Duration::from_secs(1)).await;
+                let shutdown = stopped.clone().shutdown();
+                match accepted {
+                    Ok(Some(Socket::Unix(socket))) => {
+                        serve(socket, service, shutdown, &open, authorized);
+                    }
+                    Ok(Some(Socket::Tcp(socket))) => {
+                        serve(socket, service, shutdown, &open, authorized);
+                    }
+                    Ok(None) => {}
+                    Err(error) => {
+                        eprintln!("lr-node control: accepting a connection failed: {error}");
+                        tokio::time::sleep(Duration::from_secs(1)).await;
+                    }
                 }
             }
         });
@@ -161,25 +184,14 @@ enum Listener {
     Tcp(tokio::net::TcpListener),
 }
 
+enum Socket {
+    Unix(tokio::net::UnixStream),
+    Tcp(tokio::net::TcpStream),
+}
+
 impl Listener {
-    /// Takes the next connection and serves it with `service` until `shutdown`.
-    async fn accept<S, B>(
-        &self,
-        service: S,
-        shutdown: impl Future<Output = ()> + Send + 'static,
-    ) -> io::Result<()>
-    where
-        S: tower::Service<
-                http::Request<hyper::body::Incoming>,
-                Response = http::Response<B>,
-                Error = Box<dyn std::error::Error + Send + Sync>,
-            > + Clone
-            + Send
-            + 'static,
-        S::Future: Send,
-        B: hyper::body::Body<Data = hyper::body::Bytes> + Send + 'static,
-        B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
-    {
+    /// The next connection, unless another user made it.
+    async fn accept(&self) -> io::Result<Option<Socket>> {
         match self {
             Listener::Unix(listener, owner) => {
                 let (socket, _) = listener.accept().await?;
@@ -188,17 +200,52 @@ impl Listener {
                 let user = socket.peer_cred()?.uid();
                 if user != *owner {
                     eprintln!("lr-node control: refused a connection from user {user}");
-                    return Ok(());
+                    return Ok(None);
                 }
-                tokio::spawn(serve_with_graceful_shutdown(socket, service, shutdown));
+                Ok(Some(Socket::Unix(socket)))
             }
-            Listener::Tcp(listener) => {
-                let (socket, _) = listener.accept().await?;
-                tokio::spawn(serve_with_graceful_shutdown(socket, service, shutdown));
-            }
+            Listener::Tcp(listener) => Ok(Some(Socket::Tcp(listener.accept().await?.0))),
         }
-        Ok(())
     }
+}
+
+/// Serves `socket` with `service` until `shutdown` if fewer than `MAX_OPEN` connections are
+/// open, closing it after `SECRET_WITHIN` unless it is `authorized` by then. A WebSocket leaves
+/// this count once upgraded, for jsonrpsee's own `max_connections`.
+fn serve<S, B>(
+    socket: impl AsyncRead + AsyncWrite + Send + Unpin + 'static,
+    service: S,
+    shutdown: impl Future<Output = ()> + Send + 'static,
+    open: &Arc<Semaphore>,
+    authorized: Arc<AtomicBool>,
+) where
+    S: tower::Service<
+            http::Request<hyper::body::Incoming>,
+            Response = http::Response<B>,
+            Error = Box<dyn std::error::Error + Send + Sync>,
+        > + Clone
+        + Send
+        + 'static,
+    S::Future: Send,
+    B: hyper::body::Body<Data = hyper::body::Bytes> + Send + 'static,
+    B::Error: Into<Box<dyn std::error::Error + Send + Sync>>,
+{
+    let Ok(permit) = open.clone().try_acquire_owned() else {
+        eprintln!("lr-node control: refused a connection, {MAX_OPEN} are open");
+        return;
+    };
+    tokio::spawn(async move {
+        let _permit = permit;
+        let served = serve_with_graceful_shutdown(socket, service, shutdown);
+        tokio::pin!(served);
+        tokio::select! {
+            _ = &mut served => return,
+            _ = tokio::time::sleep(SECRET_WITHIN) => {}
+        }
+        if authorized.load(Ordering::Relaxed) {
+            let _ = served.await;
+        }
+    });
 }
 
 /// Binds a Unix socket at `path` that only this user may open. Refused in a directory others
@@ -320,6 +367,23 @@ fn notification(
     SubscriptionMessage::new(method, sink.subscription_id(), value)
 }
 
+/// What `mine_blockFound` tells of the Block `id`, which `chain` holds.
+fn block_found<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]>(
+    chain: &Chain<H>,
+    id: [u8; 32],
+) -> Result<Value, crate::Error> {
+    let header = chain.header(&id)?.expect("a Block won is stored");
+    let fees: u64 = (chain.block(&id)?).map_or(0, |block| block.txs.iter().map(|tx| tx.fee).sum());
+    Ok(json!({
+        "id": MINE_ID,
+        "height": header.height,
+        "hash": hex::encode(id),
+        "reward": (reward(header.height) + fees).to_string(),
+        "rewardAddress": header.reward_address.to_string(),
+        "time": header.timestamp,
+    }))
+}
+
 fn methods<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static>(
     context: Context<H>,
 ) -> Result<RpcModule<Context<H>>, jsonrpsee::core::RegisterMethodError> {
@@ -396,19 +460,9 @@ fn methods<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static>(
                 }
                 for id in ctx.mine.won_from(won) {
                     won += 1;
-                    let found = ctx.running.call(move |node, _| {
-                        let header = node.chain.header(&id)?.expect("a Block won is stored");
-                        let fees: u64 = (node.chain.block(&id)?)
-                            .map_or(0, |block| block.txs.iter().map(|tx| tx.fee).sum());
-                        Ok::<_, crate::Error>(json!({
-                            "id": MINE_ID,
-                            "height": header.height,
-                            "hash": hex::encode(id),
-                            "reward": (reward(header.height) + fees).to_string(),
-                            "rewardAddress": header.reward_address.to_string(),
-                            "time": header.timestamp,
-                        }))
-                    });
+                    let found = ctx
+                        .running
+                        .call(move |node, _| block_found(&node.chain, id));
                     let Some(Ok(found)) = found.await else {
                         continue;
                     };
