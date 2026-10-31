@@ -1,6 +1,7 @@
 # The public world: the Hub, the relay and the Shell behind Caddy, on one server
 # (docs/runbooks/public-world.md). Land owners run their Map servers on their own machines
-# (docs/self-hosting.md). No chain runs yet: it comes in step 2C, and its main network after it (P7).
+# (docs/self-hosting.md). LR's company services are a compose project of their own,
+# deploy/compose.chain.yaml; the main network comes after step 2C (P7).
 #
 #   cp deploy/.env.example deploy/.env   # then fill it in
 #   docker compose -f deploy/compose.public.yaml up -d --build

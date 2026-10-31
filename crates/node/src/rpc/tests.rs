@@ -389,6 +389,66 @@ fn each_client_has_a_limited_number_of_calls() {
 }
 
 #[test]
+fn behind_a_trusted_proxy_the_client_is_the_one_it_names() {
+    let ip = |text: &str| text.parse::<IpAddr>().unwrap();
+    let proxies = [ip("172.30.0.10"), ip("10.0.0.1")];
+    let client = |peer: &str, forwarded: &str| client_of(ip(peer), forwarded, &proxies);
+    assert_eq!(client("1.2.3.4", "5.6.7.8"), ip("1.2.3.4"), "not a proxy");
+    assert_eq!(client("172.30.0.10", "5.6.7.8"), ip("5.6.7.8"));
+    assert_eq!(client("::ffff:172.30.0.10", "5.6.7.8"), ip("5.6.7.8"));
+    assert_eq!(
+        client("172.30.0.10", "9.9.9.9, 5.6.7.8"),
+        ip("5.6.7.8"),
+        "what the client sent is left of it"
+    );
+    assert_eq!(
+        client("172.30.0.10", "9.9.9.9,10.0.0.1"),
+        ip("9.9.9.9"),
+        "through two proxies"
+    );
+    assert_eq!(client("172.30.0.10", "2001:db8::1"), ip("2001:db8::1"));
+    assert_eq!(client("172.30.0.10", ""), ip("172.30.0.10"));
+    assert_eq!(client("172.30.0.10", "junk"), ip("172.30.0.10"));
+    assert_eq!(client("172.30.0.10", "5.6.7.8, junk"), ip("172.30.0.10"));
+    assert_eq!(
+        client_of(ip("172.30.0.10"), "5.6.7.8", &[]),
+        ip("172.30.0.10"),
+        "no proxy set"
+    );
+}
+
+#[test]
+fn a_proxy_s_clients_each_have_their_own_calls() {
+    let file = File::new("rpc-proxy");
+    let chain = file.open();
+    let config = Config {
+        per_second: 1,
+        burst: 2,
+        proxies: vec!["127.0.0.1".parse().unwrap()],
+        ..Config::default()
+    };
+    let served = serve(file, chain, config);
+    let body = json!({ "jsonrpc": "2.0", "id": 1, "method": "lr_getInfo", "params": [] });
+    let from = |client: &str| {
+        let request = request(&body.to_string()).replacen(
+            "Host: localhost\r\n",
+            &format!("Host: localhost\r\nX-Forwarded-For: {client}\r\n"),
+            1,
+        );
+        let (_, answer) = http(served.rpc.local_addr(), &request);
+        serde_json::from_str::<Value>(&answer).unwrap()["error"]["code"].clone()
+    };
+    assert_eq!(from("5.6.7.8"), Value::Null);
+    assert_eq!(from("5.6.7.8"), Value::Null);
+    assert_eq!(from("5.6.7.8"), LIMIT_EXCEEDED);
+    assert_eq!(
+        from("5.6.7.9"),
+        Value::Null,
+        "another client behind the same proxy"
+    );
+}
+
+#[test]
 fn the_calls_left_fill_again_and_count_an_ipv6_host_once() {
     let clients = Clients {
         per_second: 2,

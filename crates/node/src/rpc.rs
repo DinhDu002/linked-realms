@@ -55,7 +55,7 @@ const SUBSCRIPTIONS_PER_CONNECTION: u32 = 16;
 /// idle.
 const MAX_CLIENTS: usize = 10_000;
 
-#[derive(Debug, Clone, Copy)]
+#[derive(Debug, Clone)]
 pub struct Config {
     pub listen: SocketAddr,
     /// Calls a client may make each second, and at once after a quiet while.
@@ -63,6 +63,9 @@ pub struct Config {
     pub burst: u32,
     /// HTTP requests and WebSocket connections served at once.
     pub max_connections: u32,
+    /// The proxies in front of it, if any: a request from one counts for the client its
+    /// `X-Forwarded-For` names, as hub-api counts its clients.
+    pub proxies: Vec<IpAddr>,
 }
 
 impl Default for Config {
@@ -72,6 +75,7 @@ impl Default for Config {
             per_second: 10,
             burst: 50,
             max_connections: 128,
+            proxies: Vec::new(),
         }
     }
 }
@@ -126,6 +130,7 @@ impl Rpc {
         // Open sockets, idle ones included, so clients cannot spend the file descriptors the
         // Node's other Nodes and its database need; past it, connections wait to be accepted.
         let sockets = Arc::new(Semaphore::new(2 * config.max_connections as usize));
+        let proxies = Arc::new(config.proxies.clone());
         runtime.spawn(async move {
             loop {
                 let permit = tokio::select! {
@@ -146,17 +151,21 @@ impl Rpc {
                 };
                 let (builder, methods, stopped2) =
                     (builder.clone(), methods.clone(), stopped.clone());
-                let client = Client(remote.ip());
+                let proxies = proxies.clone();
                 // Held by the connection's service, so it goes when the connection does.
                 let permit = Arc::new(permit);
                 let service = tower::service_fn(move |mut request: http::Request<_>| {
                     let _ = &permit;
                     let mut service = builder.clone().build(methods.clone(), stopped2.clone());
+                    let forwarded = request.headers().get_all("x-forwarded-for");
+                    let forwarded: Vec<_> =
+                        forwarded.iter().filter_map(|v| v.to_str().ok()).collect();
+                    let client = client_of(remote.ip(), &forwarded.join(","), &proxies);
                     async move {
                         if request.method() == Method::OPTIONS {
                             return Ok(preflight());
                         }
-                        request.extensions_mut().insert(client);
+                        request.extensions_mut().insert(Client(client));
                         let mut response: HttpResponse = service.call(request).await?;
                         let any = HeaderValue::from_static("*");
                         response
@@ -212,10 +221,27 @@ fn preflight() -> HttpResponse {
 #[derive(Debug, Clone, Copy)]
 struct Client(IpAddr);
 
+/// The client of a request from `peer`: `peer`, unless it is one of the `proxies`; then the
+/// rightmost entry of `forwarded_for` that is not one, since only the entries a trusted proxy
+/// wrote can be trusted and anything to their left is what the client sent. An entry that is not
+/// an address leaves the proxy before it as the client.
+// ponytail: proxies by address, not by network; take CIDRs if a proxy's address ever varies.
+fn client_of(peer: IpAddr, forwarded_for: &str, proxies: &[IpAddr]) -> IpAddr {
+    let mut client = peer;
+    for entry in forwarded_for.rsplit(',').map(str::trim) {
+        if !proxies.contains(&client.to_canonical()) {
+            break;
+        }
+        match entry.parse::<IpAddr>() {
+            Ok(ip) => client = ip,
+            Err(_) => break,
+        }
+    }
+    client
+}
+
 /// The calls each client has left: a bucket that fills by `per_second` up to `burst`. A client
 /// is an IPv4 address, or an IPv6 /64, which one host often holds whole.
-// ponytail: behind a proxy every client is the proxy's address; the Public node's item decides
-// how its proxy passes the client's on.
 struct Clients {
     per_second: u32,
     burst: u32,

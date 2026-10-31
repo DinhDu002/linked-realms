@@ -18,9 +18,9 @@ use crate::chain::tests::{
 };
 use crate::mempool::tests::{key, pay};
 
-type TestNode = Node<fn(&[u8], &[u8; 32]) -> [u8; 32]>;
+pub(crate) type TestNode = Node<fn(&[u8], &[u8; 32]) -> [u8; 32]>;
 
-fn node(file: &File, listen: u16, seeds: &[SocketAddr]) -> TestNode {
+pub(crate) fn node(file: &File, listen: u16, seeds: &[SocketAddr]) -> TestNode {
     let chain: Test = file.open();
     Node::new(
         chain,
@@ -189,8 +189,8 @@ impl Mesh {
 
 /// What a Node sent, read back, and what it dropped and dialed.
 #[derive(Default)]
-struct Recorder {
-    sent: Vec<(PeerId, Message)>,
+pub(crate) struct Recorder {
+    pub(crate) sent: Vec<(PeerId, Message)>,
     dropped: Vec<PeerId>,
     dialed: Vec<SocketAddr>,
 }

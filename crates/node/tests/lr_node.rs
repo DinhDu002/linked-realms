@@ -7,9 +7,11 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
+use std::sync::mpsc;
 use std::time::{Duration, Instant};
 
-use linked_realms_core::{Address, PUBLIC_KEY_LEN, SCHEME_ML_DSA_44};
+use linked_realms_core::params::DEV_CHECKPOINT_SEED;
+use linked_realms_core::{Address, PUBLIC_KEY_LEN, SCHEME_ML_DSA_44, words_from_entropy};
 use serde_json::{Value, json};
 
 struct Data(PathBuf);
@@ -89,7 +91,11 @@ fn post(mut stream: impl Read + Write, headers: &str, method: &str, params: Valu
 }
 
 fn call(rpc: &str, method: &str) -> Value {
-    post(TcpStream::connect(rpc).unwrap(), "", method, json!([])).1["result"].clone()
+    call_with(rpc, method, json!([]))
+}
+
+fn call_with(rpc: &str, method: &str, params: Value) -> Value {
+    post(TcpStream::connect(rpc).unwrap(), "", method, params).1["result"].clone()
 }
 
 /// An LR address to mine for.
@@ -263,15 +269,119 @@ fn lr_node_refuses_a_control_socket_another_user_could_replace() {
     assert_eq!(output.stdout, b"", "nothing printed before it failed");
 }
 
+/// The lines `stdout` prints from now on, read on a thread of their own.
+fn lines(stdout: BufReader<ChildStdout>) -> mpsc::Receiver<String> {
+    let (send, lines) = mpsc::channel();
+    std::thread::spawn(move || {
+        for line in stdout.lines() {
+            let Ok(line) = line else { return };
+            if send.send(line).is_err() {
+                return;
+            }
+        }
+    });
+    lines
+}
+
+#[test]
+fn a_signer_following_a_seed_signs_checkpoints_the_seed_takes() {
+    let (seed_data, signer_data) = (Data::new("seed"), Data::new("signer"));
+    std::fs::create_dir(&signer_data.0).unwrap();
+    let words = signer_data.0.join("checkpoint-words");
+    std::fs::write(&words, words_from_entropy(&DEV_CHECKPOINT_SEED)).unwrap();
+    let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+    let threads = cores.saturating_sub(1).max(1).to_string();
+    let (_seed, stdout_of_seed, lines_of_seed) = start(
+        &seed_data,
+        &[
+            "mine",
+            "--reward-address",
+            &address(),
+            "--threads",
+            &threads,
+            "--mode",
+            "light",
+            "--listen",
+            "127.0.0.1:0",
+            "--rpc",
+            "127.0.0.1:0",
+        ],
+        "mine ",
+    );
+    // Read on, so the seed can print each Block it wins.
+    let won = lines(stdout_of_seed);
+    let p2p = lines_of_seed[1].strip_prefix("p2p ").unwrap();
+    // By name, as a Node on another machine names the company's seed.
+    let p2p = &format!("localhost:{}", p2p.rsplit_once(':').unwrap().1);
+    let rpc = lines_of_seed[2].strip_prefix("rpc ").unwrap();
+    let words = words.to_str().unwrap();
+    let signing = [
+        "sign",
+        "--checkpoint-words",
+        words,
+        "--seed",
+        p2p,
+        "--rpc",
+        "off",
+    ];
+    let (mut signer, stdout, _) = start(&signer_data, &signing, "network ");
+    let printed = lines(stdout);
+    let line = printed.recv_timeout(Duration::from_secs(600)).unwrap();
+    let (height, id) = line
+        .strip_prefix("checkpoint ")
+        .unwrap()
+        .split_once(' ')
+        .unwrap();
+    assert_eq!(height, "10", "{line}");
+    // The seed takes it from the signer, its other Node, and holds it on its best chain.
+    let deadline = Instant::now() + Duration::from_secs(60);
+    loop {
+        let latest = call(rpc, "lr_getInfo")["latestCheckpoint"].clone();
+        if latest["height"] == json!(10) {
+            assert_eq!(latest["blockId"], json!(id));
+            break;
+        }
+        assert!(Instant::now() < deadline, "{latest}");
+        std::thread::sleep(Duration::from_millis(200));
+    }
+    let header = call_with(rpc, "lr_getHeaders", json!([10, 1]));
+    assert_eq!(header[0]["id"], json!(id));
+    assert!(signal(&mut signer, libc::SIGTERM).success());
+    // The seed printed each Block it won once.
+    let won: Vec<_> = won.try_iter().collect();
+    let once: std::collections::HashSet<_> = won.iter().collect();
+    assert!(won.len() >= 10 && once.len() == won.len(), "{won:?}");
+}
+
+#[test]
+fn a_signer_needs_the_network_s_own_key() {
+    let data = Data::new("wrong-key");
+    std::fs::create_dir(&data.0).unwrap();
+    let words = data.0.join("checkpoint-words");
+    for (network, text) in [
+        ("test", words_from_entropy(&DEV_CHECKPOINT_SEED)),
+        ("dev", "not twenty-four words".to_string()),
+    ] {
+        std::fs::write(&words, text).unwrap();
+        let output = lr_node(&["sign", "--checkpoint-words", words.to_str().unwrap()])
+            .args(["--network", network, "--data", data.0.to_str().unwrap()])
+            .output()
+            .unwrap();
+        assert_eq!(output.status.code(), Some(1), "{network}");
+        assert_eq!(output.stdout, b"");
+    }
+}
+
 #[test]
 fn lr_node_refuses_bad_settings() {
-    let address = address();
+    let (address, data) = (address(), Data::new("refused"));
     let mine = |rest: &[&'static str]| [&["mine", "--reward-address", &address][..], rest].concat();
     for args in [
         &["--network", "main"][..],
         &["--rpc"],
         &["--listen", "localhost"],
         &["--seed", "1.2.3.4"],
+        &["--seed", "no-such-node.invalid:9444"],
         &["--mine"],
         &["--control", "127.0.0.1:0"],
         &["--control-secret", "secret"],
@@ -283,20 +393,22 @@ fn lr_node_refuses_bad_settings() {
         ],
         &["--control", "localhost:1", "--control-secret", "secret"],
         &["--threads", "1"],
+        &["--reward-address", &address],
         &["mine"],
         &["mine", "--reward-address", "lr1nope"],
         &mine(&["--threads", "0"]),
         &mine(&["--threads", "x"]),
         &mine(&["--mode", "turbo"]),
+        &["sign"],
+        &["--checkpoint-words", "words"],
+        &["mine", "--checkpoint-words", "words"],
+        &["--rpc-proxy", "caddy"],
     ] {
-        let output = lr_node(args).output().unwrap();
-        assert_eq!(output.status.code(), Some(2), "{args:?}");
-        let stderr = String::from_utf8(output.stderr).unwrap();
+        let stderr = refused(lr_node(args), &data);
         assert!(stderr.contains("usage: lr-node"), "{args:?}: {stderr}");
     }
     // The thread cap, one fewer than the cores, lowered by MINE_MAX_THREADS, which must be a
-    // count. A Node that starts instead is stopped after 10 seconds.
-    let data = Data::new("refused");
+    // count.
     let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
     let cores: &'static str = cores.max(2).to_string().leak();
     for (limit, threads) in [
@@ -306,24 +418,33 @@ fn lr_node_refuses_bad_settings() {
         (Some("x"), "1"),
     ] {
         let mut command = lr_node(&mine(&["--threads", threads]));
-        command.args([
-            "--network",
-            "dev",
-            "--rpc",
-            "off",
-            "--data",
-            data.0.to_str().unwrap(),
-        ]);
-        command.env_remove("MINE_MAX_THREADS").stdout(Stdio::null());
+        command.env_remove("MINE_MAX_THREADS");
         if let Some(limit) = limit {
             command.env("MINE_MAX_THREADS", limit);
         }
-        let mut child = Process(command.spawn().unwrap());
-        let deadline = Instant::now() + Duration::from_secs(10);
-        while child.0.try_wait().unwrap().is_none() && Instant::now() < deadline {
-            std::thread::sleep(Duration::from_millis(50));
-        }
-        let code = child.0.try_wait().unwrap().and_then(|status| status.code());
-        assert_eq!(code, Some(2), "{limit:?} {threads}");
+        refused(command, &data);
     }
+}
+
+/// Runs `command` in `data` and asserts it exits with code 2 within 10 seconds: its stderr. A
+/// Node that starts instead of refusing is stopped, and keeps its chain in `data`.
+fn refused(mut command: Command, data: &Data) -> String {
+    std::fs::create_dir_all(&data.0).unwrap();
+    command
+        .current_dir(&data.0)
+        .stdout(Stdio::null())
+        .stderr(Stdio::piped());
+    let mut child = Process(command.spawn().unwrap());
+    let deadline = Instant::now() + Duration::from_secs(10);
+    while child.0.try_wait().unwrap().is_none() && Instant::now() < deadline {
+        std::thread::sleep(Duration::from_millis(50));
+    }
+    let code = child.0.try_wait().unwrap().and_then(|status| status.code());
+    let mut stderr = String::new();
+    if code.is_some() {
+        let mut pipe = child.0.stderr.take().unwrap();
+        pipe.read_to_string(&mut stderr).unwrap();
+    }
+    assert_eq!(code, Some(2), "{command:?}: {stderr}");
+    stderr
 }

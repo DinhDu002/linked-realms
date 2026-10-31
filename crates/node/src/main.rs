@@ -1,41 +1,50 @@
 //! `lr-node`: an LR Node, with its P2P and its public RPC (docs/protocols/node-p2p.md,
 //! docs/protocols/node-rpc.md), checking Proof of Work with RandomX v2, and its Mine, which only
-//! its owner starts: over the control listener, or with `lr-node mine` (ADR 0015).
+//! its owner starts: over the control listener, or with `lr-node mine` (ADR 0015). With
+//! `lr-node sign` it is the Checkpoint signer (ADR 0012).
 
 use std::error::Error;
 use std::io;
-use std::net::SocketAddr;
+use std::net::{IpAddr, SocketAddr, ToSocketAddrs};
 use std::path::PathBuf;
 use std::process::ExitCode;
 use std::str::FromStr;
 use std::sync::Arc;
 use std::time::Duration;
 
-use linked_realms_core::Address;
 use linked_realms_core::params::{ChainParams, DEV, TESTNET};
+use linked_realms_core::{Address, SigningKey, entropy_from_words};
 use linked_realms_node::control::{Control, Listen};
 use linked_realms_node::mine::{self, Mine, Mode};
 use linked_realms_node::p2p::{Node, Tcp};
 use linked_realms_node::pow::{Keys, verifier};
 use linked_realms_node::rpc::{self, Rpc};
 use linked_realms_node::run::Running;
+use linked_realms_node::signer;
 use linked_realms_node::{Chain, KEEP_BELOW_CHECKPOINT, Mempool, Policy};
 use tokio::runtime::Runtime;
 use tokio::signal::unix::{Signal, SignalKind, signal};
+use zeroize::Zeroizing;
 
 const USAGE: &str = "\
 usage: lr-node [mine --reward-address ADDR [--threads N] [--mode auto|fast|light]] [options]
+       lr-node sign --checkpoint-words FILE [options]
   --network test|dev     the network (default: test)
   --data DIR             where the chain is kept (default: lr-data)
   --listen ADDR          take P2P connections on ADDR (default: dial out only)
-  --seed ADDR            a Node to dial first; repeatable
+  --seed HOST:PORT       a Node to dial first, at each address its name has at start;
+                         repeatable
   --rpc ADDR|off         the public RPC (default: 127.0.0.1:9445)
+  --rpc-proxy IP         a proxy in front of the RPC, whose X-Forwarded-For names its
+                         clients; repeatable
   --archive              keep every Block (default: prune those far below the Checkpoint)
   --control unix:PATH    the control listener, on a Unix socket only this user may open
   --control ADDR         the control listener on TCP, which needs --control-secret
   --control-secret FILE  the secret, at least 32 bytes, each control request must carry
   mine                   mine for --reward-address from the start, on --threads threads
                          (default 1) in --mode (default auto)
+  sign                   sign Checkpoints on this Node's best chain with the key behind the
+                         24 words in --checkpoint-words, which must be the network's
 MINE_MAX_THREADS, if set, lowers the most threads the Mine may run.";
 
 struct Settings {
@@ -44,9 +53,12 @@ struct Settings {
     listen: Option<SocketAddr>,
     seeds: Vec<SocketAddr>,
     rpc: Option<SocketAddr>,
+    rpc_proxies: Vec<IpAddr>,
     archive: bool,
     control: Option<ControlAt>,
     mine: Option<(Address, usize, Mode)>,
+    /// The Checkpoint signer's words file.
+    sign: Option<PathBuf>,
 }
 
 enum ControlAt {
@@ -57,19 +69,26 @@ enum ControlAt {
 impl Settings {
     fn parse(args: impl Iterator<Item = String>) -> Result<Settings, String> {
         let mut args = args.peekable();
-        let mine = args.next_if(|arg| arg == "mine").is_some();
+        let command = args.next_if(|arg| arg == "mine" || arg == "sign");
+        let (mine, sign) = (
+            command.as_deref() == Some("mine"),
+            command.as_deref() == Some("sign"),
+        );
         let mut settings = Settings {
             params: TESTNET,
             data: PathBuf::from("lr-data"),
             listen: None,
             seeds: Vec::new(),
             rpc: Some(rpc::Config::default().listen),
+            rpc_proxies: Vec::new(),
             archive: false,
             control: None,
             mine: None,
+            sign: None,
         };
         let (mut control, mut secret) = (None, None);
         let (mut reward_address, mut threads, mut mode) = (None, 1, Mode::Auto);
+        let mut words = None;
         while let Some(arg) = args.next() {
             let mut value = || args.next().ok_or(format!("{arg} needs a value"));
             let address =
@@ -84,14 +103,31 @@ impl Settings {
                 }
                 "--data" => settings.data = value()?.into(),
                 "--listen" => settings.listen = Some(address(value()?)?),
-                "--seed" => settings.seeds.push(address(value()?)?),
+                "--seed" => {
+                    // ponytail: looked up once, at start; a seed whose address changes is found
+                    // again on a restart.
+                    let text = value()?;
+                    let found: Vec<_> = text.to_socket_addrs().into_iter().flatten().collect();
+                    if found.is_empty() {
+                        return Err(format!("not a Node address: {text}"));
+                    }
+                    settings.seeds.extend(found);
+                }
                 "--rpc" => {
                     settings.rpc = match value()?.as_str() {
                         "off" => None,
                         text => Some(address(text.into())?),
                     }
                 }
+                "--rpc-proxy" => {
+                    let text = value()?;
+                    let ip = text
+                        .parse()
+                        .map_err(|_| format!("not an IP address: {text}"))?;
+                    settings.rpc_proxies.push(ip);
+                }
                 "--archive" => settings.archive = true,
+                "--checkpoint-words" if sign => words = Some(PathBuf::from(value()?)),
                 "--control" => control = Some(value()?),
                 "--control-secret" => secret = Some(PathBuf::from(value()?)),
                 "--reward-address" if mine => {
@@ -135,6 +171,9 @@ impl Settings {
         if mine {
             let reward_address = reward_address.ok_or("mine needs --reward-address")?;
             settings.mine = Some((reward_address, threads, mode));
+        }
+        if sign {
+            settings.sign = Some(words.ok_or("sign needs --checkpoint-words")?);
         }
         Ok(settings)
     }
@@ -181,6 +220,10 @@ fn run(settings: Settings, cap: usize) -> Result<(), Box<dyn Error>> {
     // Taken first, so a signal sent once the lines below are printed is never missed.
     let signals = Signals::new()?;
     let params = settings.params;
+    let signer = match &settings.sign {
+        Some(words) => Some(Arc::new(checkpoint_signer(words, &params)?)),
+        None => None,
+    };
     std::fs::create_dir_all(&settings.data)?;
     let keys = Arc::new(Keys::default());
     let mut chain = Chain::open(
@@ -201,6 +244,7 @@ fn run(settings: Settings, cap: usize) -> Result<(), Box<dyn Error>> {
         Some(address) => {
             let config = rpc::Config {
                 listen: address,
+                proxies: settings.rpc_proxies,
                 ..rpc::Config::default()
             };
             Some(Rpc::start(running.clone(), params.clone(), &config)?)
@@ -241,12 +285,45 @@ fn run(settings: Settings, cap: usize) -> Result<(), Box<dyn Error>> {
             .expect("threads checked");
         println!("mine {reward_address} threads {threads}");
     }
-    signals.wait(&running, &mine)?;
+    let mut told = 0;
+    signals.wait(&running, async || {
+        for id in mine.won_from(told) {
+            told += 1;
+            println!("won {}", hex::encode(id));
+        }
+        if let Some(key) = &signer {
+            let (key, params) = (key.clone(), params.clone());
+            let signed = running
+                .call(move |node, net| signer::sign_due(node, net, &params, &key))
+                .await;
+            match signed {
+                Some(Ok(Some(checkpoint))) => {
+                    let id = hex::encode(checkpoint.block_id);
+                    println!("checkpoint {} {id}", checkpoint.height);
+                }
+                Some(Err(error)) => eprintln!("lr-node sign: {error}"),
+                Some(Ok(None)) | None => {}
+            }
+        }
+    })?;
     drop(control);
     mine.stop();
     drop(rpc);
     running.stop()?;
     Ok(())
+}
+
+/// The Checkpoint signer's key, from the 24 words in the file at `words`: refused unless it is
+/// the network's.
+fn checkpoint_signer(words: &PathBuf, params: &ChainParams) -> Result<SigningKey, Box<dyn Error>> {
+    let text = Zeroizing::new(std::fs::read_to_string(words)?);
+    let entropy =
+        entropy_from_words(text.trim()).map_err(|_| "the words file holds no 24 words")?;
+    let key = SigningKey::from_seed(&entropy);
+    if key.public_key() != &params.checkpoint_signer_key {
+        return Err("these words are not the network's Checkpoint signer key".into());
+    }
+    Ok(key)
 }
 
 /// SIGINT and SIGTERM, held from when they are taken until `wait` reads them.
@@ -275,16 +352,15 @@ impl Signals {
         })
     }
 
-    /// Waits for SIGINT or SIGTERM, or for the Node to stop by itself, printing the id of each
-    /// Block `mine` wins.
+    /// Waits for SIGINT or SIGTERM, or for the Node to stop by itself, calling `each_second`
+    /// meanwhile.
     fn wait<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static>(
         mut self,
         running: &Running<H>,
-        mine: &Mine<H>,
+        mut each_second: impl AsyncFnMut(),
     ) -> io::Result<()> {
         self.runtime.block_on(async {
             let mut tick = tokio::time::interval(Duration::from_secs(1));
-            let mut told = 0;
             loop {
                 tokio::select! {
                     _ = self.interrupt.recv() => return Ok(()),
@@ -293,10 +369,7 @@ impl Signals {
                         return Ok(());
                     },
                 }
-                for id in mine.won_from(told) {
-                    told += 1;
-                    println!("won {}", hex::encode(id));
-                }
+                each_second().await;
             }
         })
     }
