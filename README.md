@@ -2,7 +2,7 @@
 
 A game made of many Lands. Each player hosts their own Land, and the Lands join into one shared world through the Hub, which only connects Lands and lets Characters travel between them. Gold is mined by Proof of Work on LR, the project's own chain, like Bitcoin. Players' keys stay in the Shell, and each Land makes its own rules.
 
-> **Status:** Phase 2, step 2B: the world without the chain. The chain, the Node and the Mine come in step 2C. **No network runs yet:** a test network serves step 2C's acceptance test, then the main network starts and is never reset (P7).
+> **Status:** Phase 2, step 2C: the chain. LR's Node, the Mine, Gold in the Shell and the dashboard run in the local world below. Next comes the check with three Players on three machines, then LR moves to its own repository and the project owner launches the main network. **No network runs yet:** a test network serves step 2C's acceptance test, then the main network starts and is never reset (P7).
 
 ## Stage 1
 
@@ -35,6 +35,7 @@ The `world` profile adds the Hub, the relay, the Shell, a seed Node of LR, the d
 ```bash
 POSTGRES_PORT=5433 docker compose -p linked-realms-world --profile world up -d --build
 pnpm e2e:world   # register both Lands, walk from Land 1 through a Gate into Land 2, stop and restart Land 1, switch its Mine on and off
+pnpm e2e:chain   # Land 1's Mine wins Gold, its owner sends some with a memo to the other Character, and a restart leaves the Mine off
 docker compose -p linked-realms-world --profile world down -v   # reset everything
 ```
 
@@ -49,7 +50,7 @@ docker compose -p linked-realms-world --profile world down -v   # reset everythi
 | `map-1`     | Development Character 1's Map server and Node; its volume keeps the key and the chain; fast Mine    | none                    |
 | `map-2`     | Development Character 2's Map server and Node; light Mine, 1 thread                                 | none                    |
 
-With other ports or another project name, give `pnpm e2e:world` the same `HUB_PORT` and `SHELL_PORT`, and the project as `WORLD_PROJECT`.
+With other ports or another project name, give `pnpm e2e:world` and `pnpm e2e:chain` the same `HUB_PORT` and `SHELL_PORT`, and the project as `WORLD_PROJECT`.
 
 To play by hand, open the Shell at <http://localhost:8788>, choose "Restore from 24 words" and enter a development Character's words. Under "Your Land", "Register" gives that Character its Land; within about 15 seconds the Land has a cell and is online in the Directory. A browser profile holds one Character, so use a second profile for the second Character. In its own Land, a Character's "Switch the Mine" starts its Mine after the Shell signs the switch; every visitor sees the Blocks it wins.
 
