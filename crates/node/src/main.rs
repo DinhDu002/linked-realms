@@ -375,3 +375,26 @@ impl Signals {
         })
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn parse(args: &[&str]) -> Result<Settings, String> {
+        Settings::parse(args.iter().map(|arg| arg.to_string()))
+    }
+
+    #[test]
+    fn rpc_proxies_are_kept_as_the_rpc_compares_them() {
+        let settings = parse(&[
+            "--rpc-proxy",
+            "::ffff:172.31.0.10",
+            "--rpc-proxy",
+            "fd00::1",
+        ]);
+        let expected: [IpAddr; 2] = ["172.31.0.10".parse().unwrap(), "fd00::1".parse().unwrap()];
+        assert_eq!(settings.unwrap().rpc_proxies, expected);
+        let refused = parse(&["--rpc-proxy", "172.31.0.0/16"]).err();
+        assert_eq!(refused.as_deref(), Some("not an IP address: 172.31.0.0/16"));
+    }
+}
