@@ -8,7 +8,6 @@ import {
   type StatementFields,
 } from "@linked-realms/shared/identity";
 import { readTransfer, type Payment, type SendForm } from "./gold.ts";
-import { NodeError } from "./node.ts";
 import { LockedError } from "./vault.ts";
 
 export const MAX_MESSAGE_BYTES = 64 * 1024;
@@ -58,6 +57,10 @@ export interface PortDeps {
   isUnlocked(): boolean;
   /** Asks for the password in the Shell's own modal; false when the Player cancels. */
   ensureUnlocked(): Promise<boolean>;
+  /** False once this frame load has ended: a request still waiting then opens no prompt. */
+  isCurrent(): boolean;
+  /** True while a dialog of the Shell is open: a prompt for any Land, the Player's own Send. */
+  dialogOpen(): boolean;
   /** Shows the signing prompt. */
   confirm(request: SignRequest): Promise<SignAnswer>;
   /** Signs the statement; throws LockedError if the Shell locked meanwhile. */
@@ -163,6 +166,7 @@ export function createPortHandler(deps: PortDeps) {
     signOpen = true;
     try {
       if (!(await unlock())) return signResult(id, { error: "locked" });
+      if (!deps.isCurrent()) return;
       const character = deps.character();
       const answer = await deps.confirm({
         ...deps.land,
@@ -215,6 +219,8 @@ export function createPortHandler(deps: PortDeps) {
     signOpen = true;
     try {
       if (!(await unlock())) return signResult(id, { error: "locked" });
+      // Busy before any call to the Node, so a Land cannot keep the Shell calling it meanwhile.
+      if (deps.dialogOpen()) return signResult(id, { error: "busy" });
       let payment: Payment;
       try {
         payment = await deps.preparePayment(form);
@@ -223,6 +229,7 @@ export function createPortHandler(deps: PortDeps) {
         refuse();
         return signResult(id, { error: "failed" });
       }
+      if (!deps.isCurrent()) return; // the Land left while the Node answered: no prompt
       const answer = await deps.confirmPayment({ ...deps.land, payment });
       if (answer === "busy") return signResult(id, { error: "busy" });
       if (answer === "denied") {
@@ -231,14 +238,7 @@ export function createPortHandler(deps: PortDeps) {
       }
       signResult(id, { txId: await deps.sendPayment(payment) });
     } catch (e) {
-      signResult(id, {
-        error:
-          e instanceof LockedError
-            ? "locked"
-            : e instanceof NodeError
-              ? "failed"
-              : "invalid",
-      });
+      signResult(id, { error: e instanceof LockedError ? "locked" : "failed" });
     } finally {
       signOpen = false;
     }

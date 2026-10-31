@@ -22,6 +22,8 @@ function setup(over: Partial<PortDeps> = {}) {
     travel: vi.fn(async () => ({ ok: true as const })),
     isUnlocked: () => true,
     ensureUnlocked: vi.fn(async () => true),
+    isCurrent: () => true,
+    dialogOpen: () => false,
     confirm: vi.fn(async () => "approved" as const),
     sign: vi.fn(() => signed),
     preparePayment: vi.fn(async () => payment),
@@ -309,12 +311,41 @@ describe("pay", () => {
     ]);
   });
 
-  it("answers busy, and counts no refusal, when another Land's prompt is open", async () => {
-    const { handler, sent } = setup({
-      confirmPayment: vi.fn(async () => "busy" as const),
-    });
+  it("answers busy before calling the Node while a dialog of the Shell is open, and counts no refusal", async () => {
+    const { handler, sent, deps } = setup({ dialogOpen: () => true });
     for (const id of ["a", "b", "c", "d"]) await handler.handle(pay(id));
     expect(sent.map((m) => m.error)).toEqual(["busy", "busy", "busy", "busy"]);
+    expect(deps.preparePayment).not.toHaveBeenCalled();
+    // One that opened while the Node answered.
+    const late = setup({ confirmPayment: vi.fn(async () => "busy" as const) });
+    await late.handler.handle(pay("e"));
+    await late.handler.handle(pay("f"));
+    expect(late.sent.map((m) => m.error)).toEqual(["busy", "busy"]);
+  });
+
+  it("opens no prompt and answers nothing once its frame load has ended", async () => {
+    let current = true;
+    const { handler, sent, deps } = setup({
+      isCurrent: () => current,
+      preparePayment: vi.fn(async () => {
+        current = false; // the Player left while the Node answered
+        return payment;
+      }),
+    });
+    await handler.handle(pay("a"));
+    expect(deps.confirmPayment).not.toHaveBeenCalled();
+    expect(deps.sendPayment).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
+  });
+
+  it("answers failed when signing fails after the Player approved", async () => {
+    const { handler, sent } = setup({
+      sendPayment: vi.fn(async () => {
+        throw new Error("the signature failed");
+      }),
+    });
+    await handler.handle(pay("a"));
+    expect(sent).toEqual([{ type: "signResult", id: "a", error: "failed" }]);
   });
 });
 
@@ -337,6 +368,21 @@ describe("signMessage", () => {
       message: "I agree",
     });
     expect(sent).toEqual([{ type: "signResult", id: "a1", signed }]);
+  });
+
+  it("opens no prompt once its frame load has ended during the unlock", async () => {
+    let current = true;
+    const { handler, sent, deps } = setup({
+      isUnlocked: () => false,
+      isCurrent: () => current,
+      ensureUnlocked: vi.fn(async () => {
+        current = false;
+        return true;
+      }),
+    });
+    await handler.handle(sign("a1"));
+    expect(deps.confirm).not.toHaveBeenCalled();
+    expect(sent).toEqual([]);
   });
 
   it("does not sign without approval", async () => {

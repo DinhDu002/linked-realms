@@ -66,11 +66,11 @@ The Land UI sends `handoff` to its Map server as its first message. How it does 
 
 `signed` answers `signMessage`, `txId` answers `pay`. `error` is one of:
 - `denied`: the Player said no or closed the prompt;
-- `busy`: another request is open;
+- `busy`: another request or one of the Shell's dialogs is open, or a refusal was less than 10 seconds ago;
 - `blocked`: this Land was refused 3 times since it loaded;
 - `invalid`: a malformed request;
 - `failed`: a `pay` the Shell could not make, or the Node refused;
-- `locked`: the Player cancelled the unlock.
+- `locked`: the Player cancelled the unlock, or the Shell locked after the Player approved and before it signed; then nothing was signed, and the Land may ask again.
 
 ## Land UI to Shell
 
@@ -98,6 +98,7 @@ The Land UI sends `handoff` to its Map server as its first message. How it does 
   - After a refusal, the Shell answers `busy` for 10 seconds.
   - After 3 refusals since the frame loaded, it answers `blocked`.
   - A cancelled unlock counts as a refusal, whether a `signMessage` or a `travel` asked for it. While those limits hold, the Shell does not ask for the password on this Land's behalf: a `travel` that needs it gets `locked` at once.
+  - A request still waiting when its frame load ends (Leave, a reload, a travel) opens no prompt and gets no answer; a prompt already open closes as a refusal.
 
 **`pay`** asks the Player to pay Gold from the Character:
 
@@ -108,8 +109,8 @@ The Land UI sends `handoff` to its Map server as its first message. How it does 
 - `id` is as for `signMessage`. `amount` is GOLD as a string: digits, then optionally a dot and up to 8 digits, more than 0. `recipient` is a Character address. `memo` is optional text of at most 80 UTF-8 bytes. Nothing is trimmed or rounded: any other request is `invalid`, with no prompt.
 - The Shell reads the Character's account from its Node and sets the fee itself: the Node's fee rate times the transfer's size. It shows the payment in its own prompt, outside the frame: this Land and its origin, the Character, the recipient's full address, the amount, the memo, the fee and the total.
 - Only after the Player approves does it sign the transfer and send it to its Node. It answers with the transaction id (64 hex digits), never the signed bytes. A `txId` means the transfer was sent, not that a Block holds it; the Land learns that from the chain. If the Node does not answer, the Shell still returns the `txId`, since it may have the transfer.
-- `failed`: the payment cannot be made (no or not enough Gold, a Node on another network or out of reach), which counts as a refusal; or the Node refused the signed transfer after the Player approved, which does not.
-- `pay` and `signMessage` share the limits above: one request open at a time, `busy` for 10 seconds after a refusal, `blocked` after 3.
+- `failed`: the payment cannot be made (no or not enough Gold, a Node on another network or out of reach), which counts as a refusal; or, after the Player approved, the Node refused the signed transfer or signing failed, which does not.
+- `pay` and `signMessage` share the limits above: one request open at a time, `busy` for 10 seconds after a refusal, `blocked` after 3, nothing for a frame load that has ended. While one of the Shell's dialogs is open, `pay` gets `busy` before the Shell calls the Node.
 
 ## The Shell's signing and payment prompts
 
