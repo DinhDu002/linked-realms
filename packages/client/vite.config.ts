@@ -1,4 +1,4 @@
-import { defineConfig } from "vite";
+import { defineConfig } from "vitest/config";
 
 export default defineConfig({
   server: {
@@ -6,4 +6,6 @@ export default defineConfig({
     strictPort: true,
     proxy: { "/play": { target: "ws://127.0.0.1:2567", ws: true } },
   },
+  // e2e/ is Playwright's (test:browser).
+  test: { include: ["src/**/*.test.ts"] },
 });

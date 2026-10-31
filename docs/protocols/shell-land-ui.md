@@ -9,6 +9,7 @@ Status: mandatory (ADR 0008). A Land UI that wants Players must speak it. The re
   - `sandbox="allow-scripts allow-same-origin allow-pointer-lock"`
   - `allow=""`
   - `referrerpolicy="no-referrer"`
+- The sandbox has no `allow-forms`, so a `<form>` in a Land UI never submits and fires no `submit` event. A Land UI acts on clicks and key presses.
 - The Land runs on its own origin, so it cannot read the Shell's page, storage or keys.
 - Every response the relay serves for a Land carries `Content-Security-Policy: frame-ancestors <Shell origins>` (`map-server-hub-relay.md`).
 - A Land UI must not ask for a Player's password or 24 words. The Shell asks for them only in its own page, never inside a frame.
@@ -93,6 +94,7 @@ The Land UI sends `handoff` to its Map server as its first message. How it does 
 - `id` is a string of at most 64 characters. `text` is at most 1,000 code points; any longer request is `invalid`.
 - The Shell builds a `linked-realms Land message` statement (`identity.md`) with this Land's id and URL, the Character and the current time. It shows the statement in its own prompt, outside the frame.
 - Only after the Player approves does it sign and return `signed`.
+- The Land owner's Mine switch is such a text: the reference Land UI asks for it and sends the signed statement to its Map server (`map-server-node.md`).
 - Limits:
   - One request may be open at a time.
   - After a refusal, the Shell answers `busy` for 10 seconds.

@@ -16,3 +16,5 @@ packages/core/pkg/
 # Playwright output
 packages/shell/test-results/
 packages/shell/playwright-report/
+packages/client/test-results/
+packages/client/playwright-report/

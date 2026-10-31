@@ -2,12 +2,13 @@
 
 Your Land is a Map server running on your machine. It links out to the world's relay, so you do not open any port. It takes one command, which the Shell writes for you.
 
-There is no Gold yet: the chain, the Node and the Mine arrive in step 2C, and the main network starts after it (P7).
+Your Land also runs a Node of LR, the project's chain, and its Mine, which mines Gold by Proof of Work for your Character. The Mine is off until you switch it on (P5). The main network starts after step 2C (P7); until then Gold is on the test network.
 
 ## What you need
 
 - Docker (Docker Desktop on macOS and Windows, Docker Engine on Linux), running, on a 64-bit machine (x86-64 or ARM) that can stay on and whose clock is right: the Hub refuses statements more than 5 minutes off.
 - A Character, made in the world's Shell (the project's test world is <https://play.linkedrealms.com>).
+- For the Mine, memory to spare: with 2.5 GiB free it mines in fast mode, otherwise in light mode, several times slower.
 
 ## 1. Run the command from the Shell
 
@@ -58,6 +59,16 @@ Your Land is always at `<landId>.<the world's Land domain>`. It can also be serv
 
 The Directory then shows your Land at `https://play.example.com`. Its certificate is made on the first visit, once your Land has a cell, so that visit takes a few seconds longer. Keep the `TXT` record: the Hub reads it again once a day and removes the domain when the record no longer names your Land. "Remove domain" takes it off at once.
 
+## 5. Your Mine
+
+The Map server starts your Land's Node, `lr-node`, with its Mine off, and keeps its chain in the same volume (`/data/lr-node`). The Node dials out to the Nodes in `NODE_SEEDS` and opens no port. Until it has another Node and has caught up with the chain, every visitor's Land shows `Mine unavailable`. Add `-e NODE_SEEDS=host:port` to the command with the seed Node the world's operator publishes.
+
+1. Enter your Land. Only you see "Switch the Mine": choose it, then On and the number of threads (at most one fewer than your machine's CPUs).
+2. Choose "Sign in the Shell" and approve the switch in the Shell's own prompt. The Shell signs it with your Character's key, which never leaves the Shell; your Land checks the signature before it tells the Node.
+3. The Mine starts. In fast mode it first builds a 2 GiB dataset, from about 20 seconds to over a minute. The log then shows `Mine ON: 2 threads, fast mode, rewards to tlr1…`, and every visitor sees the Mine run, its hash rate and the Blocks it won. Each Block it wins pays your Character's address.
+
+Switch it off the same way, with Off. A restart of the container or of the machine leaves the Mine off. `-e MINE_MAX_THREADS=2` caps the threads you may choose, and `-e NODE_ENABLED=false` runs no Node at all. A plain `docker run` has no huge pages, which mining would use, so it mines somewhat slower than a tuned machine.
+
 ## Everyday tasks
 
 | Task | Command |
@@ -65,8 +76,8 @@ The Directory then shows your Land at `https://play.example.com`. Its certificat
 | Watch the log | `docker logs -f linked-realms-land` |
 | Stop your Land (it shows offline within about 15 seconds) | `docker stop linked-realms-land` |
 | Start it again | `docker start linked-realms-land` |
-| Update | `docker pull ghcr.io/dinhdu002/linked-realms-node:latest` (the image in your command), then `docker rm -f linked-realms-land` and run the command again. The volume keeps the Map server key, so you do not register again. |
-| Remove everything | `docker rm -f linked-realms-land && docker volume rm linked-realms-land`. This deletes the Map server key. The Land stays yours: a new Map server shows up under "Waiting Map servers", and "Use this one" moves your Land to it. |
+| Update | `docker pull ghcr.io/dinhdu002/linked-realms-node:latest` (the image in your command), then `docker rm -f linked-realms-land` and run the command again. The volume keeps the Map server key and the chain, so you do not register again. |
+| Remove everything | `docker rm -f linked-realms-land && docker volume rm linked-realms-land`. This deletes the Map server key and the chain; the Gold your Mine won stays at your Character's address. The Land stays yours: a new Map server shows up under "Waiting Map servers", and "Use this one" moves your Land to it. |
 
 **Moving to another machine.** Either copy the volume and run the same command, or start fresh and choose "Use this one" for the new key in the Shell. The newest Delegation wins; the relay cuts the old machine off within 30 seconds.
 
@@ -88,17 +99,22 @@ The Directory then shows your Land at `https://play.example.com`. Its certificat
 | `relay link closed (1013 …)` | The Hub is down or the relay is full; your server keeps retrying. |
 | `/data/map-server-key is readable by others` or `must hold a 32-byte hex seed` | The key file was changed by hand. Restore it, or remove the volume to start with a new key (step 2 again). |
 | `LAND_OWNER …`, `HUB_URL …`, `HUB_TICKET_SIGNER …`, `RELAY_URL …` errors | Copy the command from the Shell again, then `docker rm -f linked-realms-land` and run it. |
+| `Mine unavailable: this Land's Node is not running or not synced` (in the Land) | The Node has no other Node yet or is catching up: check `NODE_SEEDS`, and wait. |
+| `The Node stopped (…); starting it again in … s, with its Mine off` | The Node exited; the Map server starts it again. Switch the Mine on again if you want it. |
+| `The Node refused its settings (exit code 2)` | A `NODE_*` or `MINE_MAX_THREADS` setting is wrong: the line above it names it. Fix it and run the command again. |
+| `Could not run the Node (NODE_BIN …)` | The image has no `lr-node`: use the published image, or set `NODE_ENABLED=false`. |
 
 ## Other settings
 
 The command sets only `LAND_OWNER` and `HUB_URL`. Add `-e NAME=value` before the image for any other setting of the Map server (`packages/map-server/README.md`), for example:
 
 - `-e HUB_TICKET_SIGNER=tlr1…` and `-e RELAY_URL=wss://…` pin the ticket signer and the relay instead of reading them from the Hub.
-- To run your own build of the image, `docker build -t linked-realms-node https://github.com/DinhDu002/linked-realms.git#main` (no clone needed; it compiles the Rust core and takes a few minutes), then use `linked-realms-node` as the image in the command.
+- To run your own build of the image, `docker build -t linked-realms-node https://github.com/DinhDu002/linked-realms.git#main` (no clone needed; it compiles the Rust core and `lr-node` and takes ten minutes or more), then use `linked-realms-node` as the image in the command.
 
 ## What your machine does and does not do
 
 - It runs your Land for its visitors and opens no inbound port.
+- It runs a Node that checks every Block itself (P3), and mines only while you have switched the Mine on (P5).
 - It checks every arriving Character's Travel ticket, signed by the Hub, and arrival statement, signed by the Character.
 - It never runs code sent by other players or servers (P6) and never holds a Player's key (P2): only its own Map server key.
-- It cannot change another Land or the Hub's records (P1). From step 2C, Gold is decided by chain rules that every Node checks.
+- It cannot change another Land or the Hub's records (P1). Gold is decided by chain rules that every Node checks, yours included.
