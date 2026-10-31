@@ -15,6 +15,8 @@ use crate::{Chain, Error};
 
 /// The smallest transaction an Account sends first: a transfer with its public key and no memo.
 const FIRST_TRANSFER_LEN: u64 = 3_829;
+/// The largest transfer: with its public key and an 80-byte memo.
+const LARGEST_TRANSFER_LEN: usize = 3_909;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub struct Policy {
@@ -214,6 +216,54 @@ impl Mempool {
             Some(held) if held.id == id => Ok(()),
             _ => Err(Refused::Full),
         }
+    }
+
+    /// The held transaction `id`.
+    // ponytail: scans every held transaction; index them by id if pools grow past a few
+    // thousand.
+    pub fn get(&self, id: &[u8; 32]) -> Option<&Tx> {
+        self.senders
+            .values()
+            .flat_map(BTreeMap::values)
+            .find(|held| held.id == *id)
+            .map(|held| &held.tx)
+    }
+
+    /// `address`'s account after the transactions it sent that are held, if any are.
+    pub fn pending(&self, address: &Address) -> Option<&Account> {
+        let (_, last) = self.senders.get(address)?.last_key_value()?;
+        Some(&last.after)
+    }
+
+    /// How many transactions are held, and their bytes.
+    pub fn held(&self) -> (usize, usize) {
+        (self.senders.values().map(BTreeMap::len).sum(), self.bytes)
+    }
+
+    pub fn policy(&self) -> &Policy {
+        &self.policy
+    }
+
+    /// A fee rate, in base units per byte, that puts a transfer in the next Block now: the
+    /// minimum if every held transaction fits beside the largest transfer, else just above the
+    /// highest rate that would not.
+    // ponytail: by fee rate alone, leaving nonce order out; an estimate.
+    pub fn fee_rate(&self) -> u64 {
+        let mut held: Vec<Rate> = self
+            .senders
+            .values()
+            .flat_map(|held| held.values().map(Held::rate))
+            .collect();
+        held.sort_by(|a, b| b.cmp(a));
+        let mut room = MAX_BLOCK_SIZE - HEADER_LEN - 2 - LARGEST_TRANSFER_LEN;
+        for rate in held {
+            // Every held transaction pays the minimum rate, so this is above it.
+            if rate.size > room {
+                return rate.fee / rate.size as u64 + 1;
+            }
+            room -= rate.size;
+        }
+        self.policy.min_fee_rate
     }
 
     /// Checks every held transaction again on the chain's tip if it moved, with those of the

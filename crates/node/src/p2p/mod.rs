@@ -11,18 +11,18 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{BuildHasher, Hasher};
 use std::net::{IpAddr, SocketAddr};
 
-use linked_realms_core::Address;
 use linked_realms_core::block::{Block, Header, MAX_NEW_ACCOUNTS};
 use linked_realms_core::checkpoint::Checkpoint;
 use linked_realms_core::params::ChainParams;
 use linked_realms_core::state::{Account, tree_key};
 use linked_realms_core::tx::Tx;
+use linked_realms_core::{Address, Error as RuleError};
 
 pub use message::{
     IN_FLIGHT, MAX_HEADERS, MAX_IDS, MAX_NODES, MAX_PAYLOAD, MAX_SNAPSHOT_ACCOUNTS, Malformed,
     Message, Version,
 };
-pub use tcp::Tcp;
+pub use tcp::{Tcp, Waker};
 
 use crate::{Chain, Error, Mempool, Refused};
 
@@ -351,6 +351,22 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
         self.take_tx(net, tx, None)
     }
 
+    /// Takes a Checkpoint sent to this Node, and passes it on if it is the highest yet. Refused
+    /// if a rule refuses it, the Checkpoint signer's signature first. One for a Block not yet
+    /// known is kept, and counts once the Block comes.
+    pub fn submit_checkpoint(
+        &mut self,
+        net: &mut impl Network,
+        checkpoint: Checkpoint,
+    ) -> Result<Result<(), RuleError>, Error> {
+        self.take_checkpoint(net, Box::new(checkpoint), None)
+    }
+
+    /// The connections open, finished or not.
+    pub fn connections(&self) -> usize {
+        self.peers.len()
+    }
+
     fn on_message(
         &mut self,
         net: &mut impl Network,
@@ -480,17 +496,8 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                 let _ = self.take_tx(net, tx, Some(peer))?;
             }
             Message::Checkpoint(checkpoint) => {
-                let latest = self.chain.latest_checkpoint()?.map(|c| c.height);
-                let tip = self.chain.tip()?.id();
-                match self.chain.add_checkpoint(&checkpoint) {
-                    Ok(()) => {
-                        if latest.is_none_or(|height| checkpoint.height > height) {
-                            self.broadcast(net, &Message::Checkpoint(checkpoint), Some(peer));
-                        }
-                        self.after_blocks(net, tip)?;
-                    }
-                    Err(Error::Rule(_)) => self.ban(net, peer),
-                    Err(error) => return Err(error),
+                if self.take_checkpoint(net, checkpoint, Some(peer))?.is_err() {
+                    self.ban(net, peer);
                 }
             }
             Message::GetCheckpoint => {
@@ -709,6 +716,27 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
             self.broadcast(net, &Message::Tx(tx), from);
         }
         Ok(taken)
+    }
+
+    fn take_checkpoint(
+        &mut self,
+        net: &mut impl Network,
+        checkpoint: Box<Checkpoint>,
+        from: Option<PeerId>,
+    ) -> Result<Result<(), RuleError>, Error> {
+        let latest = self.chain.latest_checkpoint()?.map(|c| c.height);
+        let tip = self.chain.tip()?.id();
+        match self.chain.add_checkpoint(&checkpoint) {
+            Ok(()) => {
+                if latest.is_none_or(|height| checkpoint.height > height) {
+                    self.broadcast(net, &Message::Checkpoint(checkpoint), from);
+                }
+                self.after_blocks(net, tip)?;
+                Ok(Ok(()))
+            }
+            Err(Error::Rule(error)) => Ok(Err(error)),
+            Err(error) => Err(error),
+        }
     }
 
     /// After Blocks or a Checkpoint came: the mempool follows, and the other Nodes hear of a new

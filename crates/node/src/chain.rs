@@ -44,6 +44,25 @@ pub const KEEP_BELOW_CHECKPOINT: u64 = 1_440;
 /// A part of a state snapshot: accounts in the tree's key order, and whether more follow.
 pub type SnapshotPart = (Vec<(Address, Account)>, bool);
 
+/// A transaction of the best chain, and where it is.
+#[derive(Debug, Clone, PartialEq, Eq)]
+pub struct Placed {
+    pub tx: Tx,
+    pub block: [u8; 32],
+    pub height: u64,
+    /// Its place among the Block's transactions, from 0.
+    pub place: u32,
+}
+
+fn placed(body: &Block, block: [u8; 32], place: u32) -> Placed {
+    Placed {
+        tx: body.txs[place as usize].clone(),
+        block,
+        height: body.header.height,
+        place,
+    }
+}
+
 pub struct Chain<H> {
     db: Database,
     params: ChainParams,
@@ -153,6 +172,89 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
     /// The stored Block `id`, if this Node has its body.
     pub fn block(&self, id: &[u8; 32]) -> Result<Option<Block>, Error> {
         self.read(|t| Ok(t.block(id)))
+    }
+
+    /// The stored header `id`, of any branch.
+    pub fn header(&self, id: &[u8; 32]) -> Result<Option<Header>, Error> {
+        self.read(|t| Ok(t.header(id).map(|stored| stored.header)))
+    }
+
+    /// Up to `max` headers of the best chain from `height` up.
+    pub fn headers_from(&self, height: u64, max: u64) -> Result<Vec<Header>, Error> {
+        self.read(|t| {
+            let tip = t.header(&t.tip()).expect("a stored tip").header.height;
+            let last = tip.min(height.saturating_add(max).saturating_sub(1));
+            Ok((height..=last)
+                .map(|at| {
+                    let id = t.best(at).expect("a Block at every height");
+                    t.header(&id).expect("a stored header").header
+                })
+                .collect())
+        })
+    }
+
+    /// The headers of the best chain above where it meets the branch that ends with `old_tip`,
+    /// lowest first: the last `max` of them.
+    pub fn joined_since(&self, old_tip: &[u8; 32], max: u64) -> Result<Vec<Header>, Error> {
+        self.read(|t| {
+            let mut id = *old_tip;
+            let fork = loop {
+                let stored = t.header(&id).expect("a stored header");
+                if t.on_best_chain(&id, stored.header.height) {
+                    break stored.header.height;
+                }
+                id = stored.header.prev_id;
+            };
+            let tip = t.header(&t.tip()).expect("a stored tip").header.height;
+            let from = (fork + 1).max(tip.saturating_sub(max) + 1);
+            Ok((from..=tip)
+                .map(|at| {
+                    let id = t.best(at).expect("a Block at every height");
+                    t.header(&id).expect("a stored header").header
+                })
+                .collect())
+        })
+    }
+
+    /// The best chain's transaction `id`, and where it is.
+    pub fn transaction(&self, id: &[u8; 32]) -> Result<Option<Placed>, Error> {
+        self.read(|t| {
+            Ok(t.tx_place(id).map(|(block, place)| {
+                let body = t.block(&block).expect("an indexed Block has its body");
+                placed(&body, block, place)
+            }))
+        })
+    }
+
+    /// Up to `max` of the best chain's transactions from or to `address`, newest first, before
+    /// the height and place `before`, or from the tip.
+    // ponytail: reads the body of each Block they are in; keep what a page shows in `addr_txs`
+    // if that shows.
+    pub fn address_txs(
+        &self,
+        address: &Address,
+        before: Option<(u64, u32)>,
+        max: usize,
+    ) -> Result<Vec<Placed>, Error> {
+        self.read(|t| {
+            let mut bodies: HashMap<u64, ([u8; 32], Block)> = HashMap::new();
+            let before = before.unwrap_or((u64::MAX, u32::MAX));
+            Ok(t.address_txs(address, before, max)
+                .into_iter()
+                .map(|(height, place)| {
+                    let (id, body) = bodies.entry(height).or_insert_with(|| {
+                        let id = t.best(height).expect("a Block at every height");
+                        (id, t.block(&id).expect("an indexed Block has its body"))
+                    });
+                    placed(body, *id, place)
+                })
+                .collect())
+        })
+    }
+
+    /// The highest height of the best chain whose body is gone, or 0.
+    pub fn pruned(&self) -> Result<u64, Error> {
+        self.read(|t| Ok(t.pruned()))
     }
 
     pub fn has_header(&self, id: &[u8; 32]) -> Result<bool, Error> {
@@ -434,6 +536,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
                 let old = t.drop_best(below);
                 t.remove_block(&old);
             }
+            t.clear_index();
             let mut on = id;
             while let Some(stored) = t.header(&on).filter(|s| s.header.height > 0) {
                 t.set_best(stored.header.height, &on);
@@ -547,7 +650,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
         }
         let tip_height = t.header(&tip).expect("a stored tip").header.height;
         for height in (fork.header.height + 1..=tip_height).rev() {
-            undo(t, height);
+            undo(&self.params, t, height);
         }
         debug_assert_eq!(smt::root(&t.tree), fork.header.state_root);
         for id in side.into_iter().rev() {
@@ -573,6 +676,10 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
             let (pruned, below) = (t.pruned(), held.saturating_sub(keep));
             for height in pruned + 1..=below {
                 let id = t.best(height).expect("a Block at every height");
+                let block = t
+                    .block(&id)
+                    .expect("a Block above what was pruned has its body");
+                t.index(&self.params, &id, &block, false);
                 t.remove_block(&id);
                 t.remove_undo(&id);
             }
@@ -625,13 +732,18 @@ fn apply(
     changes.apply(&mut t.accounts, &mut t.tree);
     t.put_undo(id, &before);
     t.set_best(block.header.height, id);
+    t.index(params, id, block, true);
     Ok(())
 }
 
 /// Takes the Block at `height`, the best chain's last, off it. The tree's entries depend only on
 /// its keys, so setting each account back rebuilds them as they were.
-fn undo(t: &mut Tables, height: u64) {
-    let (_, before) = t.pop_best(height);
+fn undo(params: &ChainParams, t: &mut Tables, height: u64) {
+    let (id, before) = t.pop_best(height);
+    let block = t
+        .block(&id)
+        .expect("a Block with an undo record has its body");
+    t.index(params, &id, &block, false);
     for (address, account) in before {
         let key = tree_key(&address);
         match account {
