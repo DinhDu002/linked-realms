@@ -42,3 +42,20 @@ pub fn verifier(keys: Arc<Keys>) -> impl Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send
         vm.as_mut().expect("just made").1.hash(bytes)
     }
 }
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn keys_holds_the_caches_of_the_two_keys_used_last() {
+        let keys = Keys::default();
+        let (a, b, c) = ([1; 32], [2; 32], [3; 32]);
+        let first = keys.cache(&a);
+        let second = keys.cache(&b);
+        assert!(Arc::ptr_eq(&first, &keys.cache(&a)));
+        keys.cache(&c);
+        assert!(Arc::ptr_eq(&first, &keys.cache(&a)), "used last but one");
+        assert!(!Arc::ptr_eq(&second, &keys.cache(&b)), "built again");
+    }
+}

@@ -27,8 +27,6 @@ pub const FAST_MEMORY: u64 = 5 * 1024 * 1024 * 1024 / 2;
 const REFRESH: Duration = Duration::from_secs(10);
 /// The hash rate is measured over this window.
 const WINDOW: Duration = Duration::from_secs(10);
-/// Hashes a thread does between two looks at whether its work changed.
-const BATCH: u64 = 64;
 
 #[derive(Debug, Clone, Copy, PartialEq, Eq)]
 pub enum Mode {
@@ -116,14 +114,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Mine<H> {
         }
         let mut at_work = self.at_work.lock().expect("not poisoned");
         stop(&mut at_work);
-        let memory = match mode {
-            Mode::Fast => Memory::Fast,
-            Mode::Light => Memory::Light,
-            Mode::Auto => match available_memory().is_some_and(|room| room >= FAST_MEMORY) {
-                true => Memory::Fast,
-                false => Memory::Light,
-            },
-        };
+        let memory = memory_for(mode, available_memory());
         *self.status.lock().expect("not poisoned") = Status {
             state: State::Starting,
             reward_address: Some(reward_address),
@@ -149,7 +140,8 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Mine<H> {
         Ok(self.status())
     }
 
-    /// Turns the Mine off, once its threads have stopped.
+    /// Turns the Mine off, once its threads have stopped; a dataset being built is finished
+    /// first, about 20 seconds at most.
     pub fn stop(&self) -> Status {
         stop(&mut self.at_work.lock().expect("not poisoned"));
         self.status()
@@ -177,6 +169,16 @@ fn stop(at_work: &mut Option<(Arc<AtomicBool>, JoinHandle<()>)>) {
     if let Some((stopping, thread)) = at_work.take() {
         stopping.store(true, SeqCst);
         thread.join().expect("the Mine's thread");
+    }
+}
+
+/// What `mode` hashes over with `available` bytes of memory free.
+fn memory_for(mode: Mode, available: Option<u64>) -> Memory {
+    match mode {
+        Mode::Fast => Memory::Fast,
+        Mode::Light => Memory::Light,
+        Mode::Auto if available.is_some_and(|room| room >= FAST_MEMORY) => Memory::Fast,
+        Mode::Auto => Memory::Light,
     }
 }
 
@@ -212,6 +214,8 @@ struct Supervisor<H> {
 
 impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Supervisor<H> {
     fn work(self) {
+        // Each key's memory is built here, and yields like the hashing.
+        lower_priority();
         let work = Arc::new(Work {
             generation: AtomicU64::new(0),
             job: Mutex::new(([0; HEADER_LEN], U256::ones(0))),
@@ -247,8 +251,11 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Supervisor<H> {
             let vms = match key == Some(new_key) {
                 true => None,
                 false => {
-                    self.set(|status| (status.state, status.threads) = (State::Starting, 0));
+                    self.set(|status| {
+                        (status.state, status.threads, status.hash_rate) = (State::Starting, 0, 0.0)
+                    });
                     crew.retire();
+                    rate = Rate::default();
                     match self.vms(&new_key, &mut memory) {
                         Some(vms) => Some(vms),
                         None => break,
@@ -313,7 +320,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Supervisor<H> {
         let dataset = match *memory {
             // ponytail: the dataset is built when the key changes, about 20 seconds without
             // hashing every 2,048 Blocks; build it during the 64 Blocks before if that matters.
-            Memory::Fast => match Dataset::new(&cache, threads) {
+            Memory::Fast => match Dataset::new(&cache, threads, lower_priority) {
                 Ok(dataset) => Some(Arc::new(dataset)),
                 Err(error) => {
                     eprintln!("lr-node mine: no fast mode, light instead: {error}");
@@ -394,15 +401,14 @@ impl Worker {
             let generation = self.work.generation.load(SeqCst);
             let (mut header, target) = *self.work.job.lock().expect("not poisoned");
             let mut nonce = self.first;
+            // A look costs nothing beside a hash, so the thread looks before each one.
             while self.work.generation.load(SeqCst) == generation && !done() {
-                for _ in 0..BATCH {
-                    header[HEADER_LEN - 8..].copy_from_slice(&nonce.to_be_bytes());
-                    if U256::from_be_bytes(self.vm.hash(&header)) < target {
-                        let _ = self.found.send((generation, nonce));
-                    }
-                    nonce = nonce.wrapping_add(self.step);
+                header[HEADER_LEN - 8..].copy_from_slice(&nonce.to_be_bytes());
+                if U256::from_be_bytes(self.vm.hash(&header)) < target {
+                    let _ = self.found.send((generation, nonce));
                 }
-                self.hashes.fetch_add(BATCH, SeqCst);
+                nonce = nonce.wrapping_add(self.step);
+                self.hashes.fetch_add(1, SeqCst);
             }
         }
     }

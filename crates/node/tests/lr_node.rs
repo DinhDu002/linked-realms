@@ -24,6 +24,16 @@ impl Drop for Data {
     }
 }
 
+/// A running `lr-node`, killed if a test ends before it stops.
+struct Process(Child);
+
+impl Drop for Process {
+    fn drop(&mut self) {
+        let _ = self.0.kill();
+        let _ = self.0.wait();
+    }
+}
+
 fn lr_node(args: &[&str]) -> Command {
     let mut command = Command::new(env!("CARGO_BIN_EXE_lr-node"));
     command.args(args);
@@ -31,13 +41,14 @@ fn lr_node(args: &[&str]) -> Command {
 }
 
 /// Starts `lr-node` and reads the lines it prints until the one starting with `last`.
-fn start(data: &Data, args: &[&str], last: &str) -> (Child, BufReader<ChildStdout>, Vec<String>) {
+fn start(data: &Data, args: &[&str], last: &str) -> (Process, BufReader<ChildStdout>, Vec<String>) {
     let mut child = lr_node(&["--network", "dev", "--data", data.0.to_str().unwrap()])
         .args(args)
         .stdout(Stdio::piped())
         .spawn()
         .unwrap();
     let mut stdout: BufReader<ChildStdout> = BufReader::new(child.stdout.take().unwrap());
+    let child = Process(child);
     let mut lines = Vec::new();
     while lines
         .last()
@@ -70,10 +81,13 @@ fn call(rpc: &str, method: &str) -> Value {
     serde_json::from_str::<Value>(body).unwrap()["result"].clone()
 }
 
-fn signal(child: &mut Child, signal: libc::c_int) -> std::process::ExitStatus {
+fn signal(child: &mut Process, signal: libc::c_int) -> std::process::ExitStatus {
     // SAFETY: a plain system call with no pointers, to a child this test started.
-    assert_eq!(unsafe { libc::kill(child.id() as libc::pid_t, signal) }, 0);
-    child.wait().unwrap()
+    assert_eq!(
+        unsafe { libc::kill(child.0.id() as libc::pid_t, signal) },
+        0
+    );
+    child.0.wait().unwrap()
 }
 
 #[test]

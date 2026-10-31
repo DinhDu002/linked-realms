@@ -1,3 +1,4 @@
+use linked_realms_core::block::Header;
 use linked_realms_core::params::DEV;
 
 use super::*;
@@ -107,7 +108,8 @@ fn a_mine_is_off_whenever_it_starts_and_its_threads_are_capped() {
     let keys = Arc::new(Keys::default());
     let running = dev_node(&file, &keys);
     let cap = max_threads(None);
-    assert!(cap >= 1);
+    let cores = thread::available_parallelism().unwrap().get();
+    assert_eq!(cap, (cores - 1).max(1), "one fewer than the cores");
     assert_eq!(max_threads(Some(1)), 1);
     assert_eq!(max_threads(Some(0)), 1);
     assert_eq!(max_threads(Some(usize::MAX)), cap);
@@ -135,6 +137,54 @@ fn a_mine_is_off_whenever_it_starts_and_its_threads_are_capped() {
     assert_eq!(mine.status(), off(None));
     drop(mine);
     running.stop().unwrap();
+}
+
+#[test]
+fn a_mine_moves_to_the_next_key_when_it_comes() {
+    // From this height a Block's RandomX key is Block 2048's, not the genesis's.
+    const SWITCH: u64 = 2112;
+    let file = File::new("mine-key");
+    let keys = Arc::new(Keys::default());
+    // Below the Mine's first Block the Node takes any nonce, so the test lays those Blocks down
+    // fast; from it, RandomX with the key the chain picks.
+    let real = verifier(keys.clone());
+    let verifier: Verifier = Box::new(move |bytes, key| match Header::from_bytes(bytes) {
+        Ok(header) if header.height < SWITCH - 1 => [0; 32],
+        _ => real(bytes, key),
+    });
+    let chain = Chain::open(file.path(), DEV, verifier).unwrap();
+    let reward = key(1).address();
+    for _ in 1..SWITCH - 1 {
+        let block = chain.template(reward, Vec::new(), 0).unwrap();
+        chain.submit_block(&block).unwrap();
+    }
+    let node = Node::new(chain, Mempool::new(DEV, Policy::default()), &DEV, 0, &[]);
+    let running = Arc::new(Running::start(node, Tcp::new(None).unwrap()));
+    let threads = 2.min(max_threads(None));
+    let mine = Mine::new(running.clone(), keys, threads);
+
+    // Block 2111 on the genesis's key, then 2112 and 2113 on the next one.
+    mine.start(reward, threads, Mode::Light).unwrap();
+    let tip = || running.call_blocking(|node, _| node.chain.tip().unwrap().height);
+    wait_for("2 Blocks on the next key", || tip() >= Some(SWITCH + 1));
+    let status = mine.status();
+    assert!(status.blocks_won >= 3, "{status:?}");
+    assert_eq!(
+        (status.state, status.threads),
+        (State::On, threads),
+        "the old threads retired"
+    );
+    drop(mine);
+    running.stop().unwrap();
+}
+
+#[test]
+fn auto_mode_is_fast_with_room_for_the_dataset() {
+    assert_eq!(memory_for(Mode::Auto, Some(FAST_MEMORY)), Memory::Fast);
+    assert_eq!(memory_for(Mode::Auto, Some(FAST_MEMORY - 1)), Memory::Light);
+    assert_eq!(memory_for(Mode::Auto, None), Memory::Light);
+    assert_eq!(memory_for(Mode::Fast, Some(0)), Memory::Fast);
+    assert_eq!(memory_for(Mode::Light, Some(u64::MAX)), Memory::Light);
 }
 
 #[test]
