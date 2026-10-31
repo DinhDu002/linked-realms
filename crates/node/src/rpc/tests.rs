@@ -53,13 +53,16 @@ fn http(address: SocketAddr, request: &str) -> (String, String) {
     (head.to_lowercase(), body.to_string())
 }
 
-fn post(address: SocketAddr, body: &str) -> (String, Value) {
-    let request = format!(
+fn request(body: &str) -> String {
+    format!(
         "POST / HTTP/1.1\r\nHost: localhost\r\nContent-Type: application/json\r\n\
          Content-Length: {}\r\nConnection: close\r\n\r\n{body}",
         body.len()
-    );
-    let (head, body) = http(address, &request);
+    )
+}
+
+fn post(address: SocketAddr, body: &str) -> (String, Value) {
+    let (head, body) = http(address, &request(body));
     (head, serde_json::from_str(&body).unwrap())
 }
 
@@ -152,6 +155,8 @@ fn every_method_answers_on_a_running_node() {
         served.result("lr_getHeaders", json!([0, 3]))[0]["height"],
         0
     );
+    assert_eq!(served.result("lr_getHeaders", json!([0, 0])), json!([]));
+    assert_eq!(served.result("lr_getHeaders", json!([26, 5])), json!([]));
 
     let block = served.result("lr_getBlock", json!([15]));
     assert_eq!(block, block_json(&PARAMS, &blocks[14]));
@@ -395,6 +400,8 @@ fn the_calls_left_fill_again_and_count_an_ipv6_host_once() {
     let at = |ms: u64| start + Duration::from_millis(ms);
     assert!(clients.take(ip("10.0.0.1"), 3, at(0)));
     assert!(!clients.take(ip("10.0.0.1"), 1, at(0)));
+    // The same client through a dual-stack listener.
+    assert!(!clients.take(ip("::ffff:10.0.0.1"), 1, at(0)));
     assert!(clients.take(ip("10.0.0.2"), 1, at(0)));
     // Two a second, never more than the burst.
     assert!(clients.take(ip("10.0.0.1"), 1, at(500)));
@@ -551,4 +558,55 @@ fn subscriptions_tell_of_new_blocks_and_of_an_address_s_transactions() {
         let item = paid.next().await.unwrap().unwrap();
         assert_eq!(item, placed_json(&PARAMS, &placed));
     });
+}
+
+#[test]
+fn a_subscription_ends_when_the_node_stops() {
+    let file = File::new("rpc-stopped");
+    let chain = file.open();
+    let served = serve(file, chain, Config::default());
+    let runtime = tokio::runtime::Runtime::new().unwrap();
+    runtime.block_on(async {
+        let client = WsClientBuilder::default().build(served.ws()).await.unwrap();
+        let blocks =
+            || client.subscribe("lr_subscribeBlocks", rpc_params![], "lr_unsubscribeBlocks");
+        let mut joined: Subscription<Value> = blocks().await.unwrap();
+        served.running.stop().unwrap();
+        let next = tokio::time::timeout(Duration::from_secs(5), joined.next()).await;
+        let next = next.expect("told, not left waiting");
+        assert!(!matches!(next, Some(Ok(_))), "{next:?}");
+        let late: Result<Subscription<Value>, _> = blocks().await;
+        assert!(matches!(late, Err(ClientError::Call(e)) if e.code() == -32603));
+    });
+}
+
+#[test]
+fn idle_sockets_wait_past_twice_the_connections() {
+    let file = File::new("rpc-sockets");
+    let chain = file.open();
+    let config = Config {
+        max_connections: 1,
+        ..Config::default()
+    };
+    let served = serve(file, chain, config);
+    let address = served.rpc.local_addr();
+    let idle: Vec<TcpStream> = (0..2)
+        .map(|_| TcpStream::connect(address).unwrap())
+        .collect();
+    let call = json!({ "jsonrpc": "2.0", "id": 1, "method": "lr_getInfo", "params": [] });
+    let mut waiting = TcpStream::connect(address).unwrap();
+    waiting
+        .write_all(request(&call.to_string()).as_bytes())
+        .unwrap();
+    waiting
+        .set_read_timeout(Some(Duration::from_millis(500)))
+        .unwrap();
+    assert!(waiting.read(&mut [0; 1]).is_err(), "not accepted yet");
+    drop(idle);
+    waiting
+        .set_read_timeout(Some(Duration::from_secs(5)))
+        .unwrap();
+    let mut answer = String::new();
+    waiting.read_to_string(&mut answer).unwrap();
+    assert!(answer.contains("\"height\":0"), "{answer}");
 }

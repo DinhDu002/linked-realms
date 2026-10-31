@@ -2,12 +2,12 @@
 //! event from another Node, a tick each second, or a call from the RPC, so the Node itself needs
 //! no lock.
 
-use std::sync::Mutex;
 use std::sync::mpsc::{self, Receiver, Sender, TryRecvError};
+use std::sync::{Arc, Mutex};
 use std::thread::{self, JoinHandle};
 use std::time::{Duration, SystemTime, UNIX_EPOCH};
 
-use linked_realms_core::block::Header;
+use linked_realms_core::block::{Block, Header};
 use tokio::sync::{broadcast, oneshot};
 
 use crate::Error;
@@ -17,13 +17,22 @@ use crate::p2p::{Node, Tcp, Waker};
 /// that sees a gap reads what it missed (docs/protocols/node-rpc.md).
 pub const JOINED: usize = 256;
 
+/// A Block that joined the best chain, with its body if the Node holds it (not a state
+/// snapshot's), read once for every subscriber.
+#[derive(Debug)]
+pub struct Joined {
+    pub header: Header,
+    pub block: Option<Block>,
+}
+
 /// Something to do on the Node's thread; `None` stops it.
 type Call<H> = Option<Box<dyn FnOnce(&mut Node<H>, &mut Tcp) + Send>>;
 
 pub struct Running<H> {
     calls: Sender<Call<H>>,
     waker: Waker,
-    joined: broadcast::Sender<Header>,
+    // Weak, so the channel closes when the Node's thread ends and subscribers hear of it.
+    joined: broadcast::WeakSender<Arc<Joined>>,
     thread: Mutex<Option<JoinHandle<Result<(), Error>>>>,
 }
 
@@ -33,15 +42,15 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Running<H> {
         let (calls, inbox) = mpsc::channel();
         let (joined, _) = broadcast::channel(JOINED);
         let waker = tcp.waker();
-        let announce = joined.clone();
+        let weak = joined.downgrade();
         let thread = thread::Builder::new()
             .name("lr-node".into())
-            .spawn(move || work(node, tcp, inbox, announce))
+            .spawn(move || work(node, tcp, inbox, joined))
             .expect("a thread");
         Running {
             calls,
             waker,
-            joined,
+            joined: weak,
             thread: Mutex::new(Some(thread)),
         }
     }
@@ -61,9 +70,10 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Running<H> {
         answer.await.ok()
     }
 
-    /// The headers of the Blocks that join the best chain from now on, lowest first.
-    pub fn joined(&self) -> broadcast::Receiver<Header> {
-        self.joined.subscribe()
+    /// The Blocks that join the best chain from now on, lowest first; `None` if the Node
+    /// stopped.
+    pub fn joined(&self) -> Option<broadcast::Receiver<Arc<Joined>>> {
+        self.joined.upgrade().map(|joined| joined.subscribe())
     }
 
     /// Stops the Node once it is done with what it is doing, and says why it stopped: `Ok` if it
@@ -80,7 +90,7 @@ fn work<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]>(
     mut node: Node<H>,
     mut tcp: Tcp,
     inbox: Receiver<Call<H>>,
-    joined: broadcast::Sender<Header>,
+    joined: broadcast::Sender<Arc<Joined>>,
 ) -> Result<(), Error> {
     let mut tip = node.chain.tip()?.id();
     let mut ticked = 0;
@@ -106,7 +116,8 @@ fn work<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]>(
         if new != tip {
             if joined.receiver_count() > 0 {
                 for header in node.chain.joined_since(&tip, JOINED as u64)? {
-                    let _ = joined.send(header);
+                    let block = node.chain.block(&header.id())?;
+                    let _ = joined.send(Arc::new(Joined { header, block }));
                 }
             }
             tip = new;

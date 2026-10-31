@@ -18,7 +18,7 @@ TCP, proposed port 9444. A Node behind NAT only dials out; it listens only when 
 | checksum | 4 | the first 4 bytes of `keccak256(payload)` |
 | payload | length | |
 
-A frame with another magic, a length above 2 MiB (refused before its payload comes), a wrong checksum or a payload that does not read as its command bans the sender. A command a Node does not know is skipped, so a later version can add commands.
+A frame with a length above 2 MiB (refused before its payload comes), a wrong checksum or a payload that does not read as its command bans the sender; one with another magic, another network's Node, drops the connection without a ban. A command a Node does not know is skipped, so a later version can add commands.
 
 ## Messages
 
@@ -61,4 +61,4 @@ A ban is of the IP address, for 24 hours, at once: no honest Node sends any of t
 - a Block or Checkpoint a rule refuses, or a Block on a branch already refused;
 - headers a rule refuses during a state snapshot; a snapshot part out of key order, that says more follow but is not full, with more accounts than 50 a Block below the Checkpoint, or whose root is wrong.
 
-A connection is dropped, without a ban, when: another genesis or the Node's own nonce comes in `version`; the handshake takes more than 60 seconds; the peer sends no whole message for 180 seconds (it is pinged after 60); it sends none of the Blocks asked of it, or no snapshot part, for 120 seconds; or more than 32 MiB wait to be written to it.
+A connection is dropped, without a ban, when: a frame has another magic, or another genesis or the Node's own nonce comes in `version`; the handshake takes more than 60 seconds; the peer sends no whole message for 180 seconds (it is pinged after 60); it sends none of the Blocks asked of it, or no snapshot part, for 120 seconds; or more than 32 MiB wait to be written to it.

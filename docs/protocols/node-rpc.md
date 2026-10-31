@@ -7,7 +7,7 @@ The admin methods (`node_info`, `lr_getConnections`, `lr_addNode`) and every `mi
 ## Transport
 
 - JSON-RPC 2.0 over HTTP `POST` and over WebSocket, on one port: proposed 9445, on `127.0.0.1` by default. A Public node puts it behind a proxy.
-- A request is at most 64 KiB. Batches are not served (error -32005). At most 128 connections at once, and 16 subscriptions on one WebSocket.
+- A request is at most 64 KiB. Batches are not served (error -32005). At most 128 requests or WebSockets at once, and 16 subscriptions on one WebSocket. At most 256 sockets are open, idle ones included; past that, new connections wait to be accepted. A WebSocket is pinged every 30 seconds and closed if no answer comes within 40.
 - **CORS**, because browsers call it: every answer carries `Access-Control-Allow-Origin: *`. A preflight `OPTIONS` gets `204` with `Access-Control-Allow-Methods: POST, OPTIONS`, `Access-Control-Allow-Headers: content-type` and `Access-Control-Max-Age: 86400`. Nothing here needs a cookie or a credential.
 - **Rate limit:** each client has a bucket of calls that fills by 10 a second up to 50; a call over it gets -32005. A client is an IPv4 address, or an IPv6 /64. At most 10,000 clients are tracked: past that a new client takes the place of one whose bucket filled again, or is refused until one does. Behind a proxy every client is the proxy's address; how the proxy passes the client's on comes with the Public node (item 18).
 
@@ -79,7 +79,7 @@ Notes:
 - `pruned` is the height below which this Node no longer holds bodies (0 for none); `archive` is true if it never prunes. `time` is the tip's timestamp.
 - `lr_getAddressTxs` counts transfers to and from the address and its key rotations, not Block rewards, and only what the Node holds bodies for: a pruning Node forgets the index below what it pruned.
 - `lr_estimateFee` fills a Block with the held transactions by fee rate, leaving room for the largest transfer; if they all fit it is the minimum rate, otherwise one above the rate of the first that does not. It does not look at nonce order.
-- A Checkpoint is checked against the network's key and taken even if its Block is not known yet: it is held, the branches that contradict it are cut, and it applies when its Block comes. A lower one than the latest is taken and the latest stays. A taken Checkpoint is passed on to the other Nodes.
+- A Checkpoint is checked against the network's key and taken even if its Block is not known yet: it is held, the branches that contradict it are cut, and it applies when its Block comes. A lower one than the latest is taken and the latest stays. One higher than the latest held is passed on to the other Nodes.
 - A sent transaction is checked by the rules and the mempool's policy (`docs/protocols/transactions.md`, "Mempool") and passed on to the other Nodes.
 
 ## Subscriptions (WebSocket only)
@@ -91,7 +91,7 @@ Notes:
 
 - `lr_block` comes for each Block that joins the best chain, lowest first. After a reorganisation the new branch's Blocks come again from where it parts; a client that keeps Headers by height replaces what it had. At most the last 256 come for one change, so a client that sees a gap in the heights reads what it missed with `lr_getHeaders`.
 - `lr_addressTx` comes for each transaction of a joining Block that the address sent or received. A Block whose body the Node does not hold (one below a state snapshot) tells nothing.
-- A client that does not read fast enough falls more than 256 Headers behind, and the subscription closes with an error; it reads what it missed and subscribes again.
+- A client that does not read fast enough falls more than 256 Headers behind, and the subscription closes with an error; it reads what it missed and subscribes again. A subscription also closes with an error when the Node stops, and a new one is refused (-32603).
 
 ## Errors
 

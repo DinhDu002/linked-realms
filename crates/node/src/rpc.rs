@@ -19,8 +19,9 @@ use jsonrpsee::server::middleware::rpc::{
     Batch, Notification, Request, RpcServiceBuilder, RpcServiceT,
 };
 use jsonrpsee::server::{
-    BatchRequestConfig, HttpBody, HttpResponse, MethodResponse, Methods, RpcModule, Server,
-    ServerConfig, ServerHandle, SubscriptionMessage, serve_with_graceful_shutdown, stop_channel,
+    BatchRequestConfig, HttpBody, HttpResponse, MethodResponse, Methods, PingConfig, RpcModule,
+    Server, ServerConfig, ServerHandle, SubscriptionMessage, serve_with_graceful_shutdown,
+    stop_channel,
 };
 use jsonrpsee::types::{ErrorObject, ErrorObjectOwned, Id};
 use linked_realms_core::Address;
@@ -32,6 +33,7 @@ use linked_realms_core::tx::{Kind, Tx};
 use serde::Deserialize;
 use serde_json::{Value, json};
 use tokio::runtime::Runtime;
+use tokio::sync::Semaphore;
 use tokio::sync::broadcast::error::RecvError;
 use tower::Service;
 
@@ -109,6 +111,8 @@ impl Rpc {
                     .max_request_body_size(MAX_REQUEST)
                     .max_subscriptions_per_connection(SUBSCRIPTIONS_PER_CONNECTION)
                     .set_batch_request_config(BatchRequestConfig::Disabled)
+                    // A WebSocket whose client is gone frees its place.
+                    .enable_ws_ping(PingConfig::new())
                     .build(),
             )
             .set_rpc_middleware(RpcServiceBuilder::new().layer_fn(move |service| Limit {
@@ -119,8 +123,15 @@ impl Rpc {
         let listener = runtime.block_on(tokio::net::TcpListener::bind(config.listen))?;
         let address = listener.local_addr()?;
         let (stopped, stop) = stop_channel();
+        // Open sockets, idle ones included, so clients cannot spend the file descriptors the
+        // Node's other Nodes and its database need; past it, connections wait to be accepted.
+        let sockets = Arc::new(Semaphore::new(2 * config.max_connections as usize));
         runtime.spawn(async move {
             loop {
+                let permit = tokio::select! {
+                    permit = sockets.clone().acquire_owned() => permit.expect("never closed"),
+                    _ = stopped.clone().shutdown() => return,
+                };
                 let (socket, remote) = tokio::select! {
                     accepted = listener.accept() => match accepted {
                         Ok(accepted) => accepted,
@@ -136,7 +147,10 @@ impl Rpc {
                 let (builder, methods, stopped2) =
                     (builder.clone(), methods.clone(), stopped.clone());
                 let client = Client(remote.ip());
+                // Held by the connection's service, so it goes when the connection does.
+                let permit = Arc::new(permit);
                 let service = tower::service_fn(move |mut request: http::Request<_>| {
+                    let _ = &permit;
                     let mut service = builder.clone().build(methods.clone(), stopped2.clone());
                     async move {
                         if request.method() == Method::OPTIONS {
@@ -211,7 +225,7 @@ struct Clients {
 impl Clients {
     /// Takes `calls` from `ip`'s bucket, if it holds them.
     fn take(&self, ip: IpAddr, calls: usize, now: Instant) -> bool {
-        let ip = match ip {
+        let ip = match ip.to_canonical() {
             IpAddr::V6(v6) => IpAddr::V6((u128::from(v6) & !(u128::MAX >> 64)).into()),
             v4 => v4,
         };
@@ -323,10 +337,12 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Context<H> {
         match self.running.call(look).await {
             Some(Ok(seen)) => Ok(seen),
             Some(Err(error)) => Err(internal(error)),
-            None => Err(internal("the Node stopped")),
+            None => Err(internal(STOPPED)),
         }
     }
 }
+
+const STOPPED: &str = "the Node stopped";
 
 fn internal(error: impl ToString) -> ErrorObjectOwned {
     ErrorObject::owned(-32603, error.to_string(), None::<()>)
@@ -570,14 +586,17 @@ fn methods<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static>(
         "lr_block",
         "lr_unsubscribeBlocks",
         |_, pending, ctx, _| async move {
-            let mut joined = ctx.running.joined();
+            let Some(mut joined) = ctx.running.joined() else {
+                pending.reject(internal(STOPPED)).await;
+                return Ok(());
+            };
             let sink = pending.accept().await?;
             loop {
-                let header = tokio::select! {
-                    header = joined.recv() => header.map_err(fell_behind)?,
+                let joined = tokio::select! {
+                    joined = joined.recv() => joined.map_err(fell_behind)?,
                     _ = sink.closed() => return Ok(()),
                 };
-                sink.send(message(&header_json(&header))?).await?;
+                sink.send(message(&header_json(&joined.header))?).await?;
             }
         },
     )?;
@@ -593,20 +612,22 @@ fn methods<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static>(
                     return Ok(());
                 }
             };
-            let mut joined = ctx.running.joined();
+            let Some(mut joined) = ctx.running.joined() else {
+                pending.reject(internal(STOPPED)).await;
+                return Ok(());
+            };
             let sink = pending.accept().await?;
             let chain_params = ctx.params.clone();
             loop {
-                let header = tokio::select! {
-                    header = joined.recv() => header.map_err(fell_behind)?,
+                let joined = tokio::select! {
+                    joined = joined.recv() => joined.map_err(fell_behind)?,
                     _ = sink.closed() => return Ok(()),
                 };
-                let id = header.id();
                 // Without its body (a state snapshot's Blocks) there is nothing to tell.
-                let block = ctx.ask(move |node, _| node.chain.block(&id)).await;
-                let Some(block) = block.map_err(|error| error.message().to_string())? else {
+                let Some(block) = &joined.block else {
                     continue;
                 };
+                let (id, height) = (joined.header.id(), joined.header.height);
                 for (place, tx) in (0..).zip(&block.txs) {
                     let to = match &tx.kind {
                         Kind::Transfer { to, .. } => Some(*to),
@@ -616,7 +637,7 @@ fn methods<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static>(
                         let placed = Placed {
                             tx: tx.clone(),
                             block: id,
-                            height: header.height,
+                            height,
                             place,
                         };
                         sink.send(message(&placed_json(&chain_params, &placed))?)
@@ -636,7 +657,7 @@ fn message(value: &Value) -> Result<SubscriptionMessage, serde_json::Error> {
 fn fell_behind(error: RecvError) -> String {
     match error {
         RecvError::Lagged(_) => "fell behind: read what was missed, then subscribe again".into(),
-        RecvError::Closed => "the Node stopped".into(),
+        RecvError::Closed => STOPPED.into(),
     }
 }
 

@@ -183,8 +183,8 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
     pub fn headers_from(&self, height: u64, max: u64) -> Result<Vec<Header>, Error> {
         self.read(|t| {
             let tip = t.header(&t.tip()).expect("a stored tip").header.height;
-            let last = tip.min(height.saturating_add(max).saturating_sub(1));
-            Ok((height..=last)
+            let end = tip.saturating_add(1).min(height.saturating_add(max));
+            Ok((height..end)
                 .map(|at| {
                     let id = t.best(at).expect("a Block at every height");
                     t.header(&id).expect("a stored header").header
