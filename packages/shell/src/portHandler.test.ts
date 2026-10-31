@@ -193,10 +193,12 @@ describe("pay", () => {
   it.each([
     ["no amount", { amount: undefined }],
     ["an amount that is a number", { amount: 1.5 }],
+    ["an amount in a list", { amount: ["1.5"] }],
     ["an amount with a space", { amount: " 1.5" }],
     ["nine decimals", { amount: "0.000000001" }],
     ["a zero amount", { amount: "0" }],
     ["a recipient that is not an address", { recipient: "tlr1x" }],
+    ["a recipient in a list", { recipient: [RECIPIENT] }],
     ["a recipient with a space", { recipient: `${RECIPIENT} ` }],
     ["a memo that is not text", { memo: 5 }],
     ["a memo over 80 bytes", { memo: "é".repeat(41) }],
