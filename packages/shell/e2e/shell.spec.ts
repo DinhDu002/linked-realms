@@ -1,3 +1,5 @@
+import type { Frame, Page } from "@playwright/test";
+import { Key } from "@linked-realms/core";
 import {
   parseStatement,
   verifyStatement,
@@ -18,7 +20,19 @@ import {
   unlock,
   unlockDialog,
 } from "./fixtures.ts";
-import { HUB_URL, landOrigin } from "./ports.ts";
+import { HUB_URL, landOrigin, NODE_URL } from "./ports.ts";
+import type { SentTransfer } from "./node-stub.ts";
+
+/** A Character who never signs in: the address a Land asks to be paid at. */
+const RECIPIENT = Key.fromEntropy(new Uint8Array(32).fill(8), 0).address;
+
+/** The transfers the Node stub holds from one sender. */
+async function nodeSent(sender: string): Promise<SentTransfer[]> {
+  const sent = (await (
+    await fetch(`${NODE_URL}/__sent`)
+  ).json()) as SentTransfer[];
+  return sent.filter((t) => t.sender === sender);
+}
 
 interface Init {
   land: { landId: number; ownerName: string };
@@ -26,9 +40,9 @@ interface Init {
   handoff: Handoff;
 }
 
-const approve = (page: import("@playwright/test").Page) =>
+const approve = (page: Page) =>
   signPrompt(page).getByRole("button", { name: "Approve" });
-const deny = (page: import("@playwright/test").Page) =>
+const deny = (page: Page) =>
   signPrompt(page).getByRole("button", { name: "Deny" });
 
 test.describe("the frame", () => {
@@ -186,22 +200,6 @@ test.describe("the frame", () => {
     );
     expect(await received(frame, "signResult")).toEqual([]);
     expect(await received(frame, "travelRefused")).toEqual([]);
-  });
-
-  test("`pay` is refused", async ({ page }) => {
-    await openShell(page);
-    const frame = await enterLand(page, 1);
-    await send(frame, {
-      type: "pay",
-      id: "p1",
-      amount: "1.5",
-      recipient: "tlr1x",
-      memo: "Lantern",
-    });
-    await expect
-      .poll(() => received(frame, "signResult"))
-      .toEqual([{ type: "signResult", id: "p1", error: "unsupported" }]);
-    await expect(signPrompt(page)).toBeHidden();
   });
 
   test("a Land that reloads at once is stopped; a reload later gets a fresh handoff", async ({
@@ -383,6 +381,160 @@ test.describe("signing", () => {
     );
     await page.mouse.click(spot.x, spot.y);
     await expect.poll(() => frame.evaluate(() => land.clicks)).toBe(2);
+  });
+});
+
+test.describe("pay", () => {
+  const payPrompt = (page: Page) =>
+    page.getByRole("dialog", { name: "A Land asks you to pay" });
+  const pay = (
+    frame: Frame,
+    id: string,
+    fields: Record<string, unknown> = {},
+  ) =>
+    send(frame, {
+      type: "pay",
+      id,
+      amount: "1.5",
+      recipient: RECIPIENT,
+      memo: "Lantern",
+      ...fields,
+    });
+
+  test("is shown in the Shell's own prompt with the Land; nothing is sent until Approve is clicked", async ({
+    page,
+    character,
+  }) => {
+    await page.clock.install();
+    await openShell(page);
+    const frame = await enterLand(page, 1);
+    const before = (await nodeSent(character.address)).length;
+    await pay(frame, "p1");
+    const prompt = payPrompt(page);
+    await expect(prompt).toBeVisible();
+
+    // The Shell's rows: the Land that asks, the Character that pays, and the transfer it would
+    // sign. A first transaction carries the public key: 2,517 + 7 + 1,312 bytes at 10 a byte.
+    await expect(prompt.locator("#pay-land")).toHaveText(
+      `Land 1 (${landOrigin(1)})`,
+    );
+    await expect(prompt.locator("#pay-from")).toContainText(character.address);
+    await expect(prompt.locator("#pay-to")).toHaveText(RECIPIENT);
+    await expect(prompt.locator("#pay-amount")).toHaveText("1.5 GOLD");
+    await expect(prompt.locator("#pay-memo")).toHaveText("Lantern");
+    await expect(prompt.locator("#pay-fee")).toHaveText("0.0003836 GOLD");
+    await expect(prompt.locator("#pay-total")).toHaveText("1.5003836 GOLD");
+
+    // As for signing: an early click, the keyboard and a script's click do nothing.
+    const approve = prompt.getByRole("button", { name: "Approve" });
+    await expect(approve).not.toBeFocused();
+    await page.clock.pauseAt(new Date(Date.now() + 100));
+    await approve.click({ force: true });
+    await page.keyboard.press("Enter");
+    await page.clock.runFor(1500);
+    await approve.focus();
+    await page.keyboard.press("Enter");
+    await page.keyboard.press("Space");
+    await approve.evaluate((b) => (b as HTMLElement).click());
+    await page.waitForTimeout(300);
+    expect(await received(frame, "signResult")).toEqual([]);
+    expect(await nodeSent(character.address)).toHaveLength(before);
+    await expect(prompt).toBeVisible();
+
+    await approve.click();
+    await expect(prompt).toBeHidden();
+    await expect.poll(() => received(frame, "signResult")).toHaveLength(1);
+    const [result] = (await received(frame, "signResult")) as unknown as [
+      { id: string; txId: string },
+    ];
+    expect(result.id).toBe("p1");
+    const sent = (await nodeSent(character.address)).slice(before);
+    expect(sent).toEqual([
+      {
+        id: result.txId,
+        sender: character.address,
+        to: RECIPIENT,
+        amount: "150000000",
+        fee: "38360",
+        memo: "Lantern",
+      },
+    ]);
+  });
+
+  test("shares the limits of signing: busy, denied and blocked, and nothing is sent", async ({
+    page,
+    character,
+  }) => {
+    await page.clock.install();
+    await openShell(page);
+    const frame = await enterLand(page, 1);
+    const before = (await nodeSent(character.address)).length;
+    const errors = async () =>
+      (await received(frame, "signResult")).map((m) => `${m.id} ${m.error}`);
+
+    await pay(frame, "a");
+    await expect(payPrompt(page)).toBeVisible();
+    // One request at a time, a payment or a signature.
+    await pay(frame, "b");
+    await send(frame, { type: "signMessage", id: "c", text: "c" });
+    await expect.poll(errors).toEqual(["b busy", "c busy"]);
+    await payPrompt(page).getByRole("button", { name: "Deny" }).click();
+    await expect.poll(errors).toEqual(["b busy", "c busy", "a denied"]);
+    // After a refusal, busy for 10 seconds.
+    await pay(frame, "d");
+    await expect.poll(errors).toContain("d busy");
+
+    // A refused signature and a refused payment count toward the same 3.
+    await page.clock.fastForward(10_500);
+    await send(frame, { type: "signMessage", id: "e", text: "e" });
+    await deny(page).click();
+    await expect.poll(errors).toContain("e denied");
+    await page.clock.fastForward(10_500);
+    await pay(frame, "f");
+    await expect(payPrompt(page)).toBeVisible();
+    await page.keyboard.press("Escape");
+    await expect.poll(errors).toContain("f denied");
+    await page.clock.fastForward(10_500);
+    await pay(frame, "g");
+    await expect
+      .poll(errors)
+      .toEqual([
+        "b busy",
+        "c busy",
+        "a denied",
+        "d busy",
+        "e denied",
+        "f denied",
+        "g blocked",
+      ]);
+    await expect(payPrompt(page)).toBeHidden();
+    expect(await nodeSent(character.address)).toHaveLength(before);
+  });
+
+  test("a payment that is not well formed as given is invalid, with no prompt", async ({
+    page,
+  }) => {
+    await openShell(page);
+    const frame = await enterLand(page, 1);
+    const cases: Record<string, unknown>[] = [
+      { recipient: "tlr1x" },
+      { recipient: ` ${RECIPIENT}` },
+      { recipient: RECIPIENT.toUpperCase() },
+      { amount: "0" },
+      { amount: "1.5 " },
+      { amount: 1.5 },
+      { memo: "é".repeat(41) },
+      { memo: 7 },
+    ];
+    for (const [i, fields] of cases.entries())
+      await pay(frame, `i${i}`, fields);
+    await expect
+      .poll(async () => (await received(frame, "signResult")).length)
+      .toBe(cases.length);
+    expect(
+      new Set((await received(frame, "signResult")).map((m) => m.error)),
+    ).toEqual(new Set(["invalid"]));
+    await expect(payPrompt(page)).toBeHidden();
   });
 });
 
@@ -775,7 +927,9 @@ test.describe("the Shell's own controls", () => {
     expect(headers["cross-origin-opener-policy"]).toBe("same-origin");
     const csp = headers["content-security-policy"]!;
     expect(csp).toContain("script-src 'self' 'wasm-unsafe-eval'");
-    expect(csp).toContain("connect-src 'self' http://localhost:8791");
+    expect(csp).toContain(
+      "connect-src 'self' http://localhost:8791 http://localhost:8794",
+    );
     expect(csp).toContain("frame-ancestors 'none'");
     expect(csp).toContain("object-src 'none'");
     expect(csp).toContain("base-uri 'none'");

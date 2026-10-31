@@ -15,6 +15,8 @@ export interface PaymentView {
   memo: string;
   fee: string;
   total: string;
+  /** The Land that asks for the payment, with its origin; none when the Player sends from Home. */
+  land?: string;
 }
 
 export function createModals(setFrozen: (frozen: boolean) => void) {
@@ -119,7 +121,10 @@ export function createModals(setFrozen: (frozen: boolean) => void) {
     );
   }
 
-  /** The payment prompt: every line is the Shell's own, with the full recipient address. */
+  /**
+   * The payment prompt: every line is the Shell's own, with the full recipient address, and the
+   * Land that asks, if one does.
+   */
   function confirmPayment(payment: PaymentView): Promise<SignAnswer> {
     if (finishPrompt) return Promise.resolve("busy");
     const fields = {
@@ -131,8 +136,14 @@ export function createModals(setFrozen: (frozen: boolean) => void) {
       "pay-total": payment.total,
     };
     for (const [id, text] of Object.entries(fields)) el(id).textContent = text;
+    el("pay-title").textContent = payment.land
+      ? "A Land asks you to pay"
+      : "Send Gold";
+    el("pay-land").textContent = payment.land ?? "";
+    el("pay-land").hidden = el("pay-land-label").hidden = !payment.land;
     return armedPrompt(el<HTMLDialogElement>("pay"), el("pay-approve"), () => {
-      for (const id of Object.keys(fields)) el(id).textContent = "";
+      for (const id of [...Object.keys(fields), "pay-land"])
+        el(id).textContent = "";
     });
   }
 
