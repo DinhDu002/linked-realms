@@ -84,8 +84,11 @@ export class LandScene extends Phaser.Scene {
   private owner = { address: "", name: "" };
   private mineView?: MineView;
   private mineArt?: MineArt;
-  /** The running Mine's pulse and sparks, stopped on each change. */
-  private motions: (Phaser.Tweens.Tween | Phaser.Time.TimerEvent)[] = [];
+  /** The running Mine's pulse, and its glow and period ("" while still). */
+  private pulse?: Phaser.Tweens.Tween;
+  private pulseKey = "";
+  /** Sparks owed since the last frame, carried so a slow rate still sparks. */
+  private sparkDue = 0;
   private spin = 0;
   private readonly reducedMotion =
     globalThis.matchMedia?.("(prefers-reduced-motion: reduce)").matches ??
@@ -238,38 +241,32 @@ export class LandScene extends Phaser.Scene {
     this.animateMine();
   }
 
-  /** Starts or stops the Mine's pulse, spin and sparks for the last MineState (P5). */
+  /** Starts, changes or stops the Mine's pulse for the last MineState (P5); update() spins and sparks. */
   private animateMine(): void {
     const art = this.mineArt;
     if (!art) return;
-    for (const m of this.motions) m.destroy();
-    this.motions = [];
     const motion = mineMotion(this.mineView);
     art.gear.setVisible(motion !== undefined);
-    art.glow.setAlpha(0).setScale(1);
     // prefers-reduced-motion: no pulse, spin or sparks; the HUD line says it all.
-    if (!motion || this.reducedMotion) return;
-    art.glow.setAlpha(motion.glow * 0.3);
-    this.motions.push(
-      this.tweens.add({
-        targets: art.glow,
-        alpha: motion.glow,
-        scale: 1.15,
-        duration: motion.pulseMs / 2,
-        yoyo: true,
-        repeat: -1,
-        ease: "Sine.easeInOut",
-      }),
-      this.time.addEvent({
-        delay: 1000 / motion.sparksPerSecond,
-        loop: true,
-        callback: () => {
-          const half = (art.size / 2) * 0.6;
-          const x = art.x + Phaser.Math.Between(-half, half);
-          this.spark(x, art.y, 0, -Phaser.Math.Between(24, 40));
-        },
-      }),
-    );
+    const moving = this.reducedMotion ? undefined : motion;
+    // A MineState comes every 2 seconds: the pulse restarts only when its look changes.
+    const key = moving ? `${moving.glow}/${moving.pulseMs}` : "";
+    if (key !== this.pulseKey) {
+      this.pulseKey = key;
+      this.pulse?.remove();
+      this.pulse = undefined;
+      art.glow.setAlpha(moving ? moving.glow * 0.3 : 0).setScale(1);
+      if (moving)
+        this.pulse = this.tweens.add({
+          targets: art.glow,
+          alpha: moving.glow,
+          scale: 1.15,
+          duration: moving.pulseMs / 2,
+          yoyo: true,
+          repeat: -1,
+          ease: "Sine.easeInOut",
+        });
+    }
   }
 
   /** One small gold spark from (x, y), moving by (dx, dy) as it fades. */
@@ -328,10 +325,21 @@ export class LandScene extends Phaser.Scene {
   update(_time: number, deltaMs: number): void {
     this.sendInput();
     const motion = mineMotion(this.mineView);
-    if (motion && this.mineArt && !this.reducedMotion) {
+    const art = this.mineArt;
+    if (motion && art && !this.reducedMotion) {
       this.spin =
         (this.spin + (motion.spinDegPerSecond * deltaMs) / 1000) % 360;
-      this.mineArt.gear.setAngle(this.spin);
+      art.gear.setAngle(this.spin);
+      // ponytail: at most 2 owed sparks, so a tab back from the background does not burst.
+      this.sparkDue = Math.min(
+        2,
+        this.sparkDue + (motion.sparksPerSecond * deltaMs) / 1000,
+      );
+      for (; this.sparkDue >= 1; this.sparkDue--) {
+        const half = (art.size / 2) * 0.6;
+        const x = art.x + Phaser.Math.Between(-half, half);
+        this.spark(x, art.y, 0, -Phaser.Math.Between(24, 40));
+      }
     }
     this.syncViews();
     for (const [id, view] of this.views) {
