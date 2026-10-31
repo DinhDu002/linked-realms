@@ -46,6 +46,55 @@ const MIGRATIONS: { id: string; statements: string[] }[] = [
        )`,
     ],
   },
+  // Step 2B: the world leaves the chain. The old rows are testnet data and are wiped.
+  { id: "003-drop-sponsorship", statements: ["DROP TABLE sponsorship"] },
+  {
+    id: "004-lands",
+    statements: [
+      "DROP TABLE delegation",
+      // the newest Map server statement per key (docs/protocols/map-server-hub-relay.md)
+      `CREATE TABLE map_server (
+         key        text PRIMARY KEY,
+         owner      text NOT NULL,
+         statement  text NOT NULL,
+         public_key text NOT NULL,
+         signature  text NOT NULL,
+         issued_at  bigint NOT NULL
+       )`,
+      // one Land per Character; statement, public_key and signature are its newest Delegation
+      `CREATE TABLE land (
+         id                bigint GENERATED ALWAYS AS IDENTITY PRIMARY KEY,
+         owner             text NOT NULL UNIQUE,
+         map_server_key    text NOT NULL UNIQUE,
+         statement         text NOT NULL,
+         public_key        text NOT NULL,
+         signature         text NOT NULL,
+         issued_at         bigint NOT NULL,
+         cell              integer UNIQUE,
+         cell_lost_at      bigint,
+         last_online_at    bigint,
+         domain            text UNIQUE,
+         domain_checked_at bigint,
+         hidden            boolean NOT NULL DEFAULT false,
+         created_at        bigint NOT NULL,
+         updated_at        bigint NOT NULL
+       )`,
+      `CREATE TABLE character (
+         address    text PRIMARY KEY,
+         name       text NOT NULL,
+         updated_at bigint NOT NULL
+       )`,
+      // new Lands per network address (IPv4, or IPv6 /64) per UTC day
+      `CREATE TABLE land_quota (
+         network text NOT NULL,
+         day     integer NOT NULL,
+         count   integer NOT NULL,
+         PRIMARY KEY (network, day)
+       )`,
+    ],
+  },
+  // its Land ids were the chain's
+  { id: "005-empty-report", statements: ["DELETE FROM report"] },
 ];
 
 /** Applies pending migrations; safe to run on every start-up. */

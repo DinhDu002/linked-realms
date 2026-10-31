@@ -1,10 +1,15 @@
 name: linked-realms
 
-# The "world" profile (docker compose --profile world up -d) adds the Hub, the relay and three Map
-# servers on top of the default services. Run it as its own project so it never touches the
-# default stack's state:
-#   ANVIL_PORT=8546 POSTGRES_PORT=5433 docker compose -p linked-realms-world --profile world up -d --build
-# Every key below comes from anvil's public test mnemonic: local development only, never secret.
+# The "world" profile (docker compose --profile world up -d) adds the Hub, the relay, the Shell, a
+# seed Node of LR, the dashboard and two Map servers on top of PostgreSQL. Each Map server runs its
+# own Node on LR's dev network, whose easy fixed Target wins Blocks in seconds; every Mine is off
+# until its Land owner switches it on. Run it as its own project so it never touches the default
+# stack's state:
+#   POSTGRES_PORT=5433 docker compose -p linked-realms-world --profile world up -d --build
+# Then open the Shell at http://localhost:8788 (README: Run the world).
+#
+# DEVELOPMENT KEYS. Every key and Character below is public: local development only, never for
+# anything that holds value. The Characters' 24 words are in the README and the world e2e test.
 
 x-node: &node
   build: .
@@ -15,14 +20,19 @@ x-node: &node
 x-map: &map
   <<: *node
   environment: &map-env
-    RPC_URL: http://anvil:8545
+    HUB_URL: http://hub-api:8787
+    # The Hub's host as statements name it: the one the Shell uses.
+    HUB_DOMAIN: localhost:${HUB_PORT:-8787}
+    # The ticket signer comes from the Hub's GET /keys. The relay is pinned: the Hub publishes the
+    # address a Map server on this machine dials, and inside compose the relay is relay:8080.
     RELAY_URL: ws://relay:8080
-    # anvil dev account 9, the address of HUB_TICKET_KEY below
-    HUB_TICKET_SIGNER: "0xa0Ee7A142d267C1f36714E4a8F75612F20a79720"
+    # The Land's Node, which the Map server spawns with its chain in /data/lr-node.
+    NODE_NETWORK: dev
+    NODE_SEEDS: seed:9444
   depends_on:
-    seed:
-      condition: service_completed_successfully
     relay:
+      condition: service_healthy
+    seed:
       condition: service_healthy
   healthcheck:
     test: ["CMD-SHELL", "nc -z 127.0.0.1 2567"]
@@ -47,68 +57,26 @@ services:
       timeout: 3s
       retries: 10
 
-  anvil:
-    image: ghcr.io/foundry-rs/foundry:v1.8.6
-    entrypoint: ["anvil", "--host", "0.0.0.0", "--chain-id", "31337"]
-    ports:
-      - "127.0.0.1:${ANVIL_PORT:-8545}:8545"
-    healthcheck:
-      test: ["CMD", "cast", "chain-id", "--rpc-url", "http://127.0.0.1:8545"]
-      interval: 5s
-      timeout: 3s
-      retries: 10
-
-  deploy:
-    profiles: [world]
-    image: ghcr.io/foundry-rs/foundry:v1.8.6
-    restart: "no"
-    # Deploy.s.sol writes into the repo, so it runs on a copy (-L: contracts/node_modules is symlinks)
-    # and the result is compared with the committed addresses.
-    entrypoint: ["/bin/sh", "-ec"]
-    command:
-      - |
-        # docker compose up runs this again on a stack that is already deployed
-        land=$$(sed -n '/"Land"/,/}/s/.*"address": "\(0x[0-9a-fA-F]*\)".*/\1/p' /repo/packages/shared/src/deployments/31337.json)
-        if [ "$$(cast code "$$land" --rpc-url http://anvil:8545)" != "0x" ]; then
-          echo "Land is already deployed at $$land: nothing to do"
-          exit 0
-        fi
-        mkdir -p /tmp/work/packages/shared/src /tmp/work/packages/shared/test-vectors
-        cp -rL /repo/contracts /tmp/work/contracts
-        cp -r /repo/packages/shared/test-vectors/. /tmp/work/packages/shared/test-vectors/
-        mkdir -p /tmp/work/packages/shared/src/deployments
-        cd /tmp/work/contracts
-        forge script script/Deploy.s.sol --rpc-url http://anvil:8545 --broadcast --unlocked --sender 0xf39Fd6e51aad88F6F4ce6aB8827279cffFb92266
-        if ! diff /tmp/work/packages/shared/src/deployments/31337.json /repo/packages/shared/src/deployments/31337.json; then
-          echo "deployed addresses differ from packages/shared/src/deployments/31337.json: start from a fresh anvil (docker compose -p <project> down -v)" >&2
-          exit 1
-        fi
-        echo "deployed addresses match packages/shared/src/deployments/31337.json"
-    volumes:
-      - .:/repo:ro
-    depends_on:
-      anvil:
-        condition: service_healthy
-
   hub-api:
     <<: *node
     command: ["node", "packages/hub-api/src/main.ts"]
     environment:
       DATABASE_URL: postgres://${POSTGRES_USER:-linked_realms}:${POSTGRES_PASSWORD:-linked_realms}@postgres:5432/${POSTGRES_DB:-linked_realms}
-      RPC_URL: http://anvil:8545
-      RELAY_INTERNAL_URL: http://relay:8080
-      RELAY_PUBLIC_URL: http://127.0.0.1:${RELAY_PORT:-8080}
-      # anvil dev account 9: signs Travel tickets and holds nothing. LOCAL ONLY, public test key.
-      HUB_TICKET_KEY: "0x2a871d0798f97d79848a013d4936a73bf4cc922c825d33c1cf7073dff6d409c6"
+      HUB_DOMAIN: localhost:${HUB_PORT:-8787}
+      # Development key (32 bytes of 0x48): signs Travel tickets, which only let a Character in.
+      HUB_TICKET_KEY: "4848484848484848484848484848484848484848484848484848484848484848"
       HUB_SESSION_SECRET: local-only-session-secret-not-for-any-real-deployment
-      HUB_ALLOWED_ORIGINS: http://localhost:5173,http://127.0.0.1:5173
+      # The development admin (entropy of 32 bytes of 0x03).
+      HUB_ADMINS: tlr1qqqllx6mk2aqte7cu6qlpkdrdr4xt2g34dfy663wp8va0h23nrnwpdsq4rn2n
+      HUB_ALLOWED_ORIGINS: http://localhost:${SHELL_PORT:-8788}
+      RELAY_INTERNAL_URL: http://relay:8080
+      RELAY_PUBLIC_URL: ws://localhost:${RELAY_PORT:-8080}
+      LAND_BASE_DOMAIN: localhost:${RELAY_PORT:-8080}
     ports:
       - "127.0.0.1:${HUB_PORT:-8787}:8787"
     depends_on:
       postgres:
         condition: service_healthy
-      deploy:
-        condition: service_completed_successfully
     healthcheck:
       test: ["CMD-SHELL", "wget -qO- http://127.0.0.1:8787/health"]
       interval: 5s
@@ -120,8 +88,14 @@ services:
     command: ["node", "packages/relay/src/main.ts"]
     environment:
       HUB_URL: http://hub-api:8787
+      # The host Map servers dial; the Lands are <landId>.localhost:<RELAY_PORT>.
+      RELAY_HOST: relay:8080
+      LAND_BASE_DOMAIN: localhost:${RELAY_PORT:-8080}
+      SHELL_ORIGINS: http://localhost:${SHELL_PORT:-8788}
     ports:
+      # Both loopbacks: macOS resolves *.localhost to ::1 only.
       - "127.0.0.1:${RELAY_PORT:-8080}:8080"
+      - "[::1]:${RELAY_PORT:-8080}:8080"
     depends_on:
       hub-api:
         condition: service_healthy
@@ -131,37 +105,94 @@ services:
       timeout: 3s
       retries: 10
 
+  shell:
+    build:
+      context: .
+      target: shell
+      args:
+        VITE_HUB_URL: http://localhost:${HUB_PORT:-8787}
+        VITE_NODE_URL: http://localhost:${NODE_RPC_PORT:-9445}
+        VITE_NETWORK: dev
+    image: linked-realms-shell:local
+    profiles: [world]
+    restart: "no"
+    ports:
+      - "127.0.0.1:${SHELL_PORT:-8788}:80"
+
+  # The Node every Land's Node dials first. Its RPC is the world's Public node: the Shell reads
+  # balances and sends Gold through it.
   seed:
     <<: *node
-    command: ["node", "packages/map-server/scripts/seed-world.ts"]
+    command:
+      - lr-node
+      - --network
+      - dev
+      - --data
+      - /data
+      - --listen
+      - 0.0.0.0:9444
+      - --rpc
+      - 0.0.0.0:9445
+    ports:
+      - "127.0.0.1:${NODE_RPC_PORT:-9445}:9445"
+    volumes: [seed-data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9444"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # The world's public figures (docs/plans/phase-2c-the-chain.md, "Dashboard"), read from the
+  # seed's RPC and the Hub's Directory: http://localhost:8790.
+  dashboard:
+    <<: *node
+    command: ["node", "packages/dashboard/src/main.ts"]
     environment:
-      RPC_URL: http://anvil:8545
+      NODE_RPC_URL: http://seed:9445
       HUB_URL: http://hub-api:8787
-    volumes:
-      - map-1-data:/data/map-1
-      - map-2-data:/data/map-2
-      - map-3-data:/data/map-3
+    ports:
+      - "127.0.0.1:${DASHBOARD_PORT:-8790}:8790"
     depends_on:
       hub-api:
         condition: service_healthy
+      seed:
+        condition: service_healthy
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 8790"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
 
+  # Each Map server keeps its own key and its Node's chain in its volume, and names its owner. A
+  # Character registers it from the Shell's "Your Land". The limits show both of the Mine's modes
+  # and the thread cap: map-1 has room for fast mode's 2 GiB dataset and 2 threads (3 CPUs less
+  # one); map-2 mines in light mode with 1 thread.
   map-1:
     <<: *map
-    environment: { <<: *map-env, LAND_ID: "1" }
+    # Development Character 1 (entropy of 32 bytes of 0x01).
+    environment:
+      {
+        <<: *map-env,
+        LAND_OWNER: tlr1qqqanzv64uheqjxt9vau0el7p0gndh7rmaykuhd3g9h3dyu0fzrr0mqulz55w,
+      }
     volumes: [map-1-data:/data]
+    mem_limit: 3g
+    cpus: 3
 
   map-2:
     <<: *map
-    environment: { <<: *map-env, LAND_ID: "2" }
+    # Development Character 2 (entropy of 32 bytes of 0x02).
+    environment:
+      {
+        <<: *map-env,
+        LAND_OWNER: tlr1qqq6mwhq8utpqyv32mfjujhr0tquwgkaek95p2rheewme5q2hcm2zzg40pln3,
+      }
     volumes: [map-2-data:/data]
-
-  map-3:
-    <<: *map
-    environment: { <<: *map-env, LAND_ID: "3" }
-    volumes: [map-3-data:/data]
+    mem_limit: 1g
+    cpus: 2
 
 volumes:
   postgres-data:
+  seed-data:
   map-1-data:
   map-2-data:
-  map-3-data:

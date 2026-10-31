@@ -1,6 +1,6 @@
 # 0004 — Hub, relay and travel between Lands
 
-Status: accepted, 2026-10-29
+Status: accepted, 2026-10-29. Partly superseded on 2026-10-29: the Hub keeps Lands and cells itself (ADR 0007), identities are ML-DSA keys from the Shell (ADR 0008), and the Mining key is gone (ADR 0006).
 
 ## Context
 

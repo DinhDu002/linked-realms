@@ -1,6 +1,6 @@
 # @linked-realms/hub-api
 
-The Hub's HTTP API (Hono on `@hono/node-server`, viem, PostgreSQL). It keeps the Directory of Lands, registers Delegations, signs Travel tickets and takes abuse reports. Design: `docs/plans/phase-1c-connectivity.md` and `docs/decisions/0004-hub-relay-and-travel.md`.
+The Hub's HTTP API (Hono on `@hono/node-server`, PostgreSQL). It registers Lands, gives them cells, keeps the Directory and Characters' names, signs Travel tickets and takes abuse reports. It holds no Player's key and touches no chain. Design: `docs/plans/phase-2b-world-without-chain.md`; protocols: `docs/protocols/`.
 
 ## Run
 
@@ -9,43 +9,54 @@ cp .env.example .env   # dev values only
 pnpm --filter @linked-realms/hub-api start
 ```
 
-Migrations run at start-up (`src/db.ts`, plain SQL, tracked in the `migration` table). Needs PostgreSQL, an RPC node with the contracts deployed (`packages/shared/src/deployments`) and, for online status, the relay.
+Migrations run at start-up (`src/db.ts`, plain SQL, tracked in the `migration` table). Needs PostgreSQL and, for online status, the relay. Signatures and addresses come from `@linked-realms/core` (the WebAssembly build of `crates/core`).
 
 ## Configuration
 
 | Variable | Default | Meaning |
 |---|---|---|
 | `DATABASE_URL` | required | PostgreSQL connection string |
-| `HUB_TICKET_KEY` | required | Signs Travel tickets; a server key that holds no assets. Map servers set `HUB_TICKET_SIGNER` to its address |
+| `HUB_TICKET_KEY` | required | 32-byte ML-DSA-44 seed in hex that signs Travel tickets; it grants entry only and holds no assets. Its address is printed at start and published at `GET /keys`, where Map servers read it |
 | `HUB_SESSION_SECRET` | required | HS256 secret for session tokens, at least 32 characters |
 | `PORT` | 8787 | |
-| `RPC_URL` / `CHAIN_ID` | `http://127.0.0.1:8545` / 31337 | |
-| `RELAY_PUBLIC_URL` | `http://127.0.0.1:8080` | Returned in the Directory; what clients use |
-| `RELAY_INTERNAL_URL` | `http://127.0.0.1:8080` | Polled for `GET /online` |
-| `HUB_SIWE_DOMAIN` | `localhost:5173` | The domain SIWE messages must name |
-| `HUB_ADMINS` | empty | Comma-separated addresses that may hide Lands |
-| `HUB_ALLOWED_ORIGINS` | empty | Comma-separated CORS origins |
-| `HUB_BUNDLER_URL` | unset | ERC-4337 bundler and ERC-7677 paymaster endpoint (CDP); a secret, since the URL holds the API key. Unset: `POST /aa` answers 503 |
+| `HUB_DOMAIN` | `localhost:8787` | This Hub's host: the `Hub:` line every statement must carry |
+| `RELAY_INTERNAL_URL` | `http://127.0.0.1:8080` | Read for `GET /online` |
+| `RELAY_PUBLIC_URL` | unset | `ws://` or `wss://` URL of the relay as Map servers dial it, published at `GET /keys`; unset publishes `null` |
+| `LAND_BASE_DOMAIN` / `LAND_URL_SCHEME` | `localhost:8080` / `http` | Land URLs: `<scheme>://<landId>.<base domain>` |
+| `HUB_ADMINS` | empty | Comma-separated `tlr1…` addresses that may hide Lands |
+| `HUB_ALLOWED_ORIGINS` | empty | Comma-separated CORS origins (the Shell's) |
+| `HUB_TRUSTED_PROXIES` | empty | IPs or CIDRs of the reverse proxy in front of the Hub. Empty: the client is the socket's peer. Set: behind such a peer, the client is the rightmost `X-Forwarded-For` entry that is not a trusted proxy |
 
 ## Routes
 
-`GET /health`, `GET /auth/nonce`, `POST /auth/verify`, `GET /directory`, `GET /directory/:landId`, `POST /lands/:landId/delegation`, `POST /tickets`, `POST /reports`, `POST /aa`, `GET /admin/reports`, `POST /admin/lands/:landId/hidden`. Errors are `{ "error": "..." }` with no stack traces or RPC details. Protected routes take `Authorization: Bearer <token>`.
+Errors are `{ "error": "..." }`. Session routes take `Authorization: Bearer <token>`. Signed statements travel as `{ statement, publicKey, signature }` (`docs/protocols/identity.md`).
 
-Notes on behaviour:
+| Method and path | Auth | |
+|---|---|---|
+| `GET /health` | — | `ok` |
+| `GET /keys` | — | `{ ticket: { address, publicKey }, relayUrl }`: Map servers take the ticket signer and the relay from it unless they pin them (ADR 0010) |
+| `POST /auth/verify` | — | A sign-in statement with `Issued` within 60 s of the Hub's clock, used once. Returns `{ token, address, name, expiresAt }` (1 hour) |
+| `PUT /me/name` | session | `{ name }`: trimmed, 1–32 code points, no control or format characters |
+| `POST /map-servers` | signature | A Map server statement within 5 minutes of the Hub's clock. `204`; `409` if a newer one from the key exists |
+| `GET /map-servers?owner=` | session (that owner) | `{ mapServers: [{ mapServerKey, issued }] }`: keys that named this Character and serve no Land |
+| `POST /lands` | signature | A Delegation. Creates the Land (`201 { landId }`) or, for an owner who has one, replaces its Map server key with a newer Delegation (`200`; the registered one sent again gets the same answer). `403` unless that key's Map server statement names this owner; `409` if the key serves another Land or a newer Delegation exists; `429` past 3 new Lands per network address per day |
+| `GET /lands/:landId`, `GET /lands?owner=`, `?mapServerKey=` or `?domain=` | — | A visible Land's `LandInfo`, with or without a cell; `404` otherwise. `url` is the own domain when one is set |
+| `PUT /lands/:landId/domain` | session (the owner) | `{ domain }` sets the Land's own domain once its DNS TXT record `_linked-realms.<domain>` is `land=<landId>`; `{ domain: null }` removes it. `400` for a port, a wildcard, an IP address or a name without a dot; `409` when the record does not name the Land or another Land it still names uses the domain; `503` when DNS does not answer (`docs/protocols/map-server-hub-relay.md`, Land URLs) |
+| `GET /tls/allowed?domain=` | — | `200` only for the own domain of a visible Land with a cell; Caddy's on-demand TLS `ask` (`deploy/Caddyfile`) |
+| `GET /directory` | — | `{ lands }`: the visible Lands that have a cell |
+| `POST /tickets` | session | `{ landId, from? }` returns a signed Travel ticket. `404` for an unknown or hidden Land; `409` when it has no cell, is offline or is not adjacent to `from` |
+| `POST /reports` | session | `{ landId, reason }` |
+| `GET /admin/reports`, `POST /admin/lands/:landId/hidden` | admin | |
 
-- `POST /auth/verify` returns `{ token, address, expiresAt }` (unix seconds, 1 hour).
-- `POST /lands/:landId/delegation` takes `{ miningKey, issuedAt, signature }` (`issuedAt` in unix seconds, decimal string or integer). Answers 403 if the signature is not the Land owner's, 409 if a Delegation with an equal or newer `issuedAt` exists, 404 for a Land that does not exist.
-- `POST /tickets` takes `{ landId, from? }` and answers `{ ticket, signature }` (ticket in wire format, see `ticketToWire`). 403 without a Character or for non-adjacent Lands, 404 for an unregistered or hidden Land, 409 when the Land is offline.
-- Hidden Lands answer 404 on `GET /directory/:landId`, which is how the relay refuses their link.
-- `POST /aa` (ADR 0005) is a JSON-RPC proxy to `HUB_BUNDLER_URL` for a signed-in Player's Passkey wallet. It forwards `eth_estimateUserOperationGas`, `eth_sendUserOperation`, `eth_getUserOperationReceipt`, `pm_getPaymasterStubData` and `pm_getPaymasterData`, and answers the bundler's JSON-RPC reply as is. A user operation is refused unless it uses EntryPoint v0.6, comes from the session's own address, deploys (if at all) through the Coinbase Smart Wallet v1.1 factory, and makes only the calls in `SPONSORED_CALLS` with no ETH value (403); `createCharacter()` is refused for a Player who has a Character (409). Sponsored transactions are counted in the `sponsorship` table when the paymaster signs: 20 per Player and 10,000 for the world per UTC day (429).
-- Rate limits per address: tickets 30 per minute, reports 5 per hour, `/aa` 120 per minute (every attempt counts, valid or not).
+**The sweep** runs every 15 seconds (`src/sweep.ts`): it records which Lands the relay has online, gives online Lands without a cell one (a new Land takes the lowest free spiral index, a Land that lost its cell the edge), takes the cell of a Land not seen online for 30 days, forgets quota rows after 2 days and Map server statements that serve no Land after 7, and reads each own domain's TXT record again once a day (50 per sweep). A domain whose record no longer names its Land is dropped; one whose DNS does not answer is kept and asked again an hour later.
+
+**Limits:** sign-ins 30 per minute and Map server statements and Delegations 10 per minute per network address (IPv4, or IPv6 /64); tickets 30 per minute, own domain changes 10 per minute and reports 5 per hour per Character.
 
 ## Limits of this design
 
-- SIWE nonces, rate limits and the presence cache live in process memory, so one `hub-api` process only. With several nodes, move them to Redis.
+- Used sign-in nonces, rate limits and the presence cache live in process memory, so one `hub-api` process only. With several nodes, move them to Redis.
 - Reports have no "resolve" route yet: `GET /admin/reports` lists every report whose `resolved` flag is false, and nothing sets it.
-- Signatures are checked through viem's public client (`verifySiweMessage`, `verifyTypedData`), so smart-contract wallets work; tests inject offline verifiers using local accounts.
 
 ## Tests
 
-`pnpm --filter @linked-realms/hub-api test`: every route against PGlite (in-process PostgreSQL) with fake chain reads, relay presence and clock.
+`pnpm --filter @linked-realms/hub-api test`: every route and the sweep against PGlite (in-process PostgreSQL) with a fake relay, clock, network address and DNS.

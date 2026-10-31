@@ -1,110 +1,74 @@
+import { Resolver } from "node:dns/promises";
 import { serve } from "@hono/node-server";
-import {
-  BaseError,
-  ContractFunctionRevertedError,
-  createPublicClient,
-  http,
-} from "viem";
-import { privateKeyToAccount } from "viem/accounts";
-import {
-  deploymentFor,
-  landAbi,
-  playerRegistryAbi,
-} from "@linked-realms/shared";
+import { getConnInfo } from "@hono/node-server/conninfo";
+import { Key } from "@linked-realms/core";
 import { createApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import { createPool, migrate } from "./db.ts";
+import { clientAddressOf } from "./network.ts";
+import { sweep } from "./sweep.ts";
+
+const SWEEP_MS = 15_000;
 
 const config = loadConfig();
 const log = (message: string) => console.error(`hub-api: ${message}`);
 const db = createPool(config.databaseUrl, log);
 await migrate(db);
 
-const client = createPublicClient({ transport: http(config.rpcUrl) });
-const bundlerUrl = config.bundlerUrl;
-const deployment = deploymentFor(config.chainId);
+const ticketKey = Key.fromSeed(config.ticketSeed);
+config.ticketSeed.fill(0);
 
-/** A reverted call means "no such Land"; any other failure (RPC down) is rethrown. */
-async function orMissing<T>(read: () => Promise<T>): Promise<T | undefined> {
-  try {
-    return await read();
-  } catch (err) {
-    if (
-      err instanceof BaseError &&
-      err.walk((e) => e instanceof ContractFunctionRevertedError)
-    )
-      return undefined;
-    throw err;
-  }
+async function online(): Promise<number[]> {
+  const res = await fetch(`${config.relayInternalUrl}/online`, {
+    signal: AbortSignal.timeout(1500),
+  });
+  if (!res.ok) throw new Error(`relay /online answered ${res.status}`);
+  const body = (await res.json()) as { lands?: unknown };
+  if (
+    !Array.isArray(body.lands) ||
+    !body.lands.every((n) => Number.isSafeInteger(n))
+  )
+    throw new Error("relay /online returned an unexpected body");
+  return body.lands as number[];
 }
+
+// Own domains' TXT records (docs/protocols/map-server-hub-relay.md, Land URLs)
+const resolver = new Resolver({ timeout: 2000, tries: 2 });
+const resolveTxt = (name: string) => resolver.resolveTxt(name);
 
 const app = createApp({
   config,
   db,
-  chain: {
-    ownerOf: (landId) =>
-      orMissing(() =>
-        client.readContract({
-          address: deployment.Land.address,
-          abi: landAbi,
-          functionName: "ownerOf",
-          args: [landId],
-        }),
-      ),
-    coordinatesOf: async (landId) => {
-      const xy = await orMissing(() =>
-        client.readContract({
-          address: deployment.Land.address,
-          abi: landAbi,
-          functionName: "coordinatesOf",
-          args: [landId],
-        }),
-      );
-      return xy && { x: xy[0], y: xy[1] };
-    },
-    hasCharacter: (player) =>
-      client.readContract({
-        address: deployment.PlayerRegistry.address,
-        abi: playerRegistryAbi,
-        functionName: "hasCharacter",
-        args: [player],
-      }),
-  },
-  verifySiwe: (args) => client.verifySiweMessage(args),
-  verifyTypedData: (args) => client.verifyTypedData(args),
-  online: async () => {
-    const res = await fetch(`${config.relayInternalUrl}/online`, {
-      signal: AbortSignal.timeout(1500),
-    });
-    if (!res.ok) throw new Error(`relay /online answered ${res.status}`);
-    const body = (await res.json()) as { lands?: unknown };
-    if (
-      !Array.isArray(body.lands) ||
-      !body.lands.every((n) => Number.isInteger(n))
-    )
-      throw new Error("relay /online returned an unexpected body");
-    return body.lands as number[];
-  },
-  ticketSigner: privateKeyToAccount(config.ticketKey),
-  bundler: bundlerUrl
-    ? async (request) => {
-        const res = await fetch(bundlerUrl, {
-          method: "POST",
-          headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(request),
-          signal: AbortSignal.timeout(15_000),
-        });
-        if (!res.ok) throw new Error(`bundler answered ${res.status}`);
-        const body: unknown = await res.json();
-        if (typeof body !== "object" || body === null)
-          throw new Error("bundler returned an unexpected body");
-        return body;
-      }
-    : undefined,
+  online,
+  ticketKey,
+  clientAddress: (c) =>
+    clientAddressOf(
+      config.trustedProxies,
+      getConnInfo(c).remote.address ?? "",
+      c.req.header("X-Forwarded-For"),
+    ),
   now: Date.now,
   log,
+  resolveTxt,
 });
 
+let sweeping = false;
+async function runSweep() {
+  if (sweeping) return;
+  sweeping = true;
+  try {
+    await sweep({ db, online, now: Date.now, log, resolveTxt });
+  } catch (err) {
+    log(`sweep failed: ${err instanceof Error ? err.message : String(err)}`);
+  } finally {
+    sweeping = false;
+  }
+}
+void runSweep();
+setInterval(() => void runSweep(), SWEEP_MS);
+
 serve({ fetch: app.fetch, port: config.port }, (info) =>
-  console.log(`hub-api listening on :${info.port}`),
+  console.log(
+    `hub-api listening on :${info.port}; Travel tickets signed by ${ticketKey.address}`,
+  ),
 );

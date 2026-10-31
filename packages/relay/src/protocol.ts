@@ -18,9 +18,16 @@ export const KIND_TEXT = 1;
 
 export type HttpHeaders = Record<string, string | string[]>;
 
+/** The hello: a signed "relay-host" statement (identity.md) in the shape it travels in. */
+export interface Hello {
+  statement: string;
+  publicKey: string;
+  signature: string;
+}
+
 export type ControlMessage =
   | { t: "challenge"; nonce: string }
-  | { t: "hello"; signature: string }
+  | ({ t: "hello" } & Hello)
   | { t: "ready" }
   | {
       t: "http";
@@ -35,14 +42,23 @@ export type ControlMessage =
       id: number;
       status: number;
       headers: HttpHeaders;
-      body: string;
     }
+  | { t: "http-end"; id: number; aborted?: true }
   | { t: "open"; stream: number; path: string }
   | { t: "close"; stream: number; code: number };
 
-/** The message a Map server signs (EIP-191) with its Mining key to prove which Land it hosts. */
-export function hostHelloMessage(landId: number, nonce: string): string {
-  return `linked-realms relay: host Land ${landId}\nNonce: ${nonce}`;
+/** Largest unauthenticated frame: a hello is about 5 KB (an ML-DSA-44 key and signature in base64). */
+export const MAX_UNAUTHENTICATED_FRAME = 16 * 1024;
+/** Largest data frame payload the agent sends for an HTTP response body. */
+export const HTTP_CHUNK = 64 * 1024;
+/** Largest response body the relay passes on. */
+export const HTTP_RESPONSE_LIMIT = 32 * 1024 * 1024;
+
+/** The response headers a Land may set; the relay drops the rest. `content-security-policy` is handled apart. */
+export function isRelayedResponseHeader(name: string): boolean {
+  return /^(?:content-type|content-encoding|cache-control|etag|last-modified|vary|retry-after|access-control-[a-z-]+)$/.test(
+    name,
+  );
 }
 
 /** Path and query of a forwarded request: printable ASCII, no spaces, starts with "/". */
@@ -174,9 +190,12 @@ export function parseControl(raw: string): ControlMessage {
         nonce: text(m.nonce, "nonce", /^[0-9a-f]+$/, 64),
       };
     case "hello":
+      // Lengths only; verifyStatement checks the rest.
       return {
         t: "hello",
-        signature: text(m.signature, "signature", /^0x[0-9a-fA-F]{130}$/, 132),
+        statement: text(m.statement, "statement", /^[^]*$/, 1024),
+        publicKey: text(m.publicKey, "publicKey", BASE64, 2048),
+        signature: text(m.signature, "signature", BASE64, 4096),
       };
     case "ready":
       return { t: "ready" };
@@ -196,8 +215,13 @@ export function parseControl(raw: string): ControlMessage {
         id: uint(m.id, "id"),
         status: status(m.status),
         headers: headers(m.headers),
-        body: text(m.body, "body", BASE64, HOST_MAX_PAYLOAD),
       };
+    case "http-end":
+      if (m.aborted !== undefined && m.aborted !== true)
+        throw new ProtocolError("bad aborted");
+      return m.aborted
+        ? { t: "http-end", id: uint(m.id, "id"), aborted: true }
+        : { t: "http-end", id: uint(m.id, "id") };
     case "open":
       if (!isForwardPath(m.path)) throw new ProtocolError("bad path");
       return { t: "open", stream: uint(m.stream, "stream"), path: m.path };

@@ -1,6 +1,6 @@
 # 0001 — Initial decisions
 
-Status: accepted, 2026-10-29
+Status: accepted, 2026-10-29. D2 superseded by ADR 0008; D3, D8, D9 and D10 superseded by ADR 0006; D5 superseded by ADR 0008 (all 2026-10-29).
 
 The project owner confirmed PLAN.md section 10 on 2026-10-29 after a design review. This record keeps each choice with its reason; PLAN.md section 10 remains the live table.
 

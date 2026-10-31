@@ -19,48 +19,20 @@
         position: fixed;
         inset: 0;
       }
-      #panel,
       #hud {
         position: fixed;
         z-index: 1;
+        top: 12px;
+        right: 12px;
+        max-width: 320px;
+        overflow-wrap: anywhere;
         background: rgba(0, 0, 0, 0.8);
         border: 1px solid #555;
         border-radius: 6px;
         padding: 10px 12px;
       }
-      #panel {
-        top: 12px;
-        left: 12px;
-        width: 300px;
-      }
-      #hud {
-        top: 12px;
-        right: 12px;
-      }
-      #panel h1 {
-        margin: 0 0 8px;
-        font-size: 16px;
-      }
-      #panel p {
-        margin: 4px 0;
-      }
-      #panel table {
-        border-collapse: collapse;
-        margin: 6px 0;
-      }
-      #panel td {
-        padding: 1px 12px 1px 0;
-      }
-      #panel button {
-        margin: 6px 6px 0 0;
-        padding: 4px 10px;
-      }
       #hud-notice {
         color: #fc6;
-      }
-      #hud {
-        max-width: 320px;
-        overflow-wrap: anywhere;
       }
       #status {
         color: #9cf;
@@ -69,6 +41,49 @@
         color: #f88;
         overflow-wrap: anywhere;
       }
+      #hud-mine-won {
+        color: #f2c230;
+      }
+      #hud button,
+      #mine-form fieldset {
+        margin-top: 6px;
+      }
+      #mine-form fieldset {
+        border: 1px solid #555;
+        border-radius: 4px;
+      }
+      #mine-threads {
+        width: 4em;
+      }
+      /* The touch pad: hold a finger on it and slide the way to walk. Touch screens only. */
+      #pad {
+        display: none;
+        position: fixed;
+        z-index: 1;
+        left: 24px;
+        bottom: 32px;
+        width: 144px;
+        height: 144px;
+        border: 2px solid rgba(255, 255, 255, 0.4);
+        border-radius: 50%;
+        background: rgba(0, 0, 0, 0.35);
+        color: rgba(255, 255, 255, 0.7);
+        font-size: 18px;
+        touch-action: none;
+        user-select: none;
+        -webkit-user-select: none;
+        -webkit-touch-callout: none;
+      }
+      #pad span {
+        position: absolute;
+        line-height: 1;
+        transform: translate(-50%, -50%);
+      }
+      @media (pointer: coarse) {
+        #pad {
+          display: block;
+        }
+      }
       [hidden] {
         display: none !important;
       }
@@ -76,37 +91,41 @@
   </head>
   <body>
     <div id="game"></div>
-    <div id="hud" hidden>
+    <!-- Hidden from assistive technology: it repeats the arrow keys for touch screens. -->
+    <div id="pad" aria-hidden="true">
+      <span style="left: 50%; top: 15%">▲</span>
+      <span style="left: 85%; top: 50%">▶</span>
+      <span style="left: 50%; top: 85%">▼</span>
+      <span style="left: 15%; top: 50%">◀</span>
+    </div>
+    <div id="hud">
       <div id="hud-land"></div>
       <div id="hud-mine"></div>
+      <div id="hud-mine-won"></div>
+      <!-- The Land owner's Mine switch: shown only to them (map-server-node.md). The Shell's frame
+           has no allow-forms (shell-land-ui.md), so this form never submits: the switch is signed
+           on a click. -->
+      <button id="mine-open" type="button" hidden>Switch the Mine</button>
+      <form id="mine-form" hidden>
+        <fieldset id="mine-fields">
+          <legend>The Mine</legend>
+          <label
+            ><input id="mine-on" type="radio" name="mine" checked /> On</label
+          >
+          <label><input id="mine-off" type="radio" name="mine" /> Off</label>
+          <label>
+            Threads
+            <input id="mine-threads" type="number" min="1" step="1" required />
+          </label>
+          <div>
+            <button id="mine-sign" type="button">Sign in the Shell</button>
+            <button id="mine-cancel" type="button">Cancel</button>
+          </div>
+        </fieldset>
+      </form>
+      <div id="status"></div>
       <div id="hud-notice"></div>
-      <div id="mine-controls" hidden>
-        <button id="mine-toggle"></button>
-        <label
-          >threads
-          <input
-            id="mine-threads"
-            type="number"
-            min="1"
-            step="1"
-            value="1"
-            style="width: 4em"
-        /></label>
-      </div>
-      <div id="land-tools">
-        <input id="report-reason" placeholder="Reason" style="width: 12em" />
-        <button id="report">Report this Land</button>
-        <div id="report-result"></div>
-      </div>
-    </div>
-    <div id="panel">
-      <h1>linked-realms</h1>
-      <p id="wallet">No wallet connected.</p>
-      <div id="actions"></div>
-      <div id="character"></div>
-      <div id="directory"></div>
-      <p id="status"></p>
-      <p id="error"></p>
+      <div id="error"></div>
     </div>
     <script type="module" src="/src/main.ts"></script>
   </body>

@@ -6,21 +6,29 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { generatePrivateKey, privateKeyToAccount } from "viem/accounts";
-import type { Address, Hex } from "viem";
+import { Key } from "@linked-realms/core";
+import { signStatement } from "@linked-realms/shared/identity";
 import { WebSocket, WebSocketServer } from "ws";
 import { connectHost } from "./agent.ts";
 import {
-  hostHelloMessage,
+  KIND_BINARY,
+  MAX_DATA_PAYLOAD,
+  encodeFrame,
   parseControl,
   type ControlMessage,
 } from "./protocol.ts";
 import { createRelay, type RelayOptions } from "./relay.ts";
 
+const LAND_BASE = "lands.test";
+const SHELL = "https://shell.test";
+const CSP = `frame-ancestors ${SHELL}`;
+
 const cleanups: Array<() => Promise<void> | void> = [];
 afterEach(async () => {
   for (const fn of cleanups.splice(0).reverse()) await fn();
 });
+
+const newKey = () => Key.fromSeed(crypto.getRandomValues(new Uint8Array(32)));
 
 function listen(server: Server, port = 0): Promise<number> {
   return new Promise((resolve) =>
@@ -35,13 +43,36 @@ const closeServer = (server: Server) => () =>
     server.closeAllConnections();
   });
 
-/** A fake Hub: GET /directory/<id> answers from `lands` (id -> Mining key); a missing id is 404. */
+/** A port that was free a moment ago: the relay must know its own host before it listens. */
+async function freePort(): Promise<number> {
+  const probe = createServer();
+  const port = await listen(probe);
+  await closeServer(probe)();
+  return port;
+}
+
+/**
+ * A fake Hub: GET /lands/<id> answers from `lands` (id -> Map server key), and
+ * GET /lands?domain= from `domains` (own domain -> id); anything missing is 404.
+ */
 async function startHub() {
-  const lands = new Map<number, Address>();
+  const lands = new Map<number, string>();
+  const domains = new Map<string, number>();
+  const state = { down: false, domainLookups: [] as string[] };
   const server = createServer((req, res) => {
-    const id = Number(/^\/directory\/(\d+)$/.exec(req.url ?? "")?.[1]);
-    const miningKey = lands.get(id);
-    if (!miningKey) {
+    if (state.down) {
+      res.writeHead(500).end();
+      return;
+    }
+    const url = new URL(req.url ?? "/", "http://hub");
+    const domain = url.searchParams.get("domain");
+    if (domain !== null) state.domainLookups.push(domain);
+    const id =
+      domain === null
+        ? Number(/^\/lands\/(\d+)$/.exec(url.pathname)?.[1])
+        : domains.get(domain);
+    const mapServerKey = id === undefined ? undefined : lands.get(id);
+    if (!mapServerKey) {
       res.writeHead(404).end();
       return;
     }
@@ -49,17 +80,20 @@ async function startHub() {
     res.end(
       JSON.stringify({
         landId: id,
-        owner: miningKey,
+        owner: mapServerKey,
+        ownerName: "",
         x: 0,
         y: 0,
-        miningKey,
+        url: `http://${domain ?? `${id}.${LAND_BASE}`}`,
+        mapServerKey,
         online: true,
+        domain,
       }),
     );
   });
   const port = await listen(server);
   cleanups.push(closeServer(server));
-  return { url: `http://127.0.0.1:${port}`, lands };
+  return { url: `http://127.0.0.1:${port}`, lands, domains, state };
 }
 
 interface Seen {
@@ -69,7 +103,9 @@ interface Seen {
   body: string;
 }
 
-/** A fake local Map server: HTTP echo with CORS, and a WebSocket echo. */
+const sleep = (ms: number) => new Promise((r) => setTimeout(r, ms));
+
+/** A fake local Map server: HTTP routes for the cases below, and a WebSocket echo. */
 async function startMapServer() {
   const requests: Seen[] = [];
   const wsUrls: string[] = [];
@@ -95,10 +131,26 @@ async function startMapServer() {
           "content-type": "text/html",
           location: "https://evil.example/",
           "x-custom": "1",
+          "set-cookie": "a=b",
+          "content-security-policy": "default-src 'self'",
+          etag: '"v1"',
+          "last-modified": "Wed, 21 Oct 2015 07:28:00 GMT",
+          "cache-control": "no-cache",
         });
-        res.end("<script>alert(1)</script>");
-      } else if (req.url?.startsWith("/cookie")) {
-        res.writeHead(200, { "set-cookie": "a=b" }).end("x");
+        res.end("<p>hi</p>");
+      } else if (req.url?.startsWith("/chunks")) {
+        res.writeHead(200, { "content-type": "application/octet-stream" });
+        void (async () => {
+          for (const letter of "abc") {
+            res.write(letter.repeat(100_000));
+            await sleep(10);
+          }
+          res.end();
+        })();
+      } else if (req.url?.startsWith("/abort")) {
+        res.writeHead(200, { "content-type": "text/plain" });
+        res.write("partial");
+        setTimeout(() => req.socket.destroy(), 20);
       } else {
         res.writeHead(201, { ...cors, "content-type": "application/json" });
         res.end(JSON.stringify({ echo: body, url: req.url }));
@@ -121,20 +173,37 @@ async function startMapServer() {
 async function startRelay(
   hubUrl: string,
   options: Partial<RelayOptions> = {},
-  port = 0,
+  port?: number,
 ) {
-  const relay = createRelay({ hubUrl, ...options });
-  const actual = await listen(relay, port);
+  const actual = port ?? (await freePort());
+  const relayHost = `127.0.0.1:${actual}`;
+  const relay = createRelay({
+    hubUrl,
+    relayHost,
+    landBaseDomain: LAND_BASE,
+    shellOrigins: [SHELL],
+    ...options,
+  });
+  await listen(relay, actual);
   cleanups.push(
     () => new Promise<void>((resolve) => relay.close(() => resolve())),
   );
-  return { relay, port: actual, url: `http://127.0.0.1:${actual}` };
+  return {
+    relay,
+    port: actual,
+    relayHost,
+    url: `http://${relayHost}`,
+    wsUrl: `ws://${relayHost}`,
+  };
 }
 
 interface Reply {
   status: number;
   headers: IncomingHttpHeaders;
+  rawHeaders: string[];
   body: string;
+  /** False when the connection was cut before the response ended. */
+  complete: boolean;
 }
 function http(
   base: string,
@@ -152,11 +221,14 @@ function http(
       (res) => {
         const chunks: Buffer[] = [];
         res.on("data", (c: Buffer) => chunks.push(c));
-        res.on("end", () =>
+        res.on("error", () => {});
+        res.on("close", () =>
           resolve({
             status: res.statusCode ?? 0,
             headers: res.headers,
+            rawHeaders: res.rawHeaders,
             body: Buffer.concat(chunks).toString(),
+            complete: res.complete,
           }),
         );
       },
@@ -164,6 +236,30 @@ function http(
     req.on("error", reject);
     req.end(init.body);
   });
+}
+
+/** A request on a Land's host (Host header), sent to the relay's socket. */
+const landHost = (id: number | string) => `${id}.${LAND_BASE}`;
+const land = (
+  relay: { url: string },
+  id: number | string,
+  path: string,
+  init: Parameters<typeof http>[2] = {},
+) =>
+  http(relay.url, path, {
+    ...init,
+    headers: { host: landHost(id), ...init.headers },
+  });
+
+/** Every response on a Land host carries the framing policy and nosniff. */
+function expectLandHeaders(reply: Reply) {
+  const csp = reply.rawHeaders.flatMap((h, i, all) =>
+    all[i - 1]?.toLowerCase() === "content-security-policy" && i % 2 === 1
+      ? [h]
+      : [],
+  );
+  expect(csp[0]).toBe(CSP);
+  expect(reply.headers["x-content-type-options"]).toBe("nosniff");
 }
 
 const online = async (relayUrl: string) =>
@@ -183,11 +279,16 @@ function closed(ws: WebSocket): Promise<{ code: number; reason: string }> {
     ),
   );
 }
-function rejectedStatus(ws: WebSocket): Promise<number> {
-  return new Promise((resolve) =>
-    ws.once("unexpected-response", (_req, res) => resolve(res.statusCode ?? 0)),
+function rejectedResponse(ws: WebSocket) {
+  return new Promise<{ status: number; headers: IncomingHttpHeaders }>(
+    (resolve) =>
+      ws.once("unexpected-response", (_req, res) =>
+        resolve({ status: res.statusCode ?? 0, headers: res.headers }),
+      ),
   );
 }
+const rejectedStatus = async (ws: WebSocket) =>
+  (await rejectedResponse(ws)).status;
 function nextMessage(
   ws: WebSocket,
 ): Promise<{ data: Buffer; isBinary: boolean }> {
@@ -198,48 +299,89 @@ function nextMessage(
   );
 }
 
+/** A Player WebSocket to a Land's host at any path. */
+const player = (
+  relay: { wsUrl: string },
+  id: number | string,
+  path = "/play",
+  options: { autoPong?: boolean } = {},
+) =>
+  new WebSocket(`${relay.wsUrl}${path}`, {
+    headers: { host: landHost(id) },
+    ...options,
+  });
+
+interface LinkOptions {
+  key?: Key;
+  relay?: string;
+  land?: number;
+  nonce?: string;
+  tamper?: boolean;
+  autoPong?: boolean;
+}
+
 /** A hand-driven host link, for the protocol edge cases the real agent never produces. */
 function linkHost(
-  relayPort: number,
+  relay: { port: number; relayHost: string },
   landId: number,
-  privateKey: Hex,
-  wsOptions: { autoPong?: boolean } = {},
+  key: Key,
+  options: LinkOptions = {},
 ) {
   const ws = new WebSocket(
-    `ws://127.0.0.1:${relayPort}/host/${landId}`,
-    wsOptions,
+    `ws://${relay.relayHost}/host/${landId}`,
+    options.autoPong === undefined ? {} : { autoPong: options.autoPong },
   );
   const control: ControlMessage[] = [];
+  const data: Array<{ id: number; payload: Buffer }> = [];
   const result = closed(ws);
   const ready = new Promise<boolean>((resolve) => {
-    ws.on("message", (data, isBinary) => {
+    ws.on("message", (raw, isBinary) => {
       if (isBinary) return;
-      const message = parseControl(String(data));
+      const message = parseControl(String(raw));
       control.push(message);
-      if (message.t === "challenge")
-        void privateKeyToAccount(privateKey)
-          .signMessage({ message: hostHelloMessage(landId, message.nonce) })
-          .then((signature) =>
-            ws.send(JSON.stringify({ t: "hello", signature })),
-          );
+      if (message.t === "challenge") {
+        const signed = signStatement(
+          "relay-host",
+          {
+            relay: options.relay ?? relay.relayHost,
+            land: options.land ?? landId,
+            nonce: options.nonce ?? message.nonce,
+          },
+          options.key ?? key,
+        );
+        if (options.tamper)
+          signed.signature =
+            (signed.signature[0] === "A" ? "B" : "A") +
+            signed.signature.slice(1);
+        ws.send(JSON.stringify({ t: "hello", ...signed }));
+      }
       if (message.t === "ready") resolve(true);
     });
     void result.then(() => resolve(false));
   });
   cleanups.push(() => ws.terminate());
-  return { ws, control, ready, closed: result };
+  const reply = (message: ControlMessage) => ws.send(JSON.stringify(message));
+  const send = (id: number, payload: Buffer) =>
+    ws.send(encodeFrame(id, KIND_BINARY, payload));
+  const requestId = async () => {
+    await vi.waitFor(() =>
+      expect(control.some((m) => m.t === "http")).toBe(true),
+    );
+    return (control.find((m) => m.t === "http") as { id: number }).id;
+  };
+  return { ws, control, data, ready, closed: result, reply, send, requestId };
 }
 
 async function setup(relayOptions: Partial<RelayOptions> = {}) {
   const hub = await startHub();
-  const key = generatePrivateKey();
-  hub.lands.set(1, privateKeyToAccount(key).address);
+  const key = newKey();
+  hub.lands.set(1, key.address);
   const map = await startMapServer();
   const relay = await startRelay(hub.url, relayOptions);
   const agent = connectHost({
-    relayUrl: relay.url,
+    relayUrl: relay.wsUrl,
     landId: 1,
-    privateKey: key,
+    mapServerKey: key,
     localPort: map.port,
     log: () => {},
   });
@@ -248,22 +390,177 @@ async function setup(relayOptions: Partial<RelayOptions> = {}) {
   return { hub, key, map, relay, agent };
 }
 
+/** A relay with a hand-driven link for Land 2 and nothing else. */
+async function setupManual(relayOptions: Partial<RelayOptions> = {}) {
+  const hub = await startHub();
+  const relay = await startRelay(hub.url, relayOptions);
+  const key = newKey();
+  hub.lands.set(2, key.address);
+  const host = linkHost(relay, 2, key);
+  expect(await host.ready).toBe(true);
+  return { hub, relay, key, host };
+}
+
+describe("routing by Host", () => {
+  it("serves a Land on <landId>.<LAND_BASE_DOMAIN>, in any letter case", async () => {
+    const { map, relay } = await setup();
+    const reply = await land(relay, 1, "/matchmake?x=1");
+    expect(reply.status).toBe(201);
+    expect(JSON.parse(reply.body)).toEqual({ echo: "", url: "/matchmake?x=1" });
+    expect(
+      (await http(relay.url, "/y", { headers: { host: "1.LANDS.Test" } }))
+        .status,
+    ).toBe(201);
+    expect(map.requests.map((r) => r.url)).toEqual(["/matchmake?x=1", "/y"]);
+  });
+
+  it("keeps its own routes to RELAY_HOST and to hosts with a port", async () => {
+    const { map, relay } = await setup();
+    expect((await http(relay.url, "/health")).body).toBe("ok");
+    expect(await online(relay.url)).toEqual([1]);
+    expect((await http(relay.url, "/matchmake")).status).toBe(404);
+    expect((await http(relay.url, "/land/1/x")).status).toBe(404);
+    // How the Hub and health checks reach it inside the operator's network
+    const internal = { headers: { host: "relay:8080" } };
+    expect((await http(relay.url, "/online", internal)).status).toBe(200);
+    // Whatever Host a proxy in front of the relay ends up sending, it marks the request as public.
+    const proxied = { headers: { "x-forwarded-for": "203.0.113.9" } };
+    expect((await http(relay.url, "/online", proxied)).status).toBe(404);
+    expect((await http(relay.url, "/stats", proxied)).status).toBe(404);
+    expect((await http(relay.url, "/health", proxied)).body).toBe("ok");
+    // Not shadowed by the Land: a Land host forwards /online, /stats and /health to the Land.
+    for (const path of ["/online", "/stats", "/health"])
+      expect((await land(relay, 1, path)).status).toBe(201);
+    expect(map.requests.map((r) => r.url)).toEqual([
+      "/online",
+      "/stats",
+      "/health",
+    ]);
+  });
+
+  it("does not alias a Land through leading zeros or a bad id", async () => {
+    const { map, relay } = await setup();
+    for (const id of ["01", "0", "1x", "-1", "1.1", "99999999999999999999"])
+      expect((await land(relay, id, "/x")).status, id).toBe(404);
+    expect(map.requests).toHaveLength(0);
+  });
+
+  it("answers 503 for a Land id with no live link, without naming it", async () => {
+    const { relay } = await setup();
+    const reply = await land(relay, 9, "/");
+    expect(reply.status).toBe(503);
+    expect(reply.headers["content-type"]).toContain("text/html");
+    expect(reply.body).not.toMatch(/\b9\b/);
+    expectLandHeaders(reply);
+  });
+
+  it("turns a WebSocket upgrade on any path of a Land host into a Player stream", async () => {
+    const { map, relay } = await setup();
+    const ws = player(relay, 1, "/some/where/else?q=1");
+    await opened(ws);
+    ws.send(Buffer.from([1, 2, 3]), { binary: true });
+    const bin = await nextMessage(ws);
+    expect(bin.isBinary).toBe(true);
+    expect([...bin.data]).toEqual([1, 2, 3]);
+    ws.send("héllo");
+    const text = await nextMessage(ws);
+    expect(text.isBinary).toBe(false);
+    expect(text.data.toString()).toBe("héllo");
+    // /host/<id> is just a path on a Land host.
+    const odd = player(relay, 1, "/host/1");
+    await opened(odd);
+    await vi.waitFor(() => expect(map.wsUrls).toHaveLength(2));
+    expect(map.wsUrls).toEqual(["/some/where/else?q=1", "/host/1"]);
+    ws.terminate();
+    odd.terminate();
+  });
+
+  it("refuses a WebSocket upgrade on the relay host except /host/<landId>", async () => {
+    const { relay } = await setup();
+    for (const path of [
+      "/play",
+      "/host",
+      "/host/01",
+      "/host/1/x",
+      "/land/1/p/r",
+    ])
+      expect(
+        await rejectedStatus(new WebSocket(`${relay.wsUrl}${path}`)),
+        path,
+      ).toBe(404);
+  });
+});
+
+describe("own domains", () => {
+  const PLAY = "play.example";
+
+  it("serve their Land, every path forwarded, looked up once per 30 seconds", async () => {
+    const { hub, map, relay } = await setup();
+    hub.domains.set(PLAY, 1);
+    for (const path of ["/x", "/stats", "/online"]) {
+      const reply = await http(relay.url, path, {
+        headers: { host: "Play.Example" },
+      });
+      expect(reply.status, path).toBe(201);
+      expectLandHeaders(reply);
+    }
+    expect(map.requests.map((r) => r.url)).toEqual(["/x", "/stats", "/online"]);
+    expect(hub.state.domainLookups).toEqual([PLAY]);
+  });
+
+  it("answer 404 for a host that is no Land's own domain, and 503 while the Hub is down", async () => {
+    const { hub, relay } = await setup({ domainCacheMs: 50 });
+    const other = { headers: { host: "other.example" } };
+    const unknown = await http(relay.url, "/online", other);
+    expect(unknown.status).toBe(404);
+    expect(unknown.headers["content-type"]).toContain("text/html");
+    expectLandHeaders(unknown);
+    // the answer is kept, so a second request does not ask again
+    expect((await http(relay.url, "/x", other)).status).toBe(404);
+    // a name under LAND_BASE_DOMAIN that is not a Land id is never asked about
+    const junk = { headers: { host: `www.${LAND_BASE}` } };
+    expect((await http(relay.url, "/x", junk)).status).toBe(404);
+    expect(hub.state.domainLookups).toEqual(["other.example"]);
+    hub.state.down = true;
+    await sleep(60);
+    expect((await http(relay.url, "/x", other)).status).toBe(503);
+    hub.state.down = false;
+    hub.domains.set("other.example", 1);
+    expect((await http(relay.url, "/x", other)).status).toBe(503);
+    await sleep(60);
+    expect((await http(relay.url, "/x", other)).status).toBe(201);
+  });
+
+  it("turn a WebSocket upgrade into a Player stream, and refuse one for an unknown host", async () => {
+    const { hub, map, relay } = await setup();
+    hub.domains.set(PLAY, 1);
+    const ws = new WebSocket(`${relay.wsUrl}/play`, {
+      headers: { host: PLAY },
+    });
+    await opened(ws);
+    ws.send("hi");
+    expect((await nextMessage(ws)).data.toString()).toBe("hi");
+    expect(map.wsUrls).toEqual(["/play"]);
+    ws.terminate();
+    const unknown = new WebSocket(`${relay.wsUrl}/play`, {
+      headers: { host: "other.example" },
+    });
+    expect(await rejectedStatus(unknown)).toBe(404);
+  });
+});
+
 describe("HTTP forwarding", () => {
   it("round-trips method, path, query, body, status, headers and CORS", async () => {
     const { map, relay } = await setup();
-    const reply = await http(
-      relay.url,
-      "/land/1/matchmake/joinOrCreate/land?x=1",
-      {
-        method: "POST",
-        headers: {
-          origin: "http://app.test",
-          "content-type": "application/json",
-          cookie: "secret=1",
-        },
-        body: '{"a":1}',
+    const reply = await land(relay, 1, "/matchmake/joinOrCreate/land?x=1", {
+      method: "POST",
+      headers: {
+        origin: "http://app.test",
+        "content-type": "application/json",
+        cookie: "secret=1",
       },
-    );
+      body: '{"a":1}',
+    });
     expect(reply.status).toBe(201);
     expect(JSON.parse(reply.body)).toEqual({
       echo: '{"a":1}',
@@ -272,17 +569,17 @@ describe("HTTP forwarding", () => {
     expect(reply.headers["access-control-allow-origin"]).toBe(
       "http://app.test",
     );
-    expect(reply.headers["x-content-type-options"]).toBe("nosniff");
+    expectLandHeaders(reply);
     const seen = map.requests[0];
     expect(seen?.method).toBe("POST");
     expect(seen?.headers.origin).toBe("http://app.test");
     expect(seen?.headers["content-type"]).toBe("application/json");
-    expect(seen?.headers.cookie).toBeUndefined(); // only selected headers are forwarded
+    expect(seen?.headers.cookie).toBeUndefined();
   });
 
   it("forwards a CORS preflight", async () => {
     const { relay } = await setup();
-    const reply = await http(relay.url, "/land/1/matchmake/joinOrCreate/land", {
+    const reply = await land(relay, 1, "/x", {
       method: "OPTIONS",
       headers: {
         origin: "http://app.test",
@@ -294,247 +591,414 @@ describe("HTTP forwarding", () => {
     expect(reply.headers["access-control-allow-origin"]).toBe(
       "http://app.test",
     );
+    expectLandHeaders(reply);
   });
 
-  it("does not relay Set-Cookie from a Map server", async () => {
+  it("forwards exactly the listed request headers", async () => {
+    const { map, relay } = await setup();
+    await land(relay, 1, "/x", {
+      headers: {
+        accept: "text/html",
+        "accept-encoding": "gzip",
+        "if-none-match": '"v1"',
+        "if-modified-since": "Wed, 21 Oct 2015 07:28:00 GMT",
+        authorization: "Bearer hub-session-token",
+        cookie: "a=b",
+        "x-custom": "1",
+        "user-agent": "t",
+      },
+    });
+    const seen = map.requests[0]?.headers ?? {};
+    expect(seen.accept).toBe("text/html");
+    expect(seen["accept-encoding"]).toBe("gzip");
+    expect(seen["if-none-match"]).toBe('"v1"');
+    expect(seen["if-modified-since"]).toBe("Wed, 21 Oct 2015 07:28:00 GMT");
+    for (const name of ["authorization", "cookie", "x-custom", "user-agent"])
+      expect(seen[name], name).toBeUndefined();
+  });
+
+  it("forwards the listed response headers, drops the rest, and sets two CSP headers", async () => {
     const { relay } = await setup();
-    const reply = await http(relay.url, "/land/1/cookie");
+    const reply = await land(relay, 1, "/evil");
     expect(reply.status).toBe(200);
+    expect(reply.headers["content-type"]).toBe("text/html");
+    expect(reply.headers.etag).toBe('"v1"');
+    expect(reply.headers["last-modified"]).toBe(
+      "Wed, 21 Oct 2015 07:28:00 GMT",
+    );
+    expect(reply.headers["cache-control"]).toBe("no-cache");
+    expect(reply.headers.location).toBeUndefined();
+    expect(reply.headers["x-custom"]).toBeUndefined();
     expect(reply.headers["set-cookie"]).toBeUndefined();
+    const csp = reply.rawHeaders.filter(
+      (_h, i, all) => all[i - 1]?.toLowerCase() === "content-security-policy",
+    );
+    expect(csp).toEqual([CSP, "default-src 'self'"]);
+    expect(reply.headers["x-content-type-options"]).toBe("nosniff");
+    expect(reply.body).toBe("<p>hi</p>");
   });
 
   it("limits the request body to 64 KiB", async () => {
     const { map, relay } = await setup();
-    const ok = await http(relay.url, "/land/1/x", {
+    const ok = await land(relay, 1, "/x", {
       method: "POST",
       body: Buffer.alloc(64 * 1024, 97),
     });
     expect(ok.status).toBe(201);
-    const big = await http(relay.url, "/land/1/x", {
+    const big = await land(relay, 1, "/x", {
       method: "POST",
       body: Buffer.alloc(64 * 1024 + 1, 97),
     });
     expect(big.status).toBe(413);
+    expectLandHeaders(big);
     expect(map.requests).toHaveLength(1);
   });
 
-  it("answers 503 JSON for an offline Land and 404 for unknown paths", async () => {
+  it("streams a body that arrives in several chunks", async () => {
     const { relay } = await setup();
-    const offline = await http(
-      relay.url,
-      "/land/9/matchmake/joinOrCreate/land",
-      { method: "POST", body: "{}" },
+    const reply = await land(relay, 1, "/chunks");
+    expect(reply.complete).toBe(true);
+    expect(reply.body).toBe(
+      "a".repeat(100_000) + "b".repeat(100_000) + "c".repeat(100_000),
     );
-    expect(offline.status).toBe(503);
-    expect(JSON.parse(offline.body)).toEqual({ error: "Land is offline" });
-    expect((await http(relay.url, "/nothing")).status).toBe(404);
-    expect((await http(relay.url, "/land/abc/x")).status).toBe(404);
-    expect((await http(relay.url, "/health")).body).toBe("ok");
+    expectLandHeaders(reply);
+  });
+
+  it("cuts the response when the local body fails (aborted)", async () => {
+    const { relay } = await setup();
+    const reply = await land(relay, 1, "/abort");
+    expect(reply.status).toBe(200);
+    expect(reply.complete).toBe(false);
+    await vi.waitFor(async () => expect(await online(relay.url)).toEqual([1]));
+  });
+
+  it("answers 502 from the agent when the local Map server is unreachable", async () => {
+    const hub = await startHub();
+    const relay = await startRelay(hub.url);
+    const key = newKey();
+    hub.lands.set(1, key.address);
+    const agent = connectHost({
+      relayUrl: relay.wsUrl,
+      landId: 1,
+      mapServerKey: key,
+      localPort: await freePort(),
+      log: () => {},
+    });
+    cleanups.push(() => agent.close());
+    await vi.waitFor(async () => expect(await online(relay.url)).toEqual([1]));
+    const reply = await land(relay, 1, "/");
+    expect(reply.status).toBe(502);
+    expectLandHeaders(reply);
+  });
+
+  it("passes on the Map server's response in 64 KiB-bounded data frames", async () => {
+    const { host, relay } = await setupManual();
+    const pending = land(relay, 2, "/file");
+    const id = await host.requestId();
+    host.reply({ t: "http-response", id, status: 200, headers: {} });
+    host.send(id, Buffer.from("one,"));
+    host.send(id, Buffer.from("two"));
+    host.reply({ t: "http-end", id });
+    const reply = await pending;
+    expect(reply.body).toBe("one,two");
+    expect(reply.complete).toBe(true);
+    expect(reply.headers["content-length"]).toBeUndefined();
+  });
+
+  it("cuts the response at http-end with aborted", async () => {
+    const { host, relay } = await setupManual();
+    const pending = land(relay, 2, "/file");
+    const id = await host.requestId();
+    host.reply({ t: "http-response", id, status: 200, headers: {} });
+    host.send(id, Buffer.from("part"));
+    host.reply({ t: "http-end", id, aborted: true });
+    // The cut may come before the headers are flushed: then the browser sees a reset.
+    const reply = await pending.catch(() => undefined);
+    expect(reply?.complete ?? false).toBe(false);
+    expect(await online(relay.url)).toEqual([2]);
+  });
+
+  it("drops a response over 32 MiB", async () => {
+    const { host, relay } = await setupManual();
+    const pending = land(relay, 2, "/file");
+    const id = await host.requestId();
+    host.reply({ t: "http-response", id, status: 200, headers: {} });
+    const chunk = Buffer.alloc(MAX_DATA_PAYLOAD);
+    for (let sent = 0; sent <= 32 * 1024 * 1024; sent += chunk.length)
+      host.send(id, chunk);
+    host.reply({ t: "http-end", id });
+    const reply = await pending;
+    expect(reply.complete).toBe(false);
+    expect(reply.body.length).toBeLessThanOrEqual(32 * 1024 * 1024);
+    expect(await online(relay.url)).toEqual([2]);
   });
 
   it("answers 504 when the Map server does not respond", async () => {
-    const hub = await startHub();
-    const relay = await startRelay(hub.url, { httpTimeoutMs: 100 });
-    const key = generatePrivateKey();
-    hub.lands.set(2, privateKeyToAccount(key).address);
-    const host = linkHost(relay.port, 2, key); // never answers http requests
-    expect(await host.ready).toBe(true);
-    expect((await http(relay.url, "/land/2/slow")).status).toBe(504);
+    const { relay } = await setupManual({ httpTimeoutMs: 100 });
+    const reply = await land(relay, 2, "/slow");
+    expect(reply.status).toBe(504);
+    expectLandHeaders(reply);
   });
 
   it("answers 502 when the host link drops mid-request", async () => {
-    const hub = await startHub();
-    const relay = await startRelay(hub.url);
-    const key = generatePrivateKey();
-    hub.lands.set(2, privateKeyToAccount(key).address);
-    const host = linkHost(relay.port, 2, key);
-    expect(await host.ready).toBe(true);
-    const pending = http(relay.url, "/land/2/slow");
-    await vi.waitFor(() =>
-      expect(host.control.some((m) => m.t === "http")).toBe(true),
-    );
+    const { host, relay } = await setupManual();
+    const pending = land(relay, 2, "/slow");
+    await host.requestId();
     host.ws.terminate();
-    expect((await pending).status).toBe(502);
+    const reply = await pending;
+    expect(reply.status).toBe(502);
+    expectLandHeaders(reply);
+  });
+
+  it("uses one id counter for HTTP requests and Player streams", async () => {
+    const { host, relay } = await setupManual();
+    const ws = player(relay, 2);
+    await opened(ws);
+    const pending = land(relay, 2, "/x");
+    const id = await host.requestId();
+    const open = host.control.find((m) => m.t === "open");
+    expect(open?.t === "open" && open.stream).not.toBe(id);
+    host.reply({ t: "http-response", id, status: 204, headers: {} });
+    host.reply({ t: "http-end", id });
+    await pending;
+    ws.terminate();
+  });
+
+  it("answers 405, 414 and 431 for what the host link cannot carry, and keeps the link", async () => {
+    const { relay } = await setup();
+    const method = await land(relay, 1, "/", { method: "PROPFIND" });
+    expect(method.status).toBe(405);
+    expectLandHeaders(method);
+    const path = await land(relay, 1, "/x?" + "a".repeat(3000));
+    expect(path.status).toBe(414);
+    expectLandHeaders(path);
+    const header = await land(relay, 1, "/x", {
+      headers: { origin: "http://a".padEnd(9000, "a") },
+    });
+    expect(header.status).toBe(431);
+    expectLandHeaders(header);
+    const ws = player(relay, 1, "/p?" + "a".repeat(3000));
+    expect(await rejectedStatus(ws)).toBe(414);
+    expect(await online(relay.url)).toEqual([1]);
+  });
+
+  it("puts the framing policy and nosniff on the offline page, and 'none' without Shell origins", async () => {
+    const { relay } = await setup({ shellOrigins: [] });
+    const offline = await land(relay, 9, "/");
+    expect(offline.status).toBe(503);
+    expect(offline.headers["content-security-policy"]).toBe(
+      "frame-ancestors 'none'",
+    );
+    expect(offline.headers["x-content-type-options"]).toBe("nosniff");
+    const served = await land(relay, 1, "/");
+    expect(served.headers["content-security-policy"]).toBe(
+      "frame-ancestors 'none'",
+    );
   });
 });
 
 describe("Player WebSockets", () => {
-  it("round-trips binary and text frames and forwards path and query", async () => {
-    const { map, relay } = await setup();
-    const ws = new WebSocket(
-      `ws://127.0.0.1:${relay.port}/land/1/proc123/room456?sessionId=abc`,
-    );
-    await opened(ws);
-    ws.send(Buffer.from([1, 2, 3]), { binary: true });
-    const bin = await nextMessage(ws);
-    expect(bin.isBinary).toBe(true);
-    expect([...bin.data]).toEqual([1, 2, 3]);
-    ws.send("héllo");
-    const text = await nextMessage(ws);
-    expect(text.isBinary).toBe(false);
-    expect(text.data.toString()).toBe("héllo");
-    expect(map.wsUrls).toEqual(["/proc123/room456?sessionId=abc"]);
-    ws.terminate();
-  });
-
   it("closes the local socket when the Player leaves, and the Player when it closes", async () => {
     const { relay } = await setup();
-    const ws = new WebSocket(`ws://127.0.0.1:${relay.port}/land/1/p/r`);
+    const ws = player(relay, 1);
     await opened(ws);
     ws.send("x");
     await nextMessage(ws);
     ws.close(4000);
     await closed(ws);
-    const stats = JSON.parse((await http(relay.url, "/stats")).body);
     await vi.waitFor(async () =>
       expect(
         JSON.parse((await http(relay.url, "/stats")).body).lands["1"].players,
       ).toBe(0),
     );
-    expect(stats.lands["1"]).toBeDefined();
   });
 
-  it("rejects a Player for an offline Land and for bad paths", async () => {
+  it("refuses a Player for an offline Land, with the framing policy", async () => {
     const { relay } = await setup();
-    expect(
-      await rejectedStatus(
-        new WebSocket(`ws://127.0.0.1:${relay.port}/land/9/p/r`),
-      ),
-    ).toBe(503);
-    expect(
-      await rejectedStatus(
-        new WebSocket(`ws://127.0.0.1:${relay.port}/land/1/p`),
-      ),
-    ).toBe(404);
-    expect(
-      await rejectedStatus(
-        new WebSocket(`ws://127.0.0.1:${relay.port}/land/1/p/r/extra`),
-      ),
-    ).toBe(404);
-    expect(
-      await rejectedStatus(
-        new WebSocket(`ws://127.0.0.1:${relay.port}/elsewhere`),
-      ),
-    ).toBe(404);
+    const refused = await rejectedResponse(player(relay, 9));
+    expect(refused.status).toBe(503);
+    expect(refused.headers["content-security-policy"]).toBe(CSP);
+    expect(refused.headers["x-content-type-options"]).toBe("nosniff");
   });
 
-  it("closes a Player that sends a frame over 16 KiB", async () => {
-    const { relay } = await setup();
-    const ws = new WebSocket(`ws://127.0.0.1:${relay.port}/land/1/p/r`);
+  it("closes a Player that sends a frame over PLAYER_MAX_FRAME", async () => {
+    const { relay } = await setup({ playerMaxFrame: 1024 });
+    const ws = player(relay, 1);
     await opened(ws);
     const done = closed(ws);
-    ws.send(Buffer.alloc(16 * 1024 + 1), { binary: true });
+    ws.send(Buffer.alloc(1025), { binary: true });
     expect((await done).code).toBe(1009);
     ws.on("error", () => {});
-    const ok = new WebSocket(`ws://127.0.0.1:${relay.port}/land/1/p/r`);
+    const ok = player(relay, 1);
     await opened(ok);
-    ok.send(Buffer.alloc(16 * 1024), { binary: true });
-    expect((await nextMessage(ok)).data.length).toBe(16 * 1024);
+    ok.send(Buffer.alloc(1024), { binary: true });
+    expect((await nextMessage(ok)).data.length).toBe(1024);
   });
 
   it("enforces MAX_CLIENTS_PER_LAND", async () => {
     const { relay } = await setup({ maxClientsPerLand: 1 });
-    const first = new WebSocket(`ws://127.0.0.1:${relay.port}/land/1/p/r`);
+    const first = player(relay, 1);
     await opened(first);
-    expect(
-      await rejectedStatus(
-        new WebSocket(`ws://127.0.0.1:${relay.port}/land/1/p/r`),
-      ),
-    ).toBe(503);
+    expect(await rejectedStatus(player(relay, 1))).toBe(503);
   });
 
   it("closes Players when the host link drops", async () => {
-    const hub = await startHub();
-    const relay = await startRelay(hub.url);
-    const key = generatePrivateKey();
-    hub.lands.set(2, privateKeyToAccount(key).address);
-    const host = linkHost(relay.port, 2, key);
-    expect(await host.ready).toBe(true);
-    const player = new WebSocket(`ws://127.0.0.1:${relay.port}/land/2/p/r`);
-    await opened(player);
-    const done = closed(player);
+    const { host, relay } = await setupManual();
+    const ws = player(relay, 2);
+    await opened(ws);
+    const done = closed(ws);
     host.ws.terminate();
     expect((await done).code).toBe(1001);
     await vi.waitFor(async () => expect(await online(relay.url)).toEqual([]));
   });
+
+  it("drops a Player that stops answering pings", async () => {
+    const { relay } = await setup({ pingIntervalMs: 50 });
+    const ws = player(relay, 1, "/play", { autoPong: false });
+    await opened(ws);
+    await closed(ws);
+    const stats = JSON.parse((await http(relay.url, "/stats")).body) as {
+      lands: Record<string, { players: number }>;
+    };
+    expect(stats.lands["1"]?.players).toBe(0);
+  });
 });
 
 describe("host authentication", () => {
-  it("accepts the Delegation's Mining key", async () => {
+  async function refused(options: LinkOptions, landKey = newKey()) {
     const hub = await startHub();
     const relay = await startRelay(hub.url);
-    const key = generatePrivateKey();
-    hub.lands.set(3, privateKeyToAccount(key).address);
-    expect(await linkHost(relay.port, 3, key).ready).toBe(true);
+    hub.lands.set(3, landKey.address);
+    const host = linkHost(relay, 3, landKey, options);
+    expect(await host.ready).toBe(false);
+    expect((await host.closed).code).toBe(4401);
+    expect(await online(relay.url)).toEqual([]);
+  }
+
+  it("accepts the Land's Map server key", async () => {
+    const hub = await startHub();
+    const relay = await startRelay(hub.url);
+    const key = newKey();
+    hub.lands.set(3, key.address);
+    expect(await linkHost(relay, 3, key).ready).toBe(true);
     expect(await online(relay.url)).toEqual([3]);
   });
 
-  it("rejects another key with a clear reason", async () => {
+  it("refuses a bad signature", () => refused({ tamper: true }));
+  it("refuses a statement naming another relay", () =>
+    refused({ relay: "other.example" }));
+  it("refuses a statement naming another Land", () => refused({ land: 4 }));
+  it("refuses a statement that does not answer the challenge", () =>
+    refused({ nonce: "0".repeat(32) }));
+  it("refuses a key that is not the Land's", async () => {
     const hub = await startHub();
     const relay = await startRelay(hub.url);
-    hub.lands.set(3, privateKeyToAccount(generatePrivateKey()).address);
-    const host = linkHost(relay.port, 3, generatePrivateKey());
+    hub.lands.set(3, newKey().address);
+    const host = linkHost(relay, 3, newKey());
     expect(await host.ready).toBe(false);
     expect(await host.closed).toEqual({
-      code: 4403,
-      reason: "signer is not the Land's delegated Mining key",
+      code: 4401,
+      reason: "signer is not the Land's Map server key",
     });
-    expect(await online(relay.url)).toEqual([]);
   });
 
-  it("rejects a Land that is not in the Directory (unknown or hidden)", async () => {
+  it("refuses a Land the Hub does not know or hides (404)", async () => {
     const hub = await startHub();
     const relay = await startRelay(hub.url);
-    const host = linkHost(relay.port, 3, generatePrivateKey());
+    const host = linkHost(relay, 3, newKey());
     expect(await host.ready).toBe(false);
-    expect((await host.closed).code).toBe(4404);
+    expect((await host.closed).code).toBe(4401);
+  });
+
+  it("refuses a hello over 16 KiB and anything but a hello first", async () => {
+    const hub = await startHub();
+    const relay = await startRelay(hub.url);
+    for (const frame of [
+      JSON.stringify({ t: "hello", statement: "x".repeat(20_000) }),
+      JSON.stringify({ t: "ready" }),
+      Buffer.from([0, 0, 0, 1, 0, 1]),
+    ]) {
+      const ws = new WebSocket(`ws://${relay.relayHost}/host/3`);
+      cleanups.push(() => ws.terminate());
+      await opened(ws);
+      const done = closed(ws);
+      ws.send(frame);
+      expect((await done).code).toBe(4401);
+    }
+  });
+
+  it("closes the link with 4408 when no hello comes", async () => {
+    vi.useFakeTimers({ toFake: ["setTimeout"] });
+    try {
+      const hub = await startHub();
+      const relay = await startRelay(hub.url);
+      const ws = new WebSocket(`ws://${relay.relayHost}/host/3`);
+      cleanups.push(() => ws.terminate());
+      await opened(ws);
+      const done = closed(ws);
+      await vi.advanceTimersByTimeAsync(10_001);
+      expect((await done).code).toBe(4408);
+    } finally {
+      vi.useRealTimers();
+    }
   });
 
   it("closes the link with 1013 when the Hub is unreachable", async () => {
     const relay = await startRelay("http://127.0.0.1:1");
-    const host = linkHost(relay.port, 3, generatePrivateKey());
+    const host = linkHost(relay, 3, newKey());
     expect((await host.closed).code).toBe(1013);
   });
 
   it("replaces the first link with a second valid one and closes its Players", async () => {
     const hub = await startHub();
     const relay = await startRelay(hub.url);
-    const key = generatePrivateKey();
-    hub.lands.set(3, privateKeyToAccount(key).address);
-    const first = linkHost(relay.port, 3, key);
+    const key = newKey();
+    hub.lands.set(3, key.address);
+    const first = linkHost(relay, 3, key);
     expect(await first.ready).toBe(true);
-    const player = new WebSocket(`ws://127.0.0.1:${relay.port}/land/3/p/r`);
-    await opened(player);
-    const playerClosed = closed(player);
-    const second = linkHost(relay.port, 3, key);
+    const ws = player(relay, 3);
+    await opened(ws);
+    const playerClosed = closed(ws);
+    const second = linkHost(relay, 3, key);
     expect(await second.ready).toBe(true);
     expect((await first.closed).code).toBe(4409);
     expect((await playerClosed).code).toBe(1001);
     expect(await online(relay.url)).toEqual([3]);
   });
 
-  it("drops a host whose Delegation changed or whose Land was hidden", async () => {
+  it("closes a link with 4403 when the Land is hidden or its key changed", async () => {
     const hub = await startHub();
     const relay = await startRelay(hub.url, { recheckIntervalMs: 50 });
-    const key = generatePrivateKey();
-    hub.lands.set(3, privateKeyToAccount(key).address);
-    hub.lands.set(4, privateKeyToAccount(key).address);
-    const changed = linkHost(relay.port, 3, key);
-    const hidden = linkHost(relay.port, 4, key);
+    const key = newKey();
+    hub.lands.set(3, key.address);
+    hub.lands.set(4, key.address);
+    const changed = linkHost(relay, 3, key);
+    const hidden = linkHost(relay, 4, key);
     expect((await changed.ready) && (await hidden.ready)).toBe(true);
-    hub.lands.set(3, privateKeyToAccount(generatePrivateKey()).address);
+    hub.lands.set(3, newKey().address);
     hub.lands.delete(4);
     expect((await changed.closed).code).toBe(4403);
     expect((await hidden.closed).code).toBe(4403);
     expect(await online(relay.url)).toEqual([]);
   });
 
+  it("keeps links up through a Hub outage", async () => {
+    const hub = await startHub();
+    const relay = await startRelay(hub.url, { recheckIntervalMs: 50 });
+    const key = newKey();
+    hub.lands.set(3, key.address);
+    expect(await linkHost(relay, 3, key).ready).toBe(true);
+    hub.state.down = true;
+    await sleep(300);
+    expect(await online(relay.url)).toEqual([3]);
+  });
+
   it("closes a link that misses two pings", async () => {
     const hub = await startHub();
     const relay = await startRelay(hub.url, { pingIntervalMs: 50 });
-    const key = generatePrivateKey();
-    hub.lands.set(3, privateKeyToAccount(key).address);
-    const host = linkHost(relay.port, 3, key, { autoPong: false });
+    const key = newKey();
+    hub.lands.set(3, key.address);
+    const host = linkHost(relay, 3, key, { autoPong: false });
     expect(await host.ready).toBe(true);
     await host.closed;
     expect(await online(relay.url)).toEqual([]);
@@ -543,10 +1007,10 @@ describe("host authentication", () => {
   it("keeps a responsive link past several pings", async () => {
     const hub = await startHub();
     const relay = await startRelay(hub.url, { pingIntervalMs: 30 });
-    const key = generatePrivateKey();
-    hub.lands.set(3, privateKeyToAccount(key).address);
-    expect(await linkHost(relay.port, 3, key).ready).toBe(true);
-    await new Promise((r) => setTimeout(r, 250));
+    const key = newKey();
+    hub.lands.set(3, key.address);
+    expect(await linkHost(relay, 3, key).ready).toBe(true);
+    await sleep(250);
     expect(await online(relay.url)).toEqual([3]);
   });
 });
@@ -554,13 +1018,45 @@ describe("host authentication", () => {
 describe("agent", () => {
   it("reconnects after the relay restarts", async () => {
     const { hub, relay } = await setup();
-    const port = relay.port;
     await new Promise<void>((resolve) => relay.relay.close(() => resolve()));
-    const again = await startRelay(hub.url, {}, port);
+    const again = await startRelay(hub.url, {}, relay.port);
     await vi.waitFor(async () => expect(await online(again.url)).toEqual([1]), {
       timeout: 10_000,
       interval: 100,
     });
+  }, 15_000);
+
+  it("starts its backoff again at 1 s after every link that got ready", async () => {
+    // a stand-in relay that accepts any hello, says ready, then drops the link
+    const wss = new WebSocketServer({ port: 0, host: "127.0.0.1" });
+    cleanups.push(
+      () => new Promise<void>((resolve) => wss.close(() => resolve())),
+    );
+    await new Promise((resolve) => wss.once("listening", resolve));
+    wss.on("connection", (ws) => {
+      ws.send(JSON.stringify({ t: "challenge", nonce: "0".repeat(32) }));
+      ws.once("message", () => {
+        ws.send(JSON.stringify({ t: "ready" }));
+        ws.close(1001);
+      });
+    });
+    const retries: string[] = [];
+    const agent = connectHost({
+      relayUrl: `ws://127.0.0.1:${(wss.address() as AddressInfo).port}`,
+      landId: 1,
+      mapServerKey: newKey(),
+      localPort: 1,
+      log: (line) => {
+        const delay = /retrying in (\S+ s)/.exec(line)?.[1];
+        if (delay) retries.push(delay);
+      },
+    });
+    cleanups.push(() => agent.close());
+    await vi.waitFor(() => expect(retries.length).toBeGreaterThanOrEqual(3), {
+      timeout: 10_000,
+      interval: 50,
+    });
+    expect(retries.slice(0, 3)).toEqual(["1 s", "1 s", "1 s"]);
   }, 15_000);
 
   it("stops reconnecting once closed", async () => {
@@ -568,17 +1064,35 @@ describe("agent", () => {
     await agent.close();
     await vi.waitFor(async () => expect(await online(relay.url)).toEqual([]));
   });
+
+  it("refuses a relay URL that is not a ws(s) base URL", () => {
+    for (const relayUrl of [
+      "http://127.0.0.1:1",
+      "ws://127.0.0.1:1/path",
+      "ws://127.0.0.1:1/?a=1",
+      "nope",
+    ])
+      expect(() =>
+        connectHost({
+          relayUrl,
+          landId: 1,
+          mapServerKey: newKey(),
+          localPort: 1,
+          log: () => {},
+        }),
+      ).toThrow();
+  });
 });
 
 describe("/online and /stats", () => {
   it("lists online Lands sorted and counts bytes and messages per Land and session", async () => {
     const { hub, map, relay } = await setup();
-    const key2 = generatePrivateKey();
-    hub.lands.set(2, privateKeyToAccount(key2).address);
+    const key2 = newKey();
+    hub.lands.set(2, key2.address);
     const second = connectHost({
-      relayUrl: relay.url,
+      relayUrl: relay.wsUrl,
       landId: 2,
-      privateKey: key2,
+      mapServerKey: key2,
       localPort: map.port,
       log: () => {},
     });
@@ -587,7 +1101,7 @@ describe("/online and /stats", () => {
       expect(await online(relay.url)).toEqual([1, 2]),
     );
 
-    const ws = new WebSocket(`ws://127.0.0.1:${relay.port}/land/1/p/r`);
+    const ws = player(relay, 1);
     await opened(ws);
     const echoes: unknown[] = [];
     ws.on("message", (d) => echoes.push(d));
@@ -596,8 +1110,8 @@ describe("/online and /stats", () => {
     await vi.waitFor(() => expect(echoes).toHaveLength(2));
     const stats = JSON.parse((await http(relay.url, "/stats")).body);
     expect(stats.hosts).toBe(2);
-    const land = stats.lands["1"];
-    expect(land).toMatchObject({
+    const stat = stats.lands["1"];
+    expect(stat).toMatchObject({
       online: true,
       players: 1,
       bytesIn: 15,
@@ -605,7 +1119,7 @@ describe("/online and /stats", () => {
       messagesIn: 2,
       messagesOut: 2,
     });
-    expect(land.sessions).toEqual([
+    expect(stat.sessions).toEqual([
       { stream: 1, bytesIn: 15, bytesOut: 15, messagesIn: 2, messagesOut: 2 },
     ]);
     expect(stats.lands["2"]).toMatchObject({
@@ -614,72 +1128,5 @@ describe("/online and /stats", () => {
       bytesIn: 0,
     });
     ws.terminate();
-  });
-});
-
-describe("untrusted input", () => {
-  const stillLinked = async (relayUrl: string) =>
-    expect(await online(relayUrl)).toEqual([1]);
-
-  it("answers 405 for a method the host link cannot carry, and keeps the link", async () => {
-    const { relay } = await setup();
-    expect(
-      (await http(relay.url, "/land/1/", { method: "PROPFIND" })).status,
-    ).toBe(405);
-    await stillLinked(relay.url);
-  });
-
-  it("answers 431 for an oversized forwarded header, and keeps the link", async () => {
-    const { relay } = await setup();
-    const reply = await http(relay.url, "/land/1/matchmake/joinOrCreate/x", {
-      headers: { origin: "http://a".padEnd(9000, "a") },
-    });
-    expect(reply.status).toBe(431);
-    await stillLinked(relay.url);
-  });
-
-  it("answers 414 for a path the host link cannot carry, and keeps the link", async () => {
-    const { relay } = await setup();
-    const long = "/land/1/x?" + "a".repeat(3000);
-    expect((await http(relay.url, long)).status).toBe(414);
-    const ws = new WebSocket(
-      `ws://127.0.0.1:${relay.port}/land/1/p/r?${"a".repeat(3000)}`,
-    );
-    expect(await rejectedStatus(ws)).toBe(414);
-    await stillLinked(relay.url);
-  });
-
-  it("does not forward Authorization to the Map server", async () => {
-    const { map, relay } = await setup();
-    await http(relay.url, "/land/1/x", {
-      headers: { authorization: "Bearer hub-session-token" },
-    });
-    expect(map.requests[0]?.headers.authorization).toBeUndefined();
-  });
-
-  it("neutralises active content and redirects from a Map server", async () => {
-    const { relay } = await setup();
-    const reply = await http(relay.url, "/land/1/evil");
-    expect(reply.headers.location).toBeUndefined();
-    expect(reply.headers["x-custom"]).toBeUndefined();
-    expect(reply.headers["content-security-policy"]).toContain("sandbox");
-  });
-
-  it("does not alias a Land through leading zeros", async () => {
-    const { relay } = await setup();
-    expect((await http(relay.url, "/land/01/x")).status).toBe(404);
-  });
-
-  it("drops a Player that stops answering pings", async () => {
-    const { relay } = await setup({ pingIntervalMs: 50 });
-    const ws = new WebSocket(`ws://127.0.0.1:${relay.port}/land/1/p/r`, {
-      autoPong: false,
-    });
-    await opened(ws);
-    await closed(ws);
-    const stats = JSON.parse((await http(relay.url, "/stats")).body) as {
-      lands: Record<string, { players: number }>;
-    };
-    expect(stats.lands["1"]?.players).toBe(0);
   });
 });
