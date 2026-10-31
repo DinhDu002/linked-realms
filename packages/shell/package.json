@@ -10,7 +10,8 @@
     "typecheck": "tsc",
     "test": "vitest run --fsModuleCachePath node_modules/.vitest-cache",
     "test:browser": "playwright test",
-    "e2e:world": "playwright test -c playwright.world.config.ts"
+    "e2e:world": "playwright test -c playwright.world.config.ts",
+    "e2e:chain": "playwright test -c playwright.chain.config.ts"
   },
   "dependencies": {
     "@linked-realms/core": "workspace:*",
