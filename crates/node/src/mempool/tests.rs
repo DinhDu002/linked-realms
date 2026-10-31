@@ -116,6 +116,7 @@ fn estimates_the_fee_rate_that_reaches_the_next_block() {
     let room = MAX_BLOCK_SIZE - HEADER_LEN - 2 - LARGEST_TRANSFER_LEN;
     let mut senders: Vec<u8> = (0..10).collect();
     senders.rotate_left(1);
+    let mut beside_the_transfer = false;
     for i in senders {
         for nonce in 0..40 {
             add(
@@ -124,14 +125,14 @@ fn estimates_the_fee_rate_that_reaches_the_next_block() {
                 pay(&key(i), nonce, f, 1, 20 + u64::from(i)),
             )
             .unwrap();
-        }
-        if i == 9 {
-            assert!(pool.bytes <= room);
-            assert_eq!(pool.fee_rate(), 10);
+            let expected = if pool.bytes <= room { 10 } else { 21 };
+            assert_eq!(pool.fee_rate(), expected, "{} bytes held", pool.bytes);
+            beside_the_transfer |= pool.bytes > room && pool.bytes <= room + LARGEST_TRANSFER_LEN;
         }
     }
+    // Once, what is held fit a Block only without room for the largest transfer.
+    assert!(beside_the_transfer);
     assert!(pool.bytes > room);
-    assert_eq!(pool.fee_rate(), 21);
 }
 
 #[test]

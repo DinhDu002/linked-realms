@@ -413,7 +413,7 @@ fn the_calls_left_fill_again_and_count_an_ipv6_host_once() {
     assert!(clients.take(ip("10.0.0.2"), 2, at(0)));
     // One IPv6 /64 is one client.
     assert!(clients.take(ip("2001:db8::1"), 3, at(0)));
-    assert!(!clients.take(ip("2001:db8::ffff:1"), 1, at(0)));
+    assert!(!clients.take(ip("2001:db8::ffff:0:0:1"), 1, at(0)));
     assert!(clients.take(ip("2001:db8:0:1::1"), 1, at(0)));
 
     // Past `MAX_CLIENTS`, a new client takes the place of one whose calls filled again, or
@@ -506,6 +506,12 @@ fn browsers_may_call_from_any_origin() {
     assert_eq!(answer["result"]["height"], 0);
 }
 
+/// A subscription's next item, within 5 seconds.
+async fn next(subscription: &mut Subscription<Value>) -> Value {
+    let next = tokio::time::timeout(Duration::from_secs(5), subscription.next()).await;
+    next.expect("in time").unwrap().unwrap()
+}
+
 #[test]
 fn subscriptions_tell_of_new_blocks_and_of_an_address_s_transactions() {
     let file = File::new("rpc-subscribe");
@@ -517,10 +523,20 @@ fn subscriptions_tell_of_new_blocks_and_of_an_address_s_transactions() {
     let runtime = tokio::runtime::Runtime::new().unwrap();
     runtime.block_on(async {
         let client = WsClientBuilder::default().build(served.ws()).await.unwrap();
+        let submit = |from: usize, to: usize| {
+            let some = blocks[from..to].to_vec();
+            served
+                .running
+                .call(move |node, _| submit_all(&node.chain, &some))
+        };
         let mut joined: Subscription<Value> = client
             .subscribe("lr_subscribeBlocks", rpc_params![], "lr_unsubscribeBlocks")
             .await
             .unwrap();
+        // One subscriber is enough to hear of a Block.
+        submit(20, 21).await.unwrap();
+        assert_eq!(next(&mut joined).await, header_json(&blocks[20].header));
+
         let watched = nobody(6).to_string();
         let mut paid: Subscription<Value> = client
             .subscribe(
@@ -539,15 +555,9 @@ fn subscriptions_tell_of_new_blocks_and_of_an_address_s_transactions() {
             .await;
         assert!(matches!(bad, Err(ClientError::Call(e)) if e.code() == -32602));
 
-        let above = blocks[20..].to_vec();
-        served
-            .running
-            .call(move |node, _| submit_all(&node.chain, &above))
-            .await
-            .unwrap();
-        for block in &blocks[20..] {
-            let header = joined.next().await.unwrap().unwrap();
-            assert_eq!(header, header_json(&block.header));
+        submit(21, blocks.len()).await.unwrap();
+        for block in &blocks[21..] {
+            assert_eq!(next(&mut joined).await, header_json(&block.header));
         }
         let placed = Placed {
             tx: blocks[21].txs[0].clone(),
@@ -555,8 +565,7 @@ fn subscriptions_tell_of_new_blocks_and_of_an_address_s_transactions() {
             height: 22,
             place: 0,
         };
-        let item = paid.next().await.unwrap().unwrap();
-        assert_eq!(item, placed_json(&PARAMS, &placed));
+        assert_eq!(next(&mut paid).await, placed_json(&PARAMS, &placed));
     });
 }
 

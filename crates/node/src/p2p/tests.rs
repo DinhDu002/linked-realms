@@ -626,6 +626,38 @@ fn a_new_checkpoint_is_passed_on_once_and_a_forged_one_bans() {
 }
 
 #[test]
+fn a_checkpoint_that_moves_the_tip_announces_the_new_one() {
+    let file = File::new("p2p-checkpoint-tip");
+    let mut node = node(&file, 0, &[]);
+    let mut net = Recorder::default();
+    let mut build = Builder::new();
+    let genesis = build.genesis();
+    let main = build.branch(&genesis, nobody(1), 12);
+    let other = build.branch(&genesis, nobody(2), 10);
+    submit_all(&node.chain, &main);
+    submit_all(&node.chain, &other);
+    let now = main[11].header.timestamp;
+    greet(
+        &mut node,
+        &mut net,
+        1,
+        SocketAddr::from(([10, 0, 0, 1], 5000)),
+        now,
+    );
+    net.sent.clear();
+    let tip = other[9].header.id();
+    node.submit_checkpoint(&mut net, checkpoint(10, tip))
+        .unwrap()
+        .unwrap();
+    assert_eq!(node.chain.tip().unwrap().id(), tip);
+    assert!(
+        net.sent.contains(&(1, Message::Inv(vec![tip]))),
+        "{:?}",
+        net.sent
+    );
+}
+
+#[test]
 fn a_sync_that_runs_out_asks_for_the_next_headers() {
     let file = File::new("p2p-next");
     let mut node = node(&file, 0, &[]);
