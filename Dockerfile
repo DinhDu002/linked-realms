@@ -1,9 +1,11 @@
-# Two images:
+# Three images:
 # - the default target: hub-api, the relay and the Map server. Its default command is a self-hosted
 #   Map server (docs/self-hosting.md); compose.yaml names the command for the other services.
 # - `shell` (docker build --target shell): the Shell's static pages behind Caddy with its headers.
 #   The Hub's URL is fixed when it is built: --build-arg VITE_HUB_URL=https://hub.example.org, and
 #   so is the Map server image its "Your Land" command runs: --build-arg VITE_LAND_IMAGE=<image>.
+# - `lr-node` (docker build --target lr-node): a Node of LR alone, for the company's seed, Public
+#   node, archive and Checkpoint signer (deploy/compose.chain.yaml, deploy/compose.signer.yaml).
 # Node 26 runs the services' TypeScript directly; only the WebAssembly core and the two web pages
 # are built, on the build machine's platform, so a multi-platform build (image.yml) emulates only
 # the last stage.
@@ -29,16 +31,27 @@ COPY crates crates
 RUN cargo build --locked -p linked-realms-core --features wasm --target wasm32-unknown-unknown --profile wasm \
  && wasm-bindgen --target web --out-dir /pkg target/wasm32-unknown-unknown/wasm/linked_realms_core.wasm
 
-# The chain on musl, as the final image: lr-node is built here from step 2C item 24. Until then,
-# crates/randomx's vectors, which prove the RandomX it links builds and hashes right on musl.
-# CMake and the C++ compiler come from the image's Alpine release, at these versions; without
-# linux-headers (asm/hwcap.h) RandomX quietly hashes with software AES on ARM.
+# The chain on musl: crates/randomx's vectors, which prove the RandomX it links builds and hashes
+# right on musl, then lr-node. CMake and the C++ compiler come from the image's Alpine release, at
+# these versions; without linux-headers (asm/hwcap.h) RandomX quietly hashes with software AES on
+# ARM.
 FROM rust:1.99.1-alpine3.24 AS chain
 RUN apk add --no-cache cmake~4.2 g++~15.2 make~4.4 linux-headers~7.0
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates crates
-RUN cargo test --locked -p linked-realms-randomx
+RUN cargo test --locked -p linked-realms-randomx \
+ && cargo build --locked --release -p linked-realms-node --bin lr-node
+
+# Only the binary: no key is in this image. A Checkpoint signer's words are a secret file on its
+# own machine (deploy/compose.signer.yaml). The chain lives in the /data volume, writable by the
+# unprivileged user.
+FROM alpine:3.24.3 AS lr-node
+RUN install -d -o 10001 -g 10001 /data
+COPY --from=chain /src/target/release/lr-node /usr/local/bin/lr-node
+USER 10001:10001
+ENTRYPOINT ["lr-node"]
+CMD ["--data", "/data"]
 
 # The Land UI (packages/client) and the Shell.
 FROM --platform=$BUILDPLATFORM node:26.12.1-alpine3.24 AS build
