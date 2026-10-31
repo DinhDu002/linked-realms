@@ -32,6 +32,15 @@ import {
   ServerMessageSchema,
 } from "@linked-realms/shared/land-protocol";
 import { WebSocketServer, type RawData, type WebSocket } from "ws";
+import {
+  checkSwitch,
+  expired,
+  mineState,
+  newChallenge,
+  SWITCH_EVERY_MS,
+  type Challenge,
+} from "./mine.ts";
+import { NodeRefused, type NodeLink } from "./node.ts";
 
 export const MAX_CHARACTERS = 64;
 export const MAX_INPUTS_PER_SECOND = 30;
@@ -60,6 +69,10 @@ export interface LandServerOptions {
   startedAt?: number;
   /** How long a connection may stay silent before its hello; tests shorten it. */
   helloTimeoutMs?: number;
+  /** This Map server's own address, which the Land owner's switch must name. */
+  mapServerKey: string;
+  /** The Land's Node; without one the Mine is unavailable (NODE_ENABLED=false). */
+  node?: NodeLink;
 }
 
 /** The Land this server serves, as the Hub reports it. Known only after the Hub has created it. */
@@ -92,6 +105,11 @@ interface Session {
   ackedSeq: number;
   windowStart: number;
   windowCount: number;
+  /** The Land owner's sessions only: the challenge their next switch must carry. */
+  challenge?: Challenge;
+  /** When the last switch was taken (milliseconds), and whether it is still with the Node. */
+  switchedAt: number;
+  switching: boolean;
 }
 
 const CONTENT_TYPES: Record<string, string> = {
@@ -120,7 +138,7 @@ const serialize = (message: Outgoing): Uint8Array =>
   toBinary(ServerMessageSchema, create(ServerMessageSchema, { message }));
 
 export function createLandServer(options: LandServerOptions) {
-  const { map, mapText, hubTicketSigner } = options;
+  const { map, mapText, hubTicketSigner, mapServerKey, node } = options;
   const now = options.now ?? Date.now;
   const tickMs = options.tickMs ?? 1000 / SERVER_TICK_HZ;
   const helloTimeoutMs = options.helloTimeoutMs ?? HELLO_TIMEOUT_MS;
@@ -147,6 +165,32 @@ export function createLandServer(options: LandServerOptions) {
     send(socket, { case: "error", value: { code, message } });
     socket.close(CLOSE_POLICY, code);
   };
+
+  const sendMine = (session: Session) =>
+    send(session.socket, {
+      case: "mineState",
+      value: mineState(
+        node,
+        session.challenge && {
+          challenge: session.challenge.nonce,
+          mapServerKey,
+        },
+      ),
+    });
+  node?.onChange(() => {
+    for (const session of sessions.values()) sendMine(session);
+  });
+  node?.onWon((found) => {
+    for (const session of sessions.values())
+      send(session.socket, {
+        case: "mineWon",
+        value: {
+          height: BigInt(found.height),
+          reward: found.reward,
+          rewardAddress: found.rewardAddress,
+        },
+      });
+  });
 
   function isUsed(nonce: string, nowSeconds: number): boolean {
     for (const [used, expires] of usedNonces)
@@ -207,6 +251,9 @@ export function createLandServer(options: LandServerOptions) {
       ackedSeq: 0,
       windowStart: 0,
       windowCount: 0,
+      challenge: character.isOwner ? newChallenge(nowSeconds) : undefined,
+      switchedAt: -Infinity,
+      switching: false,
     };
     for (const other of sessions.values())
       send(other.socket, { case: "joined", value: character });
@@ -225,6 +272,44 @@ export function createLandServer(options: LandServerOptions) {
         characters: [...sessions.values()].map((s) => s.character),
       },
     });
+    sendMine(session);
+  }
+
+  /** "Checks, in order" (map-server-node.md) on a switch, answered with a MineSwitchResult. */
+  async function onMineSwitch(session: Session, signed: unknown) {
+    const answer = (ok: boolean, code = "") =>
+      send(session.socket, { case: "mineSwitchResult", value: { ok, code } });
+    const nowMs = now();
+    if (session.switching || nowMs - session.switchedAt < SWITCH_EVERY_MS)
+      return answer(false, "rate-limited");
+    session.switchedAt = nowMs;
+    if (!session.character.isOwner || !land) return answer(false, "not-owner");
+    const nowSeconds = Math.floor(nowMs / 1000);
+    const checked = checkSwitch(signed, {
+      landId: land.landId,
+      owner: land.owner,
+      mapServerKey,
+      nowSeconds,
+      challenge: session.challenge,
+    });
+    if ("refused" in checked) return answer(false, checked.refused);
+    // Spent: a fresh challenge at once.
+    session.challenge = newChallenge(nowSeconds);
+    sendMine(session);
+    const { on, threads } = checked.switch;
+    const info = node?.info();
+    if (!node || !info) return answer(false, "unavailable");
+    if (on && threads > info.maxThreads) return answer(false, "bad-threads");
+    session.switching = true;
+    try {
+      await (on ? node.start(land.owner, threads) : node.stop());
+      answer(true);
+    } catch (error) {
+      const refused = error instanceof NodeRefused && error.message;
+      answer(false, refused === "bad-threads" ? refused : "unavailable");
+    } finally {
+      session.switching = false;
+    }
   }
 
   function onInput(
@@ -266,6 +351,10 @@ export function createLandServer(options: LandServerOptions) {
     }
     if (message.case === "input" && session)
       return onInput(socket, session, message.value);
+    if (message.case === "mineSwitch" && session)
+      return void onMineSwitch(session, message.value.signed).catch(
+        (error: unknown) => console.error("Mine switch failed:", error),
+      );
     refuse(socket, "bad-message", "unexpected message");
   }
 
@@ -296,6 +385,12 @@ export function createLandServer(options: LandServerOptions) {
   });
 
   function tick() {
+    const nowSeconds = Math.floor(now() / 1000);
+    for (const session of sessions.values())
+      if (session.challenge && expired(session.challenge, nowSeconds)) {
+        session.challenge = newChallenge(nowSeconds);
+        sendMine(session);
+      }
     const moved = new Set<Session>();
     for (const session of sessions.values()) {
       if (session.dx === 0 && session.dy === 0) continue;
