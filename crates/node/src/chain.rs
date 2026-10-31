@@ -44,6 +44,9 @@ pub const KEEP_BELOW_CHECKPOINT: u64 = 1_440;
 /// A part of a state snapshot: accounts in the tree's key order, and whether more follow.
 pub type SnapshotPart = (Vec<(Address, Account)>, bool);
 
+/// A best chain Block's id and the number of Accounts it created, if this Node can count them.
+pub type Created = ([u8; 32], Option<usize>);
+
 /// A transaction of the best chain, and where it is.
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Placed {
@@ -188,6 +191,22 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
                 .map(|at| {
                     let id = t.best(at).expect("a Block at every height");
                     t.header(&id).expect("a stored header").header
+                })
+                .collect())
+        })
+    }
+
+    /// Up to `max` of the best chain's Blocks from `height` up, each with the number of Accounts
+    /// it created, read from its undo record: none where this Node holds no undo record (the
+    /// genesis, and a Block it pruned or holds below a state snapshot).
+    pub fn new_accounts_from(&self, height: u64, max: u64) -> Result<Vec<Created>, Error> {
+        self.read(|t| {
+            let tip = t.header(&t.tip()).expect("a stored tip").header.height;
+            let end = tip.saturating_add(1).min(height.saturating_add(max));
+            Ok((height..end)
+                .map(|at| {
+                    let id = t.best(at).expect("a Block at every height");
+                    (id, t.new_accounts(&id))
                 })
                 .collect())
         })

@@ -441,6 +441,18 @@ impl<'t> Tables<'t> {
         read_undo(db(self.undo.get(id)).expect("an undo record").value())
     }
 
+    /// How many Accounts the best chain's Block `id` created, if its undo record is held.
+    pub fn new_accounts(&self, id: &[u8; 32]) -> Option<usize> {
+        let record = db(self.undo.get(id))?;
+        let before = read_undo(record.value());
+        Some(
+            before
+                .iter()
+                .filter(|(_, account)| account.is_none())
+                .count(),
+        )
+    }
+
     #[cfg(test)]
     pub fn has_undo(&self, id: &[u8; 32]) -> bool {
         db(self.undo.get(id)).is_some()

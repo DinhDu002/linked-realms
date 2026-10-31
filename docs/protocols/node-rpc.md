@@ -64,6 +64,7 @@ The admin methods (`node_info`, `lr_getConnections`, `lr_addNode`) and every `mi
 | `lr_getInfo` | | `{ networkId, genesis, height, tip, time, latestCheckpoint: { height, blockId } \| null, pruned, archive, connections }` |
 | `lr_getHeader` | height or Block id | Header on the best chain at that height, or by id on any branch; `null` if not known |
 | `lr_getHeaders` | from height, count | the best chain's Headers from that height, at most 2,000 |
+| `lr_getNewAccountCounts` | from height, count | `[{ id, newAccounts }]` for the best chain's Blocks from that height, at most 2,000: the number of Accounts each Block created (`docs/protocols/blocks.md`, "New Accounts"), or `null` where the Node cannot count it |
 | `lr_getBlock` | height or Block id | `{ header, txs: [Transaction] }`; `null` if not known; -32002 if its body is not held (pruned, or not taken yet) |
 | `lr_getAccount` | address, includeMempool (optional, false) | Account on the tip; with the mempool, as it would be after the sender's held transactions; `null` if it does not exist |
 | `lr_getTransaction` | transaction id | `{ tx, block: null }` if held in the mempool; a Placed transaction if on the best chain; `null` otherwise |
@@ -77,6 +78,7 @@ The admin methods (`node_info`, `lr_getConnections`, `lr_addNode`) and every `mi
 Notes:
 
 - `pruned` is the height below which this Node no longer holds bodies (0 for none); `archive` is true if it never prunes. `time` is the tip's timestamp.
+- `lr_getNewAccountCounts` counts from the record a Node keeps to take each Block back off its best chain, which the reward address is part of. A Node has no such record for the genesis, for a Block it pruned, or for one below the state snapshot it started from: those are `null`. With `lr_getHeaders` from the same height, the ids say which Header each count is for, even if the best chain changed between the two calls.
 - `lr_getAddressTxs` counts transfers to and from the address and its key rotations, not Block rewards, and only what the Node holds bodies for: a pruning Node forgets the index below what it pruned.
 - `lr_estimateFee` fills a Block with the held transactions by fee rate, leaving room for the largest transfer; if they all fit it is the minimum rate, otherwise one above the rate of the first that does not. It does not look at nonce order.
 - A Checkpoint is checked against the network's key and taken even if its Block is not known yet: it is held, the branches that contradict it are cut, and it applies when its Block comes. A lower one than the latest is taken and the latest stays. One higher than the latest held is passed on to the other Nodes.

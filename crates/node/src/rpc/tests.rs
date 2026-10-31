@@ -158,6 +158,33 @@ fn every_method_answers_on_a_running_node() {
     assert_eq!(served.result("lr_getHeaders", json!([0, 0])), json!([]));
     assert_eq!(served.result("lr_getHeaders", json!([26, 5])), json!([]));
 
+    // The Accounts each Block created: the miner's in Block 1, a payee's in Blocks 15 and 22.
+    let counts = served.result("lr_getNewAccountCounts", json!([0, 30]));
+    let counted: Vec<_> = counts
+        .as_array()
+        .unwrap()
+        .iter()
+        .map(|c| c["newAccounts"].clone())
+        .collect();
+    let mut expected = vec![json!(0); 26];
+    expected[0] = Value::Null;
+    for height in [1, 15, 22] {
+        expected[height] = json!(1);
+    }
+    assert_eq!(counted, expected);
+    assert_eq!(counts[15]["id"], hex_id(&blocks[14]));
+    assert_eq!(
+        served.result("lr_getNewAccountCounts", json!([22, 2])),
+        json!([
+            { "id": hex_id(&blocks[21]), "newAccounts": 1 },
+            { "id": hex_id(&blocks[22]), "newAccounts": 0 },
+        ])
+    );
+    assert_eq!(
+        served.result("lr_getNewAccountCounts", json!([26, 5])),
+        json!([])
+    );
+
     let block = served.result("lr_getBlock", json!([15]));
     assert_eq!(block, block_json(&PARAMS, &blocks[14]));
     let paid = &block["txs"][0];
@@ -299,6 +326,7 @@ fn the_errors_have_their_codes() {
         ("lr_getAccount", json!([])),
         ("lr_getBlock", json!(["1234"])),
         ("lr_getHeaders", json!([1])),
+        ("lr_getNewAccountCounts", json!([1])),
         (
             "lr_getAddressTxs",
             json!([nobody(1).to_string(), { "height": 1 }]),
@@ -333,6 +361,17 @@ fn the_errors_have_their_codes() {
         RESOURCE_UNAVAILABLE as i64
     );
     assert!(served.result("lr_getBlock", json!([25])).is_object());
+    // ... nor its undo record, so it cannot count the Accounts that Block created.
+    assert_eq!(
+        served.result("lr_getNewAccountCounts", json!([18, 5])),
+        json!([
+            { "id": hex_id(&blocks[17]), "newAccounts": null },
+            { "id": hex_id(&blocks[18]), "newAccounts": 0 },
+            { "id": hex_id(&blocks[19]), "newAccounts": 0 },
+            { "id": hex_id(&blocks[20]), "newAccounts": 0 },
+            { "id": hex_id(&blocks[21]), "newAccounts": 1 },
+        ])
+    );
 
     // Each refusal of the mempool, with its reason.
     let mut cheap = pay(&miner, 2, nobody(7), GOLD, 10);
@@ -531,6 +570,7 @@ fn no_admin_method_is_on_the_public_listener() {
         "lr_getHeaders",
         "lr_getInfo",
         "lr_getMempoolInfo",
+        "lr_getNewAccountCounts",
         "lr_getTransaction",
         "lr_sendTransaction",
         "lr_submitCheckpoint",
