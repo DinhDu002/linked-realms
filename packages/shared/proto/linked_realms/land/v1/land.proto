@@ -16,15 +16,23 @@ message ClientMessage {
   oneof message {
     Hello hello = 1;
     Input input = 2;
+    // Mining (docs/protocols/map-server-node.md).
+    MineSwitch mine_switch = 20;
   }
-  // Mining (step 2C).
-  reserved 20 to 29;
+  // Mining, later.
+  reserved 21 to 29;
 }
 
 // The first message on a connection: the handoff from the Shell (docs/protocols/arrival.md).
 message Hello {
   SignedStatement ticket = 1;
   SignedStatement arrival = 2;
+}
+
+// The Land owner switches the Land's Mine: a Land message signed in the Shell whose Message is a
+// Mine switch line (docs/protocols/map-server-node.md).
+message MineSwitch {
+  SignedStatement signed = 1;
 }
 
 // Where the Character is walking: dx and dy are -1, 0 or 1. Sent whenever they change.
@@ -43,9 +51,13 @@ message ServerMessage {
     Moved moved = 4;
     Notice notice = 5;
     Error error = 6;
+    // Mining (docs/protocols/map-server-node.md).
+    MineState mine_state = 20;
+    MineSwitchResult mine_switch_result = 21;
+    MineWon mine_won = 22;
   }
-  // Mining (step 2C).
-  reserved 20 to 29;
+  // Mining, later.
+  reserved 23 to 29;
 }
 
 // Sent once, after the handoff is accepted: everything a new Character needs.
@@ -104,4 +116,43 @@ message Error {
   // "unavailable" while the Map server does not yet know its Land.
   string code = 1;
   string message = 2;
+}
+
+// The Land's Mine as the Map server reports it: to everyone after Welcome, on each change, and
+// about every 2 seconds while on. A visitor cannot verify it (P1).
+message MineState {
+  // "off", "starting", "on", or "unavailable" while the Land has no Node or it is not synced.
+  string status = 1;
+  // Threads hashing now.
+  uint32 threads = 2;
+  // The most threads the Land owner may choose.
+  uint32 max_threads = 3;
+  // Hashes a second over the last 10 seconds.
+  double hash_rate = 4;
+  // "fast" or "light" while starting or on; empty when off.
+  string mode = 5;
+  // The Land owner's address the Mine mines for; empty before its first start.
+  string reward_address = 6;
+  // Blocks the Mine won since its Node started.
+  uint32 blocks_won = 7;
+  // Only in the Land owner's copy, for the next switch: this session's challenge (the switch's
+  // Nonce) and the Map server's own address (its Map server key). Empty in everyone else's.
+  string challenge = 8;
+  string map_server_key = 9;
+}
+
+// The answer to the session that sent a MineSwitch.
+message MineSwitchResult {
+  bool ok = 1;
+  // When not ok: "not-owner", "bad-statement", "stale", "wrong-nonce", "bad-threads",
+  // "unavailable" or "rate-limited".
+  string code = 2;
+}
+
+// The Land's Mine won a Block: to everyone.
+message MineWon {
+  uint64 height = 1;
+  // Base units as a decimal string: the Block reward at that height plus the Block's fees.
+  string reward = 2;
+  string reward_address = 3;
 }
