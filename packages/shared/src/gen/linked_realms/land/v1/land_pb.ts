@@ -14,7 +14,7 @@ import type { Message } from "@bufbuild/protobuf";
  * Describes the file linked_realms/land/v1/land.proto.
  */
 export const file_linked_realms_land_v1_land: GenFile = /*@__PURE__*/
-  fileDesc("CiBsaW5rZWRfcmVhbG1zL2xhbmQvdjEvbGFuZC5wcm90bxIVbGlua2VkX3JlYWxtcy5sYW5kLnYxIksKD1NpZ25lZFN0YXRlbWVudBIRCglzdGF0ZW1lbnQYASABKAkSEgoKcHVibGljX2tleRgCIAEoCRIRCglzaWduYXR1cmUYAyABKAkifgoNQ2xpZW50TWVzc2FnZRItCgVoZWxsbxgBIAEoCzIcLmxpbmtlZF9yZWFsbXMubGFuZC52MS5IZWxsb0gAEi0KBWlucHV0GAIgASgLMhwubGlua2VkX3JlYWxtcy5sYW5kLnYxLklucHV0SABCCQoHbWVzc2FnZUoECBQQHiJ4CgVIZWxsbxI2CgZ0aWNrZXQYASABKAsyJi5saW5rZWRfcmVhbG1zLmxhbmQudjEuU2lnbmVkU3RhdGVtZW50EjcKB2Fycml2YWwYAiABKAsyJi5saW5rZWRfcmVhbG1zLmxhbmQudjEuU2lnbmVkU3RhdGVtZW50IiwKBUlucHV0EgoKAmR4GAEgASgREgoKAmR5GAIgASgREgsKA3NlcRgDIAEoDSLDAgoNU2VydmVyTWVzc2FnZRIxCgd3ZWxjb21lGAEgASgLMh4ubGlua2VkX3JlYWxtcy5sYW5kLnYxLldlbGNvbWVIABIyCgZqb2luZWQYAiABKAsyIC5saW5rZWRfcmVhbG1zLmxhbmQudjEuQ2hhcmFjdGVySAASKwoEbGVmdBgDIAEoCzIbLmxpbmtlZF9yZWFsbXMubGFuZC52MS5MZWZ0SAASLQoFbW92ZWQYBCABKAsyHC5saW5rZWRfcmVhbG1zLmxhbmQudjEuTW92ZWRIABIvCgZub3RpY2UYBSABKAsyHS5saW5rZWRfcmVhbG1zLmxhbmQudjEuTm90aWNlSAASLQoFZXJyb3IYBiABKAsyHC5saW5rZWRfcmVhbG1zLmxhbmQudjEuRXJyb3JIAEIJCgdtZXNzYWdlSgQIFBAeIoQBCgdXZWxjb21lEgsKA3lvdRgBIAEoDRIpCgRsYW5kGAIgASgLMhsubGlua2VkX3JlYWxtcy5sYW5kLnYxLkxhbmQSCwoDbWFwGAMgASgJEjQKCmNoYXJhY3RlcnMYBCADKAsyIC5saW5rZWRfcmVhbG1zLmxhbmQudjEuQ2hhcmFjdGVyIjoKBExhbmQSDwoHbGFuZF9pZBgBIAEoBBINCgVvd25lchgCIAEoCRISCgpvd25lcl9uYW1lGAMgASgJInQKCUNoYXJhY3RlchIKCgJpZBgBIAEoDRIPCgdhZGRyZXNzGAIgASgJEgwKBG5hbWUYAyABKAkSCQoBeBgEIAEoAhIJCgF5GAUgASgCEhAKCGlzX293bmVyGAYgASgIEhQKDGRyaXZlbl9ieV9haRgHIAEoCCISCgRMZWZ0EgoKAmlkGAEgASgNIkgKBU1vdmVkEjIKCXBvc2l0aW9ucxgBIAMoCzIfLmxpbmtlZF9yZWFsbXMubGFuZC52MS5Qb3NpdGlvbhILCgNzZXEYAiABKA0iLAoIUG9zaXRpb24SCgoCaWQYASABKA0SCQoBeBgCIAEoAhIJCgF5GAMgASgCIhYKBk5vdGljZRIMCgR0ZXh0GAEgASgJIiYKBUVycm9yEgwKBGNvZGUYASABKAkSDwoHbWVzc2FnZRgCIAEoCWIGcHJvdG8z");
+  fileDesc("CiBsaW5rZWRfcmVhbG1zL2xhbmQvdjEvbGFuZC5wcm90bxIVbGlua2VkX3JlYWxtcy5sYW5kLnYxIksKD1NpZ25lZFN0YXRlbWVudBIRCglzdGF0ZW1lbnQYASABKAkSEgoKcHVibGljX2tleRgCIAEoCRIRCglzaWduYXR1cmUYAyABKAkiuAEKDUNsaWVudE1lc3NhZ2USLQoFaGVsbG8YASABKAsyHC5saW5rZWRfcmVhbG1zLmxhbmQudjEuSGVsbG9IABItCgVpbnB1dBgCIAEoCzIcLmxpbmtlZF9yZWFsbXMubGFuZC52MS5JbnB1dEgAEjgKC21pbmVfc3dpdGNoGBQgASgLMiEubGlua2VkX3JlYWxtcy5sYW5kLnYxLk1pbmVTd2l0Y2hIAEIJCgdtZXNzYWdlSgQIFRAeIngKBUhlbGxvEjYKBnRpY2tldBgBIAEoCzImLmxpbmtlZF9yZWFsbXMubGFuZC52MS5TaWduZWRTdGF0ZW1lbnQSNwoHYXJyaXZhbBgCIAEoCzImLmxpbmtlZF9yZWFsbXMubGFuZC52MS5TaWduZWRTdGF0ZW1lbnQiRAoKTWluZVN3aXRjaBI2CgZzaWduZWQYASABKAsyJi5saW5rZWRfcmVhbG1zLmxhbmQudjEuU2lnbmVkU3RhdGVtZW50IiwKBUlucHV0EgoKAmR4GAEgASgREgoKAmR5GAIgASgREgsKA3NlcRgDIAEoDSL2AwoNU2VydmVyTWVzc2FnZRIxCgd3ZWxjb21lGAEgASgLMh4ubGlua2VkX3JlYWxtcy5sYW5kLnYxLldlbGNvbWVIABIyCgZqb2luZWQYAiABKAsyIC5saW5rZWRfcmVhbG1zLmxhbmQudjEuQ2hhcmFjdGVySAASKwoEbGVmdBgDIAEoCzIbLmxpbmtlZF9yZWFsbXMubGFuZC52MS5MZWZ0SAASLQoFbW92ZWQYBCABKAsyHC5saW5rZWRfcmVhbG1zLmxhbmQudjEuTW92ZWRIABIvCgZub3RpY2UYBSABKAsyHS5saW5rZWRfcmVhbG1zLmxhbmQudjEuTm90aWNlSAASLQoFZXJyb3IYBiABKAsyHC5saW5rZWRfcmVhbG1zLmxhbmQudjEuRXJyb3JIABI2CgptaW5lX3N0YXRlGBQgASgLMiAubGlua2VkX3JlYWxtcy5sYW5kLnYxLk1pbmVTdGF0ZUgAEkUKEm1pbmVfc3dpdGNoX3Jlc3VsdBgVIAEoCzInLmxpbmtlZF9yZWFsbXMubGFuZC52MS5NaW5lU3dpdGNoUmVzdWx0SAASMgoIbWluZV93b24YFiABKAsyHi5saW5rZWRfcmVhbG1zLmxhbmQudjEuTWluZVdvbkgAQgkKB21lc3NhZ2VKBAgXEB4ihAEKB1dlbGNvbWUSCwoDeW91GAEgASgNEikKBGxhbmQYAiABKAsyGy5saW5rZWRfcmVhbG1zLmxhbmQudjEuTGFuZBILCgNtYXAYAyABKAkSNAoKY2hhcmFjdGVycxgEIAMoCzIgLmxpbmtlZF9yZWFsbXMubGFuZC52MS5DaGFyYWN0ZXIiOgoETGFuZBIPCgdsYW5kX2lkGAEgASgEEg0KBW93bmVyGAIgASgJEhIKCm93bmVyX25hbWUYAyABKAkidAoJQ2hhcmFjdGVyEgoKAmlkGAEgASgNEg8KB2FkZHJlc3MYAiABKAkSDAoEbmFtZRgDIAEoCRIJCgF4GAQgASgCEgkKAXkYBSABKAISEAoIaXNfb3duZXIYBiABKAgSFAoMZHJpdmVuX2J5X2FpGAcgASgIIhIKBExlZnQSCgoCaWQYASABKA0iSAoFTW92ZWQSMgoJcG9zaXRpb25zGAEgAygLMh8ubGlua2VkX3JlYWxtcy5sYW5kLnYxLlBvc2l0aW9uEgsKA3NlcRgCIAEoDSIsCghQb3NpdGlvbhIKCgJpZBgBIAEoDRIJCgF4GAIgASgCEgkKAXkYAyABKAIiFgoGTm90aWNlEgwKBHRleHQYASABKAkiJgoFRXJyb3ISDAoEY29kZRgBIAEoCRIPCgdtZXNzYWdlGAIgASgJIrkBCglNaW5lU3RhdGUSDgoGc3RhdHVzGAEgASgJEg8KB3RocmVhZHMYAiABKA0SEwoLbWF4X3RocmVhZHMYAyABKA0SEQoJaGFzaF9yYXRlGAQgASgBEgwKBG1vZGUYBSABKAkSFgoOcmV3YXJkX2FkZHJlc3MYBiABKAkSEgoKYmxvY2tzX3dvbhgHIAEoDRIRCgljaGFsbGVuZ2UYCCABKAkSFgoObWFwX3NlcnZlcl9rZXkYCSABKAkiLAoQTWluZVN3aXRjaFJlc3VsdBIKCgJvaxgBIAEoCBIMCgRjb2RlGAIgASgJIkEKB01pbmVXb24SDgoGaGVpZ2h0GAEgASgEEg4KBnJld2FyZBgCIAEoCRIWCg5yZXdhcmRfYWRkcmVzcxgDIAEoCWIGcHJvdG8z");
 
 /**
  * A signed statement as docs/protocols/identity.md sends it: the text, then standard base64.
@@ -64,6 +64,14 @@ export type ClientMessage = Message<"linked_realms.land.v1.ClientMessage"> & {
      */
     value: Input;
     case: "input";
+  } | {
+    /**
+     * Mining (docs/protocols/map-server-node.md).
+     *
+     * @generated from field: linked_realms.land.v1.MineSwitch mine_switch = 20;
+     */
+    value: MineSwitch;
+    case: "mineSwitch";
   } | { case: undefined; value?: undefined };
 };
 
@@ -99,6 +107,26 @@ export const HelloSchema: GenMessage<Hello> = /*@__PURE__*/
   messageDesc(file_linked_realms_land_v1_land, 2);
 
 /**
+ * The Land owner switches the Land's Mine: a Land message signed in the Shell whose Message is a
+ * Mine switch line (docs/protocols/map-server-node.md).
+ *
+ * @generated from message linked_realms.land.v1.MineSwitch
+ */
+export type MineSwitch = Message<"linked_realms.land.v1.MineSwitch"> & {
+  /**
+   * @generated from field: linked_realms.land.v1.SignedStatement signed = 1;
+   */
+  signed?: SignedStatement | undefined;
+};
+
+/**
+ * Describes the message linked_realms.land.v1.MineSwitch.
+ * Use `create(MineSwitchSchema)` to create a new message.
+ */
+export const MineSwitchSchema: GenMessage<MineSwitch> = /*@__PURE__*/
+  messageDesc(file_linked_realms_land_v1_land, 3);
+
+/**
  * Where the Character is walking: dx and dy are -1, 0 or 1. Sent whenever they change.
  *
  * @generated from message linked_realms.land.v1.Input
@@ -127,7 +155,7 @@ export type Input = Message<"linked_realms.land.v1.Input"> & {
  * Use `create(InputSchema)` to create a new message.
  */
 export const InputSchema: GenMessage<Input> = /*@__PURE__*/
-  messageDesc(file_linked_realms_land_v1_land, 3);
+  messageDesc(file_linked_realms_land_v1_land, 4);
 
 /**
  * @generated from message linked_realms.land.v1.ServerMessage
@@ -172,6 +200,26 @@ export type ServerMessage = Message<"linked_realms.land.v1.ServerMessage"> & {
      */
     value: Error;
     case: "error";
+  } | {
+    /**
+     * Mining (docs/protocols/map-server-node.md).
+     *
+     * @generated from field: linked_realms.land.v1.MineState mine_state = 20;
+     */
+    value: MineState;
+    case: "mineState";
+  } | {
+    /**
+     * @generated from field: linked_realms.land.v1.MineSwitchResult mine_switch_result = 21;
+     */
+    value: MineSwitchResult;
+    case: "mineSwitchResult";
+  } | {
+    /**
+     * @generated from field: linked_realms.land.v1.MineWon mine_won = 22;
+     */
+    value: MineWon;
+    case: "mineWon";
   } | { case: undefined; value?: undefined };
 };
 
@@ -180,7 +228,7 @@ export type ServerMessage = Message<"linked_realms.land.v1.ServerMessage"> & {
  * Use `create(ServerMessageSchema)` to create a new message.
  */
 export const ServerMessageSchema: GenMessage<ServerMessage> = /*@__PURE__*/
-  messageDesc(file_linked_realms_land_v1_land, 4);
+  messageDesc(file_linked_realms_land_v1_land, 5);
 
 /**
  * Sent once, after the handoff is accepted: everything a new Character needs.
@@ -218,7 +266,7 @@ export type Welcome = Message<"linked_realms.land.v1.Welcome"> & {
  * Use `create(WelcomeSchema)` to create a new message.
  */
 export const WelcomeSchema: GenMessage<Welcome> = /*@__PURE__*/
-  messageDesc(file_linked_realms_land_v1_land, 5);
+  messageDesc(file_linked_realms_land_v1_land, 6);
 
 /**
  * @generated from message linked_realms.land.v1.Land
@@ -245,7 +293,7 @@ export type Land = Message<"linked_realms.land.v1.Land"> & {
  * Use `create(LandSchema)` to create a new message.
  */
 export const LandSchema: GenMessage<Land> = /*@__PURE__*/
-  messageDesc(file_linked_realms_land_v1_land, 6);
+  messageDesc(file_linked_realms_land_v1_land, 7);
 
 /**
  * @generated from message linked_realms.land.v1.Character
@@ -298,7 +346,7 @@ export type Character = Message<"linked_realms.land.v1.Character"> & {
  * Use `create(CharacterSchema)` to create a new message.
  */
 export const CharacterSchema: GenMessage<Character> = /*@__PURE__*/
-  messageDesc(file_linked_realms_land_v1_land, 7);
+  messageDesc(file_linked_realms_land_v1_land, 8);
 
 /**
  * @generated from message linked_realms.land.v1.Left
@@ -315,7 +363,7 @@ export type Left = Message<"linked_realms.land.v1.Left"> & {
  * Use `create(LeftSchema)` to create a new message.
  */
 export const LeftSchema: GenMessage<Left> = /*@__PURE__*/
-  messageDesc(file_linked_realms_land_v1_land, 8);
+  messageDesc(file_linked_realms_land_v1_land, 9);
 
 /**
  * Only the Characters that moved since the last tick.
@@ -341,7 +389,7 @@ export type Moved = Message<"linked_realms.land.v1.Moved"> & {
  * Use `create(MovedSchema)` to create a new message.
  */
 export const MovedSchema: GenMessage<Moved> = /*@__PURE__*/
-  messageDesc(file_linked_realms_land_v1_land, 9);
+  messageDesc(file_linked_realms_land_v1_land, 10);
 
 /**
  * @generated from message linked_realms.land.v1.Position
@@ -368,7 +416,7 @@ export type Position = Message<"linked_realms.land.v1.Position"> & {
  * Use `create(PositionSchema)` to create a new message.
  */
 export const PositionSchema: GenMessage<Position> = /*@__PURE__*/
-  messageDesc(file_linked_realms_land_v1_land, 10);
+  messageDesc(file_linked_realms_land_v1_land, 11);
 
 /**
  * @generated from message linked_realms.land.v1.Notice
@@ -385,7 +433,7 @@ export type Notice = Message<"linked_realms.land.v1.Notice"> & {
  * Use `create(NoticeSchema)` to create a new message.
  */
 export const NoticeSchema: GenMessage<Notice> = /*@__PURE__*/
-  messageDesc(file_linked_realms_land_v1_land, 11);
+  messageDesc(file_linked_realms_land_v1_land, 12);
 
 /**
  * The Map server closes the connection after sending it.
@@ -412,5 +460,141 @@ export type Error = Message<"linked_realms.land.v1.Error"> & {
  * Use `create(ErrorSchema)` to create a new message.
  */
 export const ErrorSchema: GenMessage<Error> = /*@__PURE__*/
-  messageDesc(file_linked_realms_land_v1_land, 12);
+  messageDesc(file_linked_realms_land_v1_land, 13);
+
+/**
+ * The Land's Mine as the Map server reports it: to everyone after Welcome, on each change, and
+ * about every 2 seconds while on; to a Land owner's session whenever its challenge is renewed. A
+ * visitor cannot verify it (P1).
+ *
+ * @generated from message linked_realms.land.v1.MineState
+ */
+export type MineState = Message<"linked_realms.land.v1.MineState"> & {
+  /**
+   * "off", "starting", "on", or "unavailable" while the Land has no Node or it is not synced.
+   *
+   * @generated from field: string status = 1;
+   */
+  status: string;
+
+  /**
+   * Threads hashing now.
+   *
+   * @generated from field: uint32 threads = 2;
+   */
+  threads: number;
+
+  /**
+   * The most threads the Land owner may choose.
+   *
+   * @generated from field: uint32 max_threads = 3;
+   */
+  maxThreads: number;
+
+  /**
+   * Hashes a second over the last 10 seconds.
+   *
+   * @generated from field: double hash_rate = 4;
+   */
+  hashRate: number;
+
+  /**
+   * "fast" or "light" while on; empty while off or starting.
+   *
+   * @generated from field: string mode = 5;
+   */
+  mode: string;
+
+  /**
+   * The Land owner's address the Mine mines for; empty before its first start.
+   *
+   * @generated from field: string reward_address = 6;
+   */
+  rewardAddress: string;
+
+  /**
+   * Blocks the Mine won since its Node started.
+   *
+   * @generated from field: uint32 blocks_won = 7;
+   */
+  blocksWon: number;
+
+  /**
+   * Only in the Land owner's copy, for the next switch: this session's challenge (the switch's
+   * Nonce) and the Map server's own address (its Map server key). Empty in everyone else's.
+   *
+   * @generated from field: string challenge = 8;
+   */
+  challenge: string;
+
+  /**
+   * @generated from field: string map_server_key = 9;
+   */
+  mapServerKey: string;
+};
+
+/**
+ * Describes the message linked_realms.land.v1.MineState.
+ * Use `create(MineStateSchema)` to create a new message.
+ */
+export const MineStateSchema: GenMessage<MineState> = /*@__PURE__*/
+  messageDesc(file_linked_realms_land_v1_land, 14);
+
+/**
+ * The answer to the session that sent a MineSwitch.
+ *
+ * @generated from message linked_realms.land.v1.MineSwitchResult
+ */
+export type MineSwitchResult = Message<"linked_realms.land.v1.MineSwitchResult"> & {
+  /**
+   * @generated from field: bool ok = 1;
+   */
+  ok: boolean;
+
+  /**
+   * When not ok: "not-owner", "bad-statement", "stale", "wrong-nonce", "bad-threads",
+   * "unavailable" or "rate-limited".
+   *
+   * @generated from field: string code = 2;
+   */
+  code: string;
+};
+
+/**
+ * Describes the message linked_realms.land.v1.MineSwitchResult.
+ * Use `create(MineSwitchResultSchema)` to create a new message.
+ */
+export const MineSwitchResultSchema: GenMessage<MineSwitchResult> = /*@__PURE__*/
+  messageDesc(file_linked_realms_land_v1_land, 15);
+
+/**
+ * The Land's Mine won a Block: to everyone.
+ *
+ * @generated from message linked_realms.land.v1.MineWon
+ */
+export type MineWon = Message<"linked_realms.land.v1.MineWon"> & {
+  /**
+   * @generated from field: uint64 height = 1;
+   */
+  height: bigint;
+
+  /**
+   * Base units as a decimal string: the Block reward at that height plus the Block's fees.
+   *
+   * @generated from field: string reward = 2;
+   */
+  reward: string;
+
+  /**
+   * @generated from field: string reward_address = 3;
+   */
+  rewardAddress: string;
+};
+
+/**
+ * Describes the message linked_realms.land.v1.MineWon.
+ * Use `create(MineWonSchema)` to create a new message.
+ */
+export const MineWonSchema: GenMessage<MineWon> = /*@__PURE__*/
+  messageDesc(file_linked_realms_land_v1_land, 16);
 

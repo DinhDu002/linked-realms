@@ -6,6 +6,7 @@
   "exports": {
     ".": "./src/index.ts",
     "./identity": "./src/identity.ts",
+    "./mine-switch": "./src/mine-switch.ts",
     "./land-protocol": "./src/gen/linked_realms/land/v1/land_pb.ts"
   },
   "scripts": {
