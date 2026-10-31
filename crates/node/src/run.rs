@@ -61,13 +61,34 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Running<H> {
         &self,
         call: impl FnOnce(&mut Node<H>, &mut Tcp) -> T + Send + 'static,
     ) -> Option<T> {
+        self.send(call)?.await.ok()
+    }
+
+    /// As `call`, from a thread that is not async (the Mine's).
+    pub fn call_blocking<T: Send + 'static>(
+        &self,
+        call: impl FnOnce(&mut Node<H>, &mut Tcp) -> T + Send + 'static,
+    ) -> Option<T> {
+        self.send(call)?.blocking_recv().ok()
+    }
+
+    fn send<T: Send + 'static>(
+        &self,
+        call: impl FnOnce(&mut Node<H>, &mut Tcp) -> T + Send + 'static,
+    ) -> Option<oneshot::Receiver<T>> {
         let (reply, answer) = oneshot::channel();
         let call = Box::new(move |node: &mut Node<H>, tcp: &mut Tcp| {
             let _ = reply.send(call(node, tcp));
         });
         self.calls.send(Some(call)).ok()?;
         self.waker.wake();
-        answer.await.ok()
+        Some(answer)
+    }
+
+    /// Whether the Node's thread ended, asked to or not; `stop` says why.
+    pub fn stopped(&self) -> bool {
+        let thread = self.thread.lock().expect("not poisoned");
+        thread.as_ref().is_none_or(JoinHandle::is_finished)
     }
 
     /// The Blocks that join the best chain from now on, lowest first; `None` if the Node
