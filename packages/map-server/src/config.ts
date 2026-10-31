@@ -1,4 +1,4 @@
-import { dirname, join } from "node:path";
+import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isAddress } from "@linked-realms/core";
 import { parseRelayUrl } from "@linked-realms/relay/agent";
@@ -124,7 +124,8 @@ function nodeConfig(
   return {
     bin: env.NODE_BIN || "lr-node",
     network,
-    dataDir: join(dirname(mapServerKeyFile), "lr-node"),
+    // Absolute: a relative ws+unix:// path would read its first segment as the host.
+    dataDir: resolve(dirname(mapServerKeyFile), "lr-node"),
     seeds,
   };
 }

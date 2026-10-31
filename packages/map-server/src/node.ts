@@ -55,8 +55,9 @@ const CALL_TIMEOUT_MS = 60_000;
 
 const STATES: readonly string[] = ["off", "starting", "on"];
 const MODES: readonly unknown[] = ["fast", "light", null];
-const count = (value: unknown): value is number =>
-  Number.isSafeInteger(value) && (value as number) >= 0;
+/** A whole number from 0 to `max`; land.proto carries the Mine's counts as uint32. */
+const count = (value: unknown, max = 0xffffffff): value is number =>
+  Number.isInteger(value) && (value as number) >= 0 && (value as number) <= max;
 
 /** A `mine_status` result, or undefined if it is not one. */
 export function readStatus(value: unknown): MineStatus | undefined {
@@ -99,7 +100,7 @@ function readFound(value: unknown): BlockFound | undefined {
   if (
     typeof v !== "object" ||
     v === null ||
-    !count(v.height) ||
+    !count(v.height, Number.MAX_SAFE_INTEGER) ||
     typeof v.reward !== "string" ||
     typeof v.rewardAddress !== "string"
   )

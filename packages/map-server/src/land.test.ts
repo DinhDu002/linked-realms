@@ -753,7 +753,7 @@ describe("Land server", () => {
       await start({ node: node.link });
       const { client } = await enter(handoff(owner));
       const first = await client.waitFor("mineState");
-      return { client, node, challenge: first.challenge };
+      return { client, node, challenge: first.challenge, first };
     }
     const results = (client: Client) =>
       client.messages.flatMap((m) =>
@@ -804,6 +804,26 @@ describe("Land server", () => {
       expect(node.calls.at(-1)).toEqual(["stop"]);
     });
 
+    it("stops a running Mine before the Node's node_info arrives, but starts none", async () => {
+      const node = fakeNode();
+      node.info = undefined;
+      node.status = { ...OFF, state: "on", threads: 2, mode: "fast" };
+      const { client, challenge, first } = await ownerIn(node);
+      expect(first.status).toBe("on");
+      expect(
+        await send(client, switchFor(owner, challenge, { on: false })),
+      ).toBe("ok");
+      const fresh = await client.waitFor(
+        "mineState",
+        (m) => m.challenge !== challenge,
+      );
+      nowMs += 2000;
+      expect(await send(client, switchFor(owner, fresh.challenge))).toBe(
+        "unavailable",
+      );
+      expect(node.calls).toEqual([["stop"]]);
+    });
+
     it("tells every client of a change and of a win", async () => {
       const { client, node } = await ownerIn();
       const { client: other } = await enter(handoff(visitor));
@@ -834,10 +854,14 @@ describe("Land server", () => {
     });
 
     describe("refuses", () => {
-      it("a switch from a visitor's session", async () => {
-        const { node } = await ownerIn();
+      it("a switch from a visitor's session, even one the Land owner signed", async () => {
+        const { node, challenge } = await ownerIn();
         const { client } = await enter(handoff(visitor));
         expect(await send(client, switchFor(visitor, "0".repeat(32)))).toBe(
+          "not-owner",
+        );
+        nowMs += 2000;
+        expect(await send(client, switchFor(owner, challenge))).toBe(
           "not-owner",
         );
         expect(node.calls).toEqual([]);
@@ -959,7 +983,22 @@ describe("Land server", () => {
         expect(node.calls).toEqual([]);
       });
 
-      it("a second switch within 2 seconds, or while one is with the Node", async () => {
+      it("a second switch within 2 seconds of the last, without moving the window", async () => {
+        const { client, node, challenge } = await ownerIn();
+        expect(await send(client, switchFor(owner, challenge))).toBe("ok");
+        const fresh = await client.waitFor(
+          "mineState",
+          (m) => m.challenge !== challenge,
+        );
+        nowMs += 1999;
+        const next = switchFor(owner, fresh.challenge, { on: false });
+        expect(await send(client, next)).toBe("rate-limited");
+        nowMs += 1;
+        expect(await send(client, next)).toBe("ok");
+        expect(node.calls).toHaveLength(2);
+      });
+
+      it("a switch while one is with the Node, however long it takes", async () => {
         const { client, node, challenge } = await ownerIn();
         let release = () => {};
         node.answer = () =>
