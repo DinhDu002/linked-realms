@@ -119,7 +119,8 @@ message Error {
 }
 
 // The Land's Mine as the Map server reports it: to everyone after Welcome, on each change, and
-// about every 2 seconds while on. A visitor cannot verify it (P1).
+// about every 2 seconds while on; to a Land owner's session whenever its challenge is renewed. A
+// visitor cannot verify it (P1).
 message MineState {
   // "off", "starting", "on", or "unavailable" while the Land has no Node or it is not synced.
   string status = 1;
@@ -129,7 +130,7 @@ message MineState {
   uint32 max_threads = 3;
   // Hashes a second over the last 10 seconds.
   double hash_rate = 4;
-  // "fast" or "light" while starting or on; empty when off.
+  // "fast" or "light" while on; empty while off or starting.
   string mode = 5;
   // The Land owner's address the Mine mines for; empty before its first start.
   string reward_address = 6;

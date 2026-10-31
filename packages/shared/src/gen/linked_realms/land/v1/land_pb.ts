@@ -464,7 +464,8 @@ export const ErrorSchema: GenMessage<Error> = /*@__PURE__*/
 
 /**
  * The Land's Mine as the Map server reports it: to everyone after Welcome, on each change, and
- * about every 2 seconds while on. A visitor cannot verify it (P1).
+ * about every 2 seconds while on; to a Land owner's session whenever its challenge is renewed. A
+ * visitor cannot verify it (P1).
  *
  * @generated from message linked_realms.land.v1.MineState
  */
@@ -498,7 +499,7 @@ export type MineState = Message<"linked_realms.land.v1.MineState"> & {
   hashRate: number;
 
   /**
-   * "fast" or "light" while starting or on; empty when off.
+   * "fast" or "light" while on; empty while off or starting.
    *
    * @generated from field: string mode = 5;
    */
