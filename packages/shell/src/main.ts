@@ -24,7 +24,12 @@ import { createHubClient } from "./hub.ts";
 import { loadRecord, WrongPasswordError } from "./keystore.ts";
 import { errorText, registerErrorText, sendErrorText } from "./messages.ts";
 import { createModals } from "./modals.ts";
-import { createNodeClient, toHex, type PlacedTransaction } from "./node.ts";
+import {
+  createNodeClient,
+  NodeError,
+  toHex,
+  type PlacedTransaction,
+} from "./node.ts";
 import { createPortHandler, type TravelOutcome } from "./portHandler.ts";
 import { planTravel, ticketRefusal } from "./travel.ts";
 import { createVault, LockedError } from "./vault.ts";
@@ -510,7 +515,8 @@ async function main() {
         return;
       }
       const { bytes, id } = vault.withKey((key) => signPayment(key, payment));
-      await node.send(bytes);
+      // Tracked before it leaves: if the Node's answer is lost, the list still shows whether the
+      // Node holds it, so the Player does not pay twice by sending again.
       pending.set(id, {
         tx: {
           id,
@@ -524,6 +530,20 @@ async function main() {
         },
         block: null,
       });
+      try {
+        await node.send(bytes);
+      } catch (e) {
+        // A JSON-RPC error is the Node's refusal; anything else may have reached it.
+        if (e instanceof NodeError && e.code < 0) {
+          pending.delete(id);
+          throw e;
+        }
+        sendForm.reset();
+        sendStatus.textContent =
+          "The Node did not answer, so the Shell cannot tell whether it was sent. It shows below as waiting while the Node holds it: check there before sending again.";
+        void refreshGold();
+        return;
+      }
       sendForm.reset();
       sendStatus.textContent = `Sent ${gold(payment.amount)}. It is confirmed once a Block holds it.`;
       void refreshGold();
@@ -534,22 +554,28 @@ async function main() {
     }
   });
 
+  let refreshes = 0;
   async function refreshGold() {
+    const turn = ++refreshes;
     try {
+      // The waiting sends first: one a Block took meanwhile is in the list read after.
+      const checked = await Promise.all(
+        [...pending.keys()].map(
+          async (id) => [id, await node.transaction(id)] as const,
+        ),
+      );
       const [mine, recent] = await Promise.all([
         node.account(address),
         node.addressTxs(address),
       ]);
+      if (turn !== refreshes) return; // a later refresh shows newer answers
       // A send stops waiting once a Block holds it, or the Node no longer has it.
-      await Promise.all(
-        [...pending.keys()].map(async (id) => {
-          const found = await node.transaction(id);
-          if (found?.block || !found) pending.delete(id);
-          if (!found)
-            sendStatus.textContent =
-              "A send left the Node without a Block: check the recent transactions, and send it again if it is not there.";
-        }),
-      );
+      for (const [id, found] of checked) {
+        if (found?.block || !found) pending.delete(id);
+        if (!found)
+          sendStatus.textContent =
+            "A send left the Node without a Block: check the recent transactions, and send it again if it is not there.";
+      }
       el("balance").textContent = `${formatAmount(mine?.balance ?? 0n)} GOLD`;
       const list = el("transactions");
       list.replaceChildren();
