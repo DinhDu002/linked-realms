@@ -10,9 +10,11 @@
     "src",
     "e2e",
     "e2e-world",
+    "e2e-chain",
     "scripts",
     "vite.config.ts",
     "playwright.config.ts",
-    "playwright.world.config.ts"
+    "playwright.world.config.ts",
+    "playwright.chain.config.ts"
   ]
 }
