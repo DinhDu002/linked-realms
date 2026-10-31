@@ -50,7 +50,74 @@ describe("loadConfig", () => {
       relayUrl: "wss://relay.test",
       mapFile: "/tmp/m.json",
       landUiDir: "/tmp/ui",
+      node: {
+        bin: "lr-node",
+        network: "test",
+        dataDir: "/tmp/lr-node",
+        seeds: [],
+      },
     });
+  });
+
+  it("spawns lr-node beside the key by default, with NODE_* overrides", () => {
+    expect(loadConfig(base).node).toMatchObject({
+      bin: "lr-node",
+      network: "test",
+      seeds: [],
+    });
+    expect(
+      loadConfig({
+        ...base,
+        MAP_SERVER_KEY_FILE: "/data/map-server-key",
+        NODE_BIN: "/usr/local/bin/lr-node",
+        NODE_NETWORK: "dev",
+        NODE_SEEDS: "seed:9444,10.0.0.2:9444",
+        MINE_MAX_THREADS: "2",
+      }).node,
+    ).toEqual({
+      bin: "/usr/local/bin/lr-node",
+      network: "dev",
+      dataDir: "/data/lr-node",
+      seeds: ["seed:9444", "10.0.0.2:9444"],
+    });
+    expect(loadConfig({ ...base, NODE_ENABLED: "false" }).node).toBeUndefined();
+  });
+
+  it("uses an external Node only with its secret", () => {
+    expect(
+      loadConfig({
+        ...base,
+        NODE_CONTROL_URL: "ws://node:9446",
+        NODE_CONTROL_SECRET_FILE: "/run/secrets/node-control",
+      }).node,
+    ).toEqual({
+      controlUrl: "ws://node:9446",
+      secretFile: "/run/secrets/node-control",
+    });
+    expect(() =>
+      loadConfig({ ...base, NODE_CONTROL_URL: "ws://node:9446" }),
+    ).toThrow(/needs NODE_CONTROL_SECRET_FILE/);
+    expect(() =>
+      loadConfig({ ...base, NODE_CONTROL_SECRET_FILE: "/run/secrets/x" }),
+    ).toThrow(/NODE_CONTROL_SECRET_FILE is for NODE_CONTROL_URL/);
+  });
+
+  it.each([
+    [{ NODE_ENABLED: "no" }, /NODE_ENABLED must be true or false/],
+    [{ NODE_NETWORK: "main" }, /NODE_NETWORK must be test or dev/],
+    [{ NODE_SEEDS: "seed" }, /NODE_SEEDS holds HOST:PORT entries, got "seed"/],
+    [{ NODE_SEEDS: "seed:0" }, /NODE_SEEDS/],
+    [{ MINE_MAX_THREADS: "0" }, /MINE_MAX_THREADS must be/],
+    [
+      { NODE_CONTROL_URL: "node:9446", NODE_CONTROL_SECRET_FILE: "/s" },
+      /NODE_CONTROL_URL must be a ws/,
+    ],
+    [
+      { NODE_CONTROL_URL: "nope", NODE_CONTROL_SECRET_FILE: "/s" },
+      /NODE_CONTROL_URL is not a valid URL/,
+    ],
+  ])("refuses %o", (env, message) => {
+    expect(() => loadConfig({ ...base, ...env })).toThrow(message);
   });
 
   it("requires LAND_OWNER only, and checks both addresses", () => {

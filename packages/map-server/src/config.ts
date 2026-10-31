@@ -1,7 +1,9 @@
+import { dirname, join } from "node:path";
 import { fileURLToPath } from "node:url";
 import { isAddress } from "@linked-realms/core";
 import { parseRelayUrl } from "@linked-realms/relay/agent";
 import { isHost } from "@linked-realms/shared/identity";
+import type { NodeConfig } from "./node.ts";
 
 export interface Config {
   /** The Character that owns this Land; the Hub's Land must name them. */
@@ -20,6 +22,8 @@ export interface Config {
   mapFile: string;
   /** The built Land UI (`packages/client/dist`). */
   landUiDir: string;
+  /** The Land's Node, or undefined with NODE_ENABLED=false (the Mine is then unavailable). */
+  node: NodeConfig | undefined;
 }
 
 const DEFAULT_MAP_FILE = fileURLToPath(
@@ -76,6 +80,55 @@ function optionalAddress(
   return value;
 }
 
+const SEED = /^\S+:[1-9][0-9]{0,4}$/;
+
+/** NODE_*: an external Node with its secret, else lr-node spawned in the key file's directory. */
+function nodeConfig(
+  env: NodeJS.ProcessEnv,
+  mapServerKeyFile: string,
+): NodeConfig | undefined {
+  const enabled = env.NODE_ENABLED || "true";
+  if (enabled !== "true" && enabled !== "false")
+    throw new Error(`NODE_ENABLED must be true or false, got "${enabled}"`);
+  if (enabled === "false") return undefined;
+  // lr-node reads MINE_MAX_THREADS itself; checked here so a bad value fails now, not at each restart.
+  integer(env, "MINE_MAX_THREADS", 1, 1, 4096);
+  const controlUrl = env.NODE_CONTROL_URL || undefined;
+  const secretFile = env.NODE_CONTROL_SECRET_FILE || undefined;
+  if (controlUrl !== undefined) {
+    let url: URL;
+    try {
+      url = new URL(controlUrl);
+    } catch {
+      throw new Error(`NODE_CONTROL_URL is not a valid URL: "${controlUrl}"`);
+    }
+    if (!["ws:", "wss:", "http:", "https:"].includes(url.protocol))
+      throw new Error(
+        `NODE_CONTROL_URL must be a ws://, wss://, http:// or https:// URL: "${controlUrl}"`,
+      );
+    if (!secretFile)
+      throw new Error(
+        "NODE_CONTROL_URL needs NODE_CONTROL_SECRET_FILE, the Node's control secret",
+      );
+    return { controlUrl, secretFile };
+  }
+  if (secretFile)
+    throw new Error("NODE_CONTROL_SECRET_FILE is for NODE_CONTROL_URL");
+  const network = env.NODE_NETWORK || "test";
+  if (network !== "test" && network !== "dev")
+    throw new Error(`NODE_NETWORK must be test or dev, got "${network}"`);
+  const seeds = (env.NODE_SEEDS || "").split(",").filter((seed) => seed);
+  for (const seed of seeds)
+    if (!SEED.test(seed))
+      throw new Error(`NODE_SEEDS holds HOST:PORT entries, got "${seed}"`);
+  return {
+    bin: env.NODE_BIN || "lr-node",
+    network,
+    dataDir: join(dirname(mapServerKeyFile), "lr-node"),
+    seeds,
+  };
+}
+
 /** Reads and validates the environment; throws with a clear message on bad input. */
 export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
   const hubUrl = env.HUB_URL || "http://localhost:8787";
@@ -95,16 +148,18 @@ export function loadConfig(env: NodeJS.ProcessEnv = process.env): Config {
     throw new Error(
       `RELAY_URL must be a ws:// or wss:// URL with no path: "${relayUrl}"`,
     );
+  const mapServerKeyFile = env.MAP_SERVER_KEY_FILE || DEFAULT_KEY_FILE;
   return {
     landOwner: address(env, "LAND_OWNER"),
     hubUrl,
     hubDomain,
     hubTicketSigner: optionalAddress(env, "HUB_TICKET_SIGNER"),
-    mapServerKeyFile: env.MAP_SERVER_KEY_FILE || DEFAULT_KEY_FILE,
+    mapServerKeyFile,
     port: integer(env, "PORT", 2567, 1, 65535),
     host: env.HOST || "127.0.0.1",
     relayUrl,
     mapFile: env.MAP_FILE || DEFAULT_MAP_FILE,
     landUiDir: env.LAND_UI_DIR || DEFAULT_LAND_UI_DIR,
+    node: nodeConfig(env, mapServerKeyFile),
   };
 }

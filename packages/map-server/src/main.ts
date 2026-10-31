@@ -11,6 +11,8 @@ import {
 } from "./hub.ts";
 import { createLandServer, type LandServer } from "./land.ts";
 import { loadOrCreateMapServerKey } from "./mapServerKey.ts";
+import { mineLine } from "./mine.ts";
+import { startNode, type MineStatus } from "./node.ts";
 
 async function main(): Promise<void> {
   const config = loadConfig();
@@ -22,6 +24,16 @@ async function main(): Promise<void> {
       `WARNING: LAND_UI_DIR ${config.landUiDir} does not exist: the Land UI will answer 503 (build it with "pnpm --filter @linked-realms/client build")`,
     );
 
+  const node = config.node && startNode(config.node, console.log);
+  if (!config.node)
+    console.log("NODE_ENABLED=false: no Node, so the Mine is unavailable");
+  let mine: MineStatus | undefined;
+  node?.link.onChange(() => {
+    const line = mineLine(mine, node.link.status());
+    mine = node.link.status();
+    if (line) console.log(line);
+  });
+
   const stop = new AbortController();
   let server: LandServer | undefined = undefined; // set once the Hub has answered
   let host: { close(): Promise<void> } | undefined;
@@ -31,6 +43,7 @@ async function main(): Promise<void> {
       stop.abort();
       await host?.close();
       await server?.close();
+      await node?.close();
     })();
     return stopping;
   };
@@ -65,6 +78,8 @@ async function main(): Promise<void> {
     mapText,
     hubTicketSigner,
     landUiDir: config.landUiDir,
+    mapServerKey: key.address,
+    node: node?.link,
   });
   await server.listen(config.port, config.host);
   console.log(`Map server listening on http://${config.host}:${config.port}`);
