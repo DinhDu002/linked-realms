@@ -5,13 +5,21 @@
 //! another branch undoes Blocks back to where the branches part, then applies the other
 //! branch's, in one write transaction: a Block a rule refuses on the way leaves the chain as it
 //! was.
+//!
+//! A pruning Node drops the bodies and undo records of the Blocks far enough below the
+//! Checkpoint its best chain holds, and every Node drops the bodies of branches that can never
+//! be the best. A Node far behind starts from a state snapshot at a Checkpoint instead of the
+//! Blocks below it (docs/plans/phase-2c-the-chain.md, "A Node joining the network").
 
+use std::collections::HashMap;
+use std::ops::Bound;
 use std::path::Path;
 
 use linked_realms_core::Address;
 use linked_realms_core::Error as RuleError;
 use linked_realms_core::block::{
-    Block, ChainView, Header, check_block, check_on_accounts, median_time_past, state_root_after,
+    Block, ChainView, Header, check_block, check_header, check_on_accounts, median_time_past,
+    state_root_after,
 };
 use linked_realms_core::checkpoint::{Checkpoint, verify_checkpoint};
 use linked_realms_core::merkle::tx_root;
@@ -21,17 +29,27 @@ use linked_realms_core::smt;
 use linked_realms_core::state::{Account, State, StateView, tree_key};
 use linked_realms_core::tx::Tx;
 use linked_realms_core::u256::U256;
-use redb::{Database, ReadableDatabase};
+use redb::{Database, ReadableDatabase, ReadableTable};
 
 use crate::Error;
 use crate::store::{
-    ACCOUNTS, Accounts, Branch, HEADERS, META, Stored, Tables, stored_header, tip_id,
+    ACCOUNTS, Accounts, Branch, HEADERS, META, Recent, Stored, Tables, db, entry_bytes, read_entry,
+    stored_header, tip_id,
 };
+
+/// Blocks a pruning Node keeps below the Checkpoint its best chain holds, about a day of them; and
+/// how far below it any Node serves a state snapshot, so each stays a bounded amount of work.
+pub const KEEP_BELOW_CHECKPOINT: u64 = 1_440;
+
+/// A part of a state snapshot: accounts in the tree's key order, and whether more follow.
+pub type SnapshotPart = (Vec<(Address, Account)>, bool);
 
 pub struct Chain<H> {
     db: Database,
     params: ChainParams,
     hash: H,
+    /// Blocks kept below the Checkpoint the best chain holds, if this Node prunes.
+    keep: Option<u64>,
     /// Fails every move to another branch just before its commit.
     #[cfg(test)]
     fail_moves: std::cell::Cell<bool>,
@@ -59,6 +77,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
             db: Database::create(path)?,
             params,
             hash,
+            keep: None,
             #[cfg(test)]
             fail_moves: Default::default(),
         };
@@ -68,7 +87,20 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
         };
         chain.write(|t| t.start(chain.params.network_id, &genesis))?;
         chain.follow_best()?;
+        // A state snapshot being taken does not outlive the Node that took it.
+        chain.begin_snapshot()?;
         Ok(chain)
+    }
+
+    /// Makes this Node prune, keeping `keep` Blocks below the Checkpoint its best chain holds,
+    /// from its next move on. A Node that does not is an archive.
+    pub fn pruning(mut self, keep: u64) -> Self {
+        self.keep = Some(keep);
+        self
+    }
+
+    pub fn keep(&self) -> Option<u64> {
+        self.keep
     }
 
     /// The best chain's last header.
@@ -123,9 +155,13 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
         self.read(|t| Ok(t.block(id)))
     }
 
+    pub fn has_header(&self, id: &[u8; 32]) -> Result<bool, Error> {
+        self.read(|t| Ok(t.header(id).is_some()))
+    }
+
     /// The ids of `ids` whose Block this Node does not have the body of.
     pub fn missing(&self, ids: &[[u8; 32]]) -> Result<Vec<[u8; 32]>, Error> {
-        self.read(|t| Ok(ids.iter().filter(|id| !t.has_block(id)).copied().collect()))
+        self.read(|t| Ok(ids.iter().filter(|id| t.needs_body(id)).copied().collect()))
     }
 
     /// The highest Checkpoint taken.
@@ -156,7 +192,8 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
                 if t.on_best_chain(&id, stored.header.height) {
                     break;
                 }
-                blocks.push(t.block(&id).expect("a Block that was on the best chain"));
+                // Gone if a state snapshot or pruning dropped the branch: its transactions too.
+                blocks.extend(t.block(&id));
                 id = stored.header.prev_id;
             }
             Ok(blocks
@@ -214,7 +251,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
             if t.header(&id).is_some() {
                 // Refused if a rule refused it or a Block below it.
                 Branch::new(t, &id)?;
-                if t.has_block(&id) {
+                if !t.needs_body(&id) {
                     return Ok(false);
                 }
             }
@@ -241,6 +278,178 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
         match self.follow_best()?.into_iter().find(|(r, _)| *r == id) {
             Some((_, error)) => Err(Error::Rule(error)),
             None => Ok(()),
+        }
+    }
+
+    /// Stores `headers`, each the child of the one before it and the first the child of a stored
+    /// header, if `block::check_header` passes on each, without their Blocks: how a Node that
+    /// starts from a state snapshot takes the headers below its Checkpoint. Refused as
+    /// `submit_block` is; one refused stores none.
+    pub fn submit_headers(&self, headers: &[Header]) -> Result<(), Error> {
+        let Some(first) = headers.first() else {
+            return Ok(());
+        };
+        self.write(|t| {
+            if t.header(&first.prev_id).is_none() {
+                return Err(Error::UnknownParent);
+            }
+            let mut chain = Recent::new(t, &first.prev_id)?;
+            let mut prev = first.prev_id;
+            for header in headers {
+                // A stored header is not checked again, so its place in the batch is.
+                if header.prev_id != prev {
+                    return Err(Error::Rule(RuleError::WrongParent));
+                }
+                let id = header.id();
+                match t.header(&id) {
+                    Some(stored) if stored.refused => return Err(Error::RefusedBranch),
+                    Some(_) => {}
+                    None => {
+                        check_header(&self.params, header, &chain, &self.hash)
+                            .map_err(Error::Rule)?;
+                        let parent = t.header(&header.prev_id).expect("its parent, checked");
+                        let stored = Stored {
+                            header: *header,
+                            work: parent.work.saturating_add(work(header.target)),
+                            refused: false,
+                        };
+                        t.put_header(&id, stored);
+                    }
+                }
+                chain.push(*header);
+                prev = id;
+            }
+            Ok(())
+        })
+    }
+
+    /// Up to `max` accounts of the state at the Checkpoint at `height`, in the tree's key order,
+    /// after the key `after` if given, and whether more follow. `None` unless the best chain holds
+    /// that Checkpoint, at or above what this Node pruned and at most `KEEP_BELOW_CHECKPOINT`
+    /// below the highest one it holds.
+    // ponytail: the accounts as they were are read back from the undo records of every Block
+    // above `height`, for each part, and a peer may ask for parts as fast as it likes: at most
+    // about 1,450 undo records a part, a few with empty Blocks. Keep them between parts, or
+    // limit each peer's asks, if serving snapshots shows.
+    pub fn snapshot(
+        &self,
+        height: u64,
+        after: Option<[u8; 32]>,
+        max: usize,
+    ) -> Result<Option<SnapshotPart>, Error> {
+        self.read(|t| {
+            let checkpointed = matches!(t.checkpoint_at_or_below(height),
+                Some((at, id)) if at == height && t.on_best_chain(&id, at));
+            let far_below = height + KEEP_BELOW_CHECKPOINT < t.held_checkpoint();
+            if !checkpointed || height < t.pruned() || far_below {
+                return Ok(None);
+            }
+            // The accounts the Blocks above `height` changed, as they were at it: `None` for one
+            // created since. The lowest Block's record is the one that stays.
+            let tip = t.header(&t.tip()).expect("a stored tip").header.height;
+            let mut then = HashMap::new();
+            for above in (height + 1..=tip).rev() {
+                let id = t.best(above).expect("a Block at every height");
+                then.extend(t.undo_record(&id));
+            }
+            let from = after.map_or(Bound::Unbounded, Bound::Excluded);
+            let mut accounts = Vec::new();
+            for entry in db(t.accounts.0.range((from, Bound::Unbounded))) {
+                let (address, account) = read_entry(db(entry).1.value());
+                let Some(account) = then.get(&address).cloned().unwrap_or(Some(account)) else {
+                    continue;
+                };
+                if accounts.len() == max {
+                    return Ok(Some((accounts, true)));
+                }
+                accounts.push((address, account));
+            }
+            Ok(Some((accounts, false)))
+        })
+    }
+
+    /// Starts taking a state snapshot, dropping any part of one taken before.
+    pub fn begin_snapshot(&self) -> Result<(), Error> {
+        self.write(|t| {
+            db(t.snapshot.retain(|_, _| false));
+            Ok(())
+        })
+    }
+
+    /// Takes the next part of a state snapshot. Refused (`SnapshotOrder`) if its accounts do not
+    /// follow those taken in the tree's key order, each key once, and then the snapshot is
+    /// dropped.
+    pub fn add_snapshot(&self, accounts: &[(Address, Account)]) -> Result<(), Error> {
+        let taken = self.write(|t| {
+            let mut last = db(t.snapshot.last()).map(|(key, _)| key.value());
+            for (address, account) in accounts {
+                let key = tree_key(address);
+                if last.is_some_and(|last| key <= last) {
+                    return Err(Error::Rule(RuleError::SnapshotOrder));
+                }
+                db(t.snapshot
+                    .insert(key, entry_bytes(address, account).as_slice()));
+                last = Some(key);
+            }
+            Ok(())
+        });
+        if taken.is_err() {
+            self.begin_snapshot()?;
+        }
+        taken
+    }
+
+    /// Checks the state snapshot taken against the state root of the Block the Checkpoint at
+    /// `height` names, whose header must be stored. If it holds, its accounts replace this Node's
+    /// and that Block becomes the tip, with the Blocks below it and none of their bodies, then
+    /// the Node follows the best branch. Refused (`WrongStateRoot`) otherwise, and nothing but
+    /// the snapshot changes. Either way the snapshot is dropped.
+    pub fn finish_snapshot(&self, height: u64) -> Result<(), Error> {
+        let taken = self.write(|t| {
+            let (_, id) = t
+                .checkpoint_at_or_below(height)
+                .filter(|(at, _)| *at == height)
+                .expect("a Checkpoint at the snapshot's height");
+            let root = t
+                .header(&id)
+                .expect("the Checkpoint's header")
+                .header
+                .state_root;
+            db(t.accounts.0.retain(|_, _| false));
+            db(t.tree.0.retain(|_, _| false));
+            for entry in db(t.snapshot.iter()) {
+                let (key, value) = db(entry);
+                db(t.accounts.0.insert(key.value(), value.value()));
+            }
+            let leaves = db(t.accounts.0.iter()).map(|entry| {
+                let (key, value) = db(entry);
+                let (address, account) = read_entry(value.value());
+                (key.value(), account.hashed_bytes(&address).to_vec())
+            });
+            smt::check_snapshot(&mut t.tree, leaves, &root).map_err(Error::Rule)?;
+            // The Blocks of the best chain go, then the Checkpoint's Block and those below it
+            // are the best chain: none of them is ever undone.
+            let tip = t.header(&t.tip()).expect("a stored tip").header.height;
+            for below in (1..=tip).rev() {
+                let old = t.drop_best(below);
+                t.remove_block(&old);
+            }
+            let mut on = id;
+            while let Some(stored) = t.header(&on).filter(|s| s.header.height > 0) {
+                t.set_best(stored.header.height, &on);
+                on = stored.header.prev_id;
+            }
+            t.set_tip(&id);
+            t.set_pruned(height);
+            db(t.snapshot.retain(|_, _| false));
+            Ok::<_, Error>(())
+        });
+        match taken {
+            Ok(()) => self.follow_best().map(drop),
+            Err(error) => {
+                self.begin_snapshot()?;
+                Err(error)
+            }
         }
     }
 
@@ -286,7 +495,11 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
     fn follow_best(&self) -> Result<Vec<([u8; 32], RuleError)>, Error> {
         let mut refused = Vec::new();
         loop {
-            match self.write(|t| self.move_to_best(t)) {
+            match self.write(|t| {
+                self.move_to_best(t)?;
+                self.prune(t);
+                Ok(())
+            }) {
                 Ok(()) => return Ok(refused),
                 Err(Stop::Failed(error)) => return Err(error),
                 Err(Stop::Refused(id, error)) => {
@@ -329,6 +542,9 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
             side.push(id);
             id = stored.header.prev_id;
         };
+        if fork.header.height < t.pruned() {
+            return Err(Stop::Failed(Error::Pruned));
+        }
         let tip_height = t.header(&tip).expect("a stored tip").header.height;
         for height in (fork.header.height + 1..=tip_height).rev() {
             undo(t, height);
@@ -345,6 +561,51 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Chain<H> {
             return Err(Stop::Failed(Error::Storage(injected.into())));
         }
         Ok(())
+    }
+
+    /// Drops the bodies and undo records of the best chain's Blocks more than `keep` below the
+    /// Checkpoint it holds, if this Node prunes, and the bodies of branches that can never be
+    /// the best: one that parts from the best chain below that Checkpoint, and every Block from
+    /// a branch's end down to the lowest one a rule refused.
+    fn prune(&self, t: &mut Tables) {
+        let held = t.held_checkpoint();
+        if let Some(keep) = self.keep {
+            let (pruned, below) = (t.pruned(), held.saturating_sub(keep));
+            for height in pruned + 1..=below {
+                let id = t.best(height).expect("a Block at every height");
+                t.remove_block(&id);
+                t.remove_undo(&id);
+            }
+            if below > pruned {
+                t.set_pruned(below);
+            }
+        }
+        for end in t.tips() {
+            // The branch's Blocks above the best chain, from its end down.
+            let (mut walked, mut refused, mut id) = (Vec::new(), None, end);
+            let fork = loop {
+                let stored = t.header(&id).expect("a stored header");
+                if t.on_best_chain(&id, stored.header.height) {
+                    break stored.header.height;
+                }
+                if stored.refused {
+                    refused = Some(walked.len());
+                }
+                walked.push(id);
+                id = stored.header.prev_id;
+            };
+            let dead = match (fork < held, refused) {
+                (true, _) => walked.len(),
+                (false, Some(lowest)) => lowest + 1,
+                (false, None) => continue,
+            };
+            walked[..dead].iter().for_each(|id| t.remove_block(id));
+            t.remove_tip(&end);
+            // What lies below a refused Block may still become the best.
+            if let Some(below) = walked.get(dead) {
+                t.add_tip(below);
+            }
+        }
     }
 }
 

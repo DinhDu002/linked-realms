@@ -3,15 +3,19 @@ use std::sync::atomic::{AtomicBool, Ordering};
 use std::thread;
 use std::time::{Duration, Instant};
 
-use linked_realms_core::SigningKey;
 use linked_realms_core::checkpoint::Checkpoint;
 use linked_realms_core::issuance::BASE_UNITS_PER_GOLD as GOLD;
 use linked_realms_core::keccak256;
 use linked_realms_core::params::{DEV_CHECKPOINT_SEED, TESTNET};
+use linked_realms_core::state::{Account, PublicKey};
+use linked_realms_core::{ADDRESS_LEN, SCHEME_ML_DSA_44, SigningKey};
 
 use super::*;
 use crate::Policy;
-use crate::chain::tests::{Builder, File, PARAMS, Test, balance, nobody, submit_all};
+use crate::chain::tests::{
+    Builder, File, PARAMS, Test, balance, checkpoint, ledger, no_snapshot_left, nobody,
+    snapshot_parts, submit_all,
+};
 use crate::mempool::tests::{key, pay};
 
 type TestNode = Node<fn(&[u8], &[u8; 32]) -> [u8; 32]>;
@@ -95,7 +99,7 @@ struct Mesh {
     nodes: Vec<TestNode>,
     wires: Wires,
     now: u64,
-    _files: Vec<File>,
+    files: Vec<File>,
 }
 
 impl Mesh {
@@ -121,7 +125,7 @@ impl Mesh {
                 ..Wires::default()
             },
             now: PARAMS.genesis().timestamp,
-            _files: files,
+            files,
         }
     }
 
@@ -159,6 +163,17 @@ impl Mesh {
         let done = act(&mut self.nodes[i], &mut wire);
         self.run();
         done
+    }
+
+    /// Makes Node `i` prune, keeping `keep` Blocks below its Checkpoint.
+    fn pruning(&mut self, i: usize, keep: u64) {
+        let seeds: Vec<SocketAddr> = self.nodes[i].known.keys().copied().collect();
+        // Its database opens once: the Node goes first.
+        drop(self.nodes.remove(i));
+        let chain = self.files[i].open().pruning(keep);
+        let pool = Mempool::new(PARAMS, Policy::default());
+        self.nodes
+            .insert(i, Node::new(chain, pool, &PARAMS, 9444, &seeds));
     }
 
     fn tip(&self, i: usize) -> [u8; 32] {
@@ -258,6 +273,32 @@ fn every_message_reads_back_and_a_bad_frame_does_not() {
         Message::GetCheckpoint,
         Message::GetNodes,
         Message::Nodes(vec![address(0), "[2001:db8::1]:9444".parse().unwrap()]),
+        Message::GetStateSnapshot {
+            height: 20,
+            after: None,
+        },
+        Message::GetStateSnapshot {
+            height: 20,
+            after: Some([4; 32]),
+        },
+        Message::StateSnapshot {
+            height: 20,
+            accounts: vec![
+                (
+                    key(1).address(),
+                    Account {
+                        balance: 5,
+                        nonce: 1,
+                        key: Some(PublicKey {
+                            scheme: linked_realms_core::SCHEME_ML_DSA_44,
+                            bytes: key(1).public_key().to_vec(),
+                        }),
+                    },
+                ),
+                (nobody(2), Account::default()),
+            ],
+            more: true,
+        },
     ];
     let mut stream: Vec<u8> = messages.iter().flat_map(|m| m.to_frame(magic)).collect();
     // A frame not all come waits for the rest.
@@ -305,6 +346,36 @@ fn every_message_reads_back_and_a_bad_frame_does_not() {
         message::next_frame(&mut raw(5, &ids(IN_FLIGHT + 1)), magic),
         Err(Malformed::Payload)
     );
+    // Accounts with no key: an address, a balance, a nonce and a key length of 0.
+    let account = [&nobody(1).to_bytes()[..], &[0; 18]].concat();
+    let part = |more: u8, count: usize| {
+        [
+            &20u64.to_be_bytes()[..],
+            &[more],
+            &(count as u16).to_be_bytes(),
+            &account.repeat(count),
+        ]
+        .concat()
+    };
+    let full = message::next_frame(&mut raw(16, &part(1, MAX_SNAPSHOT_ACCOUNTS)), magic);
+    assert!(matches!(
+        full,
+        Ok(Some(Some(Message::StateSnapshot { more: true, .. })))
+    ));
+    assert_eq!(
+        message::next_frame(&mut raw(16, &part(0, 0)), magic),
+        Ok(Some(Some(Message::StateSnapshot {
+            height: 20,
+            accounts: Vec::new(),
+            more: false
+        })))
+    );
+    for bad in [part(2, 0), part(0, MAX_SNAPSHOT_ACCOUNTS + 1)] {
+        assert_eq!(
+            message::next_frame(&mut raw(16, &bad), magic),
+            Err(Malformed::Payload)
+        );
+    }
     let other = Message::Verack.to_frame(TESTNET.magic());
     assert_eq!(
         message::next_frame(&mut other.clone(), magic),
@@ -722,4 +793,313 @@ fn two_nodes_sync_over_tcp() {
     }
     done.store(true, Ordering::Relaxed);
     server.join().unwrap();
+}
+
+#[test]
+fn a_new_node_starts_from_a_checkpoint_and_a_state_snapshot() {
+    let mut mesh = Mesh::new("p2p-snapshot", 2, &[(1, 0)]);
+    // Neither keeps a Block below the Checkpoint: Node 1 can only start from a snapshot.
+    mesh.pruning(0, 0);
+    mesh.pruning(1, 0);
+    let mut build = Builder::new();
+    let miner = key(1);
+    let blocks = ledger(&mut build, &miner);
+    mesh.with(0, |node, net| {
+        blocks.iter().for_each(|b| node.mined(net, b).unwrap());
+        let c = checkpoint(20, blocks[19].header.id());
+        node.chain.add_checkpoint(&c).unwrap();
+    });
+    let below = blocks[10].header.id();
+    assert_eq!(mesh.nodes[0].chain.block(&below).unwrap(), None);
+    // Node 1 mined a branch of its own, which its mempool followed.
+    let own = build.branch(&build.genesis(), nobody(8), 2);
+    mesh.with(1, |node, net| {
+        own.iter().for_each(|b| node.mined(net, b).unwrap())
+    });
+    mesh.now = blocks[24].header.timestamp;
+    mesh.tick();
+    assert_eq!(mesh.tip(1), blocks[24].header.id());
+    assert_eq!(mesh.nodes[1].chain.block(&below).unwrap(), None);
+    for address in [miner.address(), nobody(5), nobody(6), nobody(8)] {
+        let account = |i: usize| mesh.nodes[i].chain.account(&address).unwrap();
+        assert_eq!(account(1), account(0));
+    }
+}
+
+#[test]
+fn a_bad_state_snapshot_bans_its_sender_and_changes_nothing() {
+    let (from, to) = (
+        File::new("p2p-bad-snapshot-from"),
+        File::new("p2p-bad-snapshot-to"),
+    );
+    let a: Test = from.open();
+    let mut build = Builder::new();
+    let blocks = ledger(&mut build, &key(1));
+    submit_all(&a, &blocks);
+    let c = checkpoint(20, blocks[19].header.id());
+    a.add_checkpoint(&c).unwrap();
+    let good = snapshot_parts(&a, 20, 10).concat();
+    let pool = Mempool::new(PARAMS, Policy::default());
+    let mut node: TestNode = Node::new(to.open().pruning(0), pool, &PARAMS, 0, &[]);
+    let now = blocks[24].header.timestamp;
+    let headers: Vec<_> = blocks.iter().map(|b| b.header).collect();
+    // Each peer sends the Checkpoint, then the headers, so it is asked for the snapshot.
+    let start = |node: &mut TestNode, net: &mut Recorder, peer: PeerId| {
+        greet(node, net, peer, address(peer as usize), now);
+        let checkpoint = Message::Checkpoint(Box::new(c.clone()));
+        receive(node, net, peer, frame(&checkpoint), now);
+        receive(
+            node,
+            net,
+            peer,
+            frame(&Message::Headers(headers.clone())),
+            now,
+        );
+    };
+    let asked = |net: &Recorder, peer: PeerId| -> Vec<Option<[u8; 32]>> {
+        net.sent
+            .iter()
+            .filter_map(|(to, m)| match m {
+                Message::GetStateSnapshot { height: 20, after } if *to == peer => Some(*after),
+                _ => None,
+            })
+            .collect()
+    };
+    let part = |accounts: Vec<(linked_realms_core::Address, Account)>, more: bool| {
+        frame(&Message::StateSnapshot {
+            height: 20,
+            accounts,
+            more,
+        })
+    };
+    let mut net = Recorder::default();
+    let banned =
+        |node: &TestNode, peer: PeerId| node.banned.contains_key(&address(peer as usize).ip());
+
+    // A whole whose root is not the Checkpoint's bans.
+    start(&mut node, &mut net, 1);
+    assert_eq!(asked(&net, 1), [None]);
+    let mut wrong = good.clone();
+    wrong[0].1.balance += 1;
+    receive(&mut node, &mut net, 1, part(wrong, false), now);
+    assert!(banned(&node, 1));
+    assert_eq!(node.chain.tip().unwrap(), PARAMS.genesis());
+
+    // A full part out of the tree's key order bans.
+    let two = made_up(2 * MAX_SNAPSHOT_ACCOUNTS);
+    let (full, after) = (
+        two[..MAX_SNAPSHOT_ACCOUNTS].to_vec(),
+        two[MAX_SNAPSHOT_ACCOUNTS..].to_vec(),
+    );
+    start(&mut node, &mut net, 2);
+    let mut swapped = full.clone();
+    swapped.swap(0, 1);
+    receive(&mut node, &mut net, 2, part(swapped, true), now);
+    assert!(banned(&node, 2));
+    // One in order brings the ask for the next, after its last key; more accounts than 20
+    // Blocks could create then ban.
+    start(&mut node, &mut net, 3);
+    receive(&mut node, &mut net, 3, part(full.clone(), true), now);
+    let next = tree_key(&full[MAX_SNAPSHOT_ACCOUNTS - 1].0);
+    assert_eq!(asked(&net, 3), [None, Some(next)]);
+    assert!(!banned(&node, 3));
+    receive(&mut node, &mut net, 3, part(after, true), now);
+    assert!(banned(&node, 3));
+    assert!(no_snapshot_left(&node.chain));
+    // So does a part that says more follow but is not full.
+    start(&mut node, &mut net, 4);
+    receive(&mut node, &mut net, 4, part(good[..1].to_vec(), true), now);
+    assert!(banned(&node, 4));
+    assert_eq!(net.dropped, [1, 2, 3, 4]);
+
+    // A peer that does not serve it is not banned, and a part no longer asked for is skipped.
+    start(&mut node, &mut net, 5);
+    receive(&mut node, &mut net, 5, part(Vec::new(), false), now);
+    receive(&mut node, &mut net, 5, part(good.clone(), false), now);
+    assert!(!banned(&node, 5));
+    assert_eq!(node.chain.tip().unwrap(), PARAMS.genesis());
+    // Headers a rule refuses ban too.
+    greet(&mut node, &mut net, 8, address(8), now);
+    let mut forged = headers.clone();
+    forged[0].nonce = 0;
+    receive(
+        &mut node,
+        &mut net,
+        8,
+        frame(&Message::Headers(forged)),
+        now,
+    );
+    assert!(banned(&node, 8));
+
+    // One at a time: another peer is not asked, and what it sends is skipped, as is a part at
+    // another height.
+    start(&mut node, &mut net, 6);
+    start(&mut node, &mut net, 7);
+    assert!(asked(&net, 7).is_empty());
+    receive(&mut node, &mut net, 7, part(good.clone(), false), now);
+    let elsewhere = Message::StateSnapshot {
+        height: 10,
+        accounts: good.clone(),
+        more: false,
+    };
+    receive(&mut node, &mut net, 6, frame(&elsewhere), now);
+    assert_eq!(node.chain.tip().unwrap(), PARAMS.genesis());
+    receive(&mut node, &mut net, 6, part(good, false), now);
+    assert_eq!(node.chain.tip().unwrap(), blocks[19].header);
+    assert_eq!(net.dropped, [1, 2, 3, 4, 8]);
+    // Its peers hear of the new tip, then it asks for the Blocks after it.
+    let tip = vec![blocks[19].header.id()];
+    let told = |m: &(PeerId, Message)| matches!(m, (7, Message::Inv(ids)) if *ids == tip);
+    assert!(net.sent.iter().any(told));
+    let last = net.sent.last().unwrap();
+    assert!(matches!(last, (6, Message::GetHeaders(l)) if l[0] == blocks[19].header.id()));
+}
+
+/// `n` accounts no chain holds, in the tree's key order.
+fn made_up(n: usize) -> Vec<(Address, Account)> {
+    let mut accounts: Vec<_> = (0..n as u64)
+        .map(|i| {
+            let mut bytes = [9; ADDRESS_LEN];
+            bytes[..2].copy_from_slice(&[0, SCHEME_ML_DSA_44]);
+            bytes[2..10].copy_from_slice(&i.to_be_bytes());
+            (Address::from_bytes(&bytes).unwrap(), Account::default())
+        })
+        .collect();
+    accounts.sort_by_key(|(address, _)| tree_key(address));
+    accounts
+}
+
+#[test]
+fn a_node_within_what_it_keeps_below_the_checkpoint_syncs_every_block() {
+    // Node 1 keeps 20 Blocks and is 20 below the Checkpoint; Node 2 is an archive.
+    let mut mesh = Mesh::new("p2p-no-snapshot", 3, &[(1, 0), (2, 0)]);
+    mesh.pruning(1, 20);
+    let mut build = Builder::new();
+    let blocks = ledger(&mut build, &key(1));
+    mesh.with(0, |node, net| {
+        blocks.iter().for_each(|b| node.mined(net, b).unwrap());
+        let c = checkpoint(20, blocks[19].header.id());
+        node.chain.add_checkpoint(&c).unwrap();
+    });
+    mesh.now = blocks[24].header.timestamp;
+    mesh.tick();
+    for i in [1, 2] {
+        assert_eq!(mesh.tip(i), blocks[24].header.id());
+        let first = mesh.nodes[i].chain.block(&blocks[0].header.id()).unwrap();
+        assert!(first.is_some());
+    }
+}
+
+#[test]
+fn headers_on_the_way_to_a_checkpoint_come_a_batch_at_a_time() {
+    let file = File::new("p2p-header-batches");
+    let mut build = Builder::new();
+    // The Checkpoint is 10 Blocks after the first batch of headers.
+    let height = MAX_HEADERS as u64 + 10;
+    let blocks = build.branch(&build.genesis(), nobody(1), height as usize);
+    let c = checkpoint(height, blocks.last().unwrap().header.id());
+    let pool = Mempool::new(PARAMS, Policy::default());
+    let mut node: TestNode = Node::new(file.open().pruning(0), pool, &PARAMS, 0, &[]);
+    let now = blocks.last().unwrap().header.timestamp;
+    let mut net = Recorder::default();
+    greet(&mut node, &mut net, 1, address(1), now);
+    receive(
+        &mut node,
+        &mut net,
+        1,
+        frame(&Message::Checkpoint(Box::new(c))),
+        now,
+    );
+    let headers: Vec<_> = blocks.iter().map(|b| b.header).collect();
+    let (first, rest) = headers.split_at(MAX_HEADERS);
+    receive(
+        &mut node,
+        &mut net,
+        1,
+        frame(&Message::Headers(first.to_vec())),
+        now,
+    );
+    let last = net.sent.last().unwrap();
+    assert!(matches!(last, (1, Message::GetHeaders(l)) if l[0] == first[MAX_HEADERS - 1].id()));
+    receive(
+        &mut node,
+        &mut net,
+        1,
+        frame(&Message::Headers(rest.to_vec())),
+        now,
+    );
+    let ask = Message::GetStateSnapshot {
+        height,
+        after: None,
+    };
+    assert_eq!(net.sent.last().unwrap(), &(1, ask));
+}
+
+#[test]
+fn a_peer_that_sends_no_part_of_a_state_snapshot_is_dropped() {
+    let file = File::new("p2p-slow-snapshot");
+    let mut build = Builder::new();
+    let blocks = ledger(&mut build, &key(1));
+    let c = checkpoint(20, blocks[19].header.id());
+    let pool = Mempool::new(PARAMS, Policy::default());
+    let mut node: TestNode = Node::new(file.open().pruning(0), pool, &PARAMS, 0, &[]);
+    let now = blocks[24].header.timestamp;
+    let mut net = Recorder::default();
+    greet(&mut node, &mut net, 1, address(1), now);
+    // The Checkpoint first: it decides what the headers are for.
+    let asks: Vec<bool> = net
+        .sent
+        .iter()
+        .filter_map(|(_, m)| match m {
+            Message::GetCheckpoint => Some(true),
+            Message::GetHeaders(_) => Some(false),
+            _ => None,
+        })
+        .collect();
+    assert_eq!(asks, [true, false]);
+    receive(
+        &mut node,
+        &mut net,
+        1,
+        frame(&Message::Checkpoint(Box::new(c))),
+        now,
+    );
+    let headers = Message::Headers(blocks.iter().map(|b| b.header).collect());
+    receive(&mut node, &mut net, 1, frame(&headers), now);
+    // It answers pings, so only the snapshot it owes can drop it.
+    let pong = frame(&Message::Pong(0));
+    for later in [STALL_SECONDS / 2, STALL_SECONDS] {
+        receive(&mut node, &mut net, 1, pong.clone(), now + later);
+        node.tick(&mut net, now + later).unwrap();
+    }
+    assert!(net.dropped.is_empty());
+    receive(&mut node, &mut net, 1, pong, now + STALL_SECONDS + 1);
+    node.tick(&mut net, now + STALL_SECONDS + 1).unwrap();
+    assert_eq!(net.dropped, [1]);
+    assert!(node.snapshot.is_none());
+    assert!(!node.banned.contains_key(&address(1).ip()));
+    // The next peer is asked for headers after those already stored.
+    greet(&mut node, &mut net, 2, address(2), now + STALL_SECONDS + 1);
+    let locator = net.sent.iter().find_map(|(to, m)| match m {
+        Message::GetHeaders(l) if *to == 2 => Some(l[0]),
+        _ => None,
+    });
+    assert_eq!(locator, Some(blocks[24].header.id()));
+    // A part that comes in time gives the next as long again.
+    let later = now + STALL_SECONDS + 1;
+    receive(&mut node, &mut net, 2, frame(&headers), later);
+    let part = Message::StateSnapshot {
+        height: 20,
+        accounts: made_up(MAX_SNAPSHOT_ACCOUNTS),
+        more: true,
+    };
+    let half = later + STALL_SECONDS / 2;
+    receive(&mut node, &mut net, 2, frame(&part), half);
+    let pong = frame(&Message::Pong(0));
+    receive(&mut node, &mut net, 2, pong.clone(), half + STALL_SECONDS);
+    node.tick(&mut net, half + STALL_SECONDS).unwrap();
+    assert_eq!(net.dropped, [1]);
+    receive(&mut node, &mut net, 2, pong, half + STALL_SECONDS + 1);
+    node.tick(&mut net, half + STALL_SECONDS + 1).unwrap();
+    assert_eq!(net.dropped, [1, 2]);
 }

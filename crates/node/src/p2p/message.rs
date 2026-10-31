@@ -7,8 +7,9 @@ use std::net::{IpAddr, Ipv6Addr, SocketAddr};
 use linked_realms_core::block::{Block, HEADER_LEN, Header};
 use linked_realms_core::checkpoint::Checkpoint;
 use linked_realms_core::codec::Reader;
-use linked_realms_core::keccak256;
+use linked_realms_core::state::{Account, PublicKey};
 use linked_realms_core::tx::Tx;
+use linked_realms_core::{ADDRESS_LEN, Address, PUBLIC_KEY_LEN, keccak256};
 
 /// The largest payload: a Block of 1,000,000 bytes fits with room to spare.
 pub const MAX_PAYLOAD: usize = 2 * 1024 * 1024;
@@ -25,6 +26,11 @@ pub const IN_FLIGHT: usize = 16;
 pub const MAX_LOCATOR: usize = 64;
 /// Addresses in one `nodes`, at most.
 pub const MAX_NODES: usize = 1_000;
+/// Accounts in one `statesnapshot`, at most: 1,000 with an ML-DSA-44 key take about 1.4 MB.
+pub const MAX_SNAPSHOT_ACCOUNTS: usize = 1_000;
+const _: () = assert!(
+    11 + MAX_SNAPSHOT_ACCOUNTS * (ADDRESS_LEN + 8 + 8 + 2 + 1 + PUBLIC_KEY_LEN) <= MAX_PAYLOAD
+);
 
 #[derive(Debug, Clone, PartialEq, Eq)]
 pub struct Version {
@@ -56,6 +62,18 @@ pub enum Message {
     GetCheckpoint,
     GetNodes,
     Nodes(Vec<SocketAddr>),
+    /// The state at the Checkpoint at `height`, from the account after the key `after`.
+    GetStateSnapshot {
+        height: u64,
+        after: Option<[u8; 32]>,
+    },
+    /// Accounts of the state at the Checkpoint at `height`, in the tree's key order, and whether
+    /// more follow. None and no more: the sender does not serve it.
+    StateSnapshot {
+        height: u64,
+        accounts: Vec<(Address, Account)>,
+        more: bool,
+    },
 }
 
 /// Why bytes are not a message. The connection that sent them is dropped.
@@ -86,6 +104,8 @@ impl Message {
             Message::GetCheckpoint => 12,
             Message::GetNodes => 13,
             Message::Nodes(_) => 14,
+            Message::GetStateSnapshot { .. } => 15,
+            Message::StateSnapshot { .. } => 16,
         }
     }
 
@@ -132,6 +152,34 @@ impl Message {
                     };
                     bytes.extend_from_slice(&ip.octets());
                     bytes.extend_from_slice(&address.port().to_be_bytes());
+                }
+            }
+            Message::GetStateSnapshot { height, after } => {
+                bytes.extend_from_slice(&height.to_be_bytes());
+                if let Some(key) = after {
+                    bytes.extend_from_slice(key);
+                }
+            }
+            // Each account: `address ‖ balance ‖ nonce ‖ key length (u16, 0 for none) ‖ scheme ‖
+            // key`.
+            Message::StateSnapshot {
+                height,
+                accounts,
+                more,
+            } => {
+                bytes.extend_from_slice(&height.to_be_bytes());
+                bytes.push(u8::from(*more));
+                bytes.extend_from_slice(&(accounts.len() as u16).to_be_bytes());
+                for (address, account) in accounts {
+                    bytes.extend_from_slice(&address.to_bytes());
+                    bytes.extend_from_slice(&account.balance.to_be_bytes());
+                    bytes.extend_from_slice(&account.nonce.to_be_bytes());
+                    let key = account
+                        .key
+                        .as_ref()
+                        .map_or(Vec::new(), |key| [&[key.scheme][..], &key.bytes].concat());
+                    bytes.extend_from_slice(&(key.len() as u16).to_be_bytes());
+                    bytes.extend_from_slice(&key);
                 }
             }
         }
@@ -208,6 +256,44 @@ impl Message {
                         addresses.push(SocketAddr::new(ip, r.u16()?));
                     }
                     Message::Nodes(addresses)
+                }
+                15 => Message::GetStateSnapshot {
+                    height: r.u64()?,
+                    after: match payload.len() {
+                        8 => None,
+                        _ => Some(r.array()?),
+                    },
+                },
+                16 => {
+                    let (height, more) = (r.u64()?, r.u8()?);
+                    let count = usize::from(r.u16()?);
+                    if more > 1 || count > MAX_SNAPSHOT_ACCOUNTS {
+                        return Err(linked_realms_core::Error::Truncated);
+                    }
+                    let mut accounts = Vec::with_capacity(count);
+                    for _ in 0..count {
+                        let address = r.address()?;
+                        let (balance, nonce) = (r.u64()?, r.u64()?);
+                        let len = usize::from(r.u16()?);
+                        let key = r
+                            .bytes(len)?
+                            .split_first()
+                            .map(|(&scheme, bytes)| PublicKey {
+                                scheme,
+                                bytes: bytes.to_vec(),
+                            });
+                        let account = Account {
+                            balance,
+                            nonce,
+                            key,
+                        };
+                        accounts.push((address, account));
+                    }
+                    Message::StateSnapshot {
+                        height,
+                        accounts,
+                        more: more == 1,
+                    }
                 }
                 _ => return Ok(None),
             }))

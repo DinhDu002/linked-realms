@@ -5,7 +5,7 @@ use linked_realms_core::block::{Block, ChainView, HEADER_LEN, Header};
 use linked_realms_core::checkpoint::Checkpoint;
 use linked_realms_core::codec::Reader;
 use linked_realms_core::smt::{Node, SmtStore};
-use linked_realms_core::state::{Account, PublicKey, State, StateView};
+use linked_realms_core::state::{Account, PublicKey, State, StateView, tree_key};
 use linked_realms_core::u256::U256;
 use linked_realms_core::{ADDRESS_LEN, Address};
 use redb::{ReadableTable, StorageError, Table, TableDefinition, WriteTransaction};
@@ -22,14 +22,19 @@ const HEIGHTS: TableDefinition<u64, [u8; 32]> = TableDefinition::new("height_ind
 const BLOCKS: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("blocks");
 /// For each Block of the best chain, the accounts it changed as they were before it.
 const UNDO: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("undo");
-pub const ACCOUNTS: TableDefinition<[u8; ADDRESS_LEN], &[u8]> = TableDefinition::new("accounts");
+/// Accounts by their key in the state tree, so they read in the tree's order: the address, then
+/// the account (`account_bytes`).
+pub const ACCOUNTS: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("accounts");
+/// A state snapshot as it comes, in the form of `accounts`, until its last part is checked.
+const SNAPSHOT: TableDefinition<[u8; 32], &[u8]> = TableDefinition::new("snapshot");
 /// The state tree's entries (`smt`) by depth and path.
 const SMT: TableDefinition<[u8; 34], &[u8]> = TableDefinition::new("smt");
 /// Checkpoints by height: the Block id, then the signature.
 const CHECKPOINTS: TableDefinition<u64, &[u8]> = TableDefinition::new("checkpoints");
 /// Where branches end: each stored Block with no stored child, as it was stored.
 const TIPS: TableDefinition<[u8; 32], ()> = TableDefinition::new("tips");
-/// `network`: the network id; `tip`: the id of the best chain's last Block.
+/// `network`: the network id; `tip`: the id of the best chain's last Block; `pruned`: the
+/// highest height of the best chain whose body and undo record are gone, if any.
 pub const META: TableDefinition<&str, &[u8]> = TableDefinition::new("meta");
 
 /// A read or a write inside a transaction failed: the disk or the file is broken, and nothing
@@ -107,27 +112,39 @@ fn read_account(bytes: &[u8]) -> Account {
     }
 }
 
+/// An entry of `accounts`: its address and its account.
+pub fn read_entry(bytes: &[u8]) -> (Address, Account) {
+    let (address, account) = bytes.split_at(ADDRESS_LEN);
+    (
+        ours(Address::from_bytes(address.try_into().expect("an address"))),
+        read_account(account),
+    )
+}
+
+pub fn entry_bytes(address: &Address, account: &Account) -> Vec<u8> {
+    [address.to_bytes().as_slice(), &account_bytes(account)].concat()
+}
+
 /// The accounts table, read from any transaction and written in a write transaction.
 pub struct Accounts<T>(pub T);
 
-impl<T: ReadableTable<[u8; ADDRESS_LEN], &'static [u8]>> StateView for Accounts<T> {
+impl<T: ReadableTable<[u8; 32], &'static [u8]>> StateView for Accounts<T> {
     fn account(&self, address: &Address) -> Option<Account> {
-        db(self.0.get(address.to_bytes())).map(|bytes| read_account(bytes.value()))
+        db(self.0.get(tree_key(address))).map(|bytes| read_entry(bytes.value()).1)
     }
 }
 
-impl State for Accounts<Table<'_, [u8; ADDRESS_LEN], &'static [u8]>> {
+impl State for Accounts<Table<'_, [u8; 32], &'static [u8]>> {
     fn set_account(&mut self, address: Address, account: Account) {
-        db(self
-            .0
-            .insert(address.to_bytes(), account_bytes(&account).as_slice()));
+        let entry = entry_bytes(&address, &account);
+        db(self.0.insert(tree_key(&address), entry.as_slice()));
     }
 }
 
-impl Accounts<Table<'_, [u8; ADDRESS_LEN], &'static [u8]>> {
-    /// Only undoing a Block removes an account.
+impl Accounts<Table<'_, [u8; 32], &'static [u8]>> {
+    /// Only undoing a Block, or replacing every account with a state snapshot, removes one.
     pub fn remove(&mut self, address: &Address) {
-        db(self.0.remove(address.to_bytes()));
+        db(self.0.remove(tree_key(address)));
     }
 }
 
@@ -216,8 +233,9 @@ pub struct Tables<'t> {
     heights: Table<'t, u64, [u8; 32]>,
     blocks: Table<'t, [u8; 32], &'static [u8]>,
     undo: Table<'t, [u8; 32], &'static [u8]>,
-    pub accounts: Accounts<Table<'t, [u8; ADDRESS_LEN], &'static [u8]>>,
+    pub accounts: Accounts<Table<'t, [u8; 32], &'static [u8]>>,
     pub tree: Tree<'t>,
+    pub snapshot: Table<'t, [u8; 32], &'static [u8]>,
     checkpoints: Table<'t, u64, &'static [u8]>,
     tips: Table<'t, [u8; 32], ()>,
     pub meta: Table<'t, &'static str, &'static [u8]>,
@@ -232,6 +250,7 @@ impl<'t> Tables<'t> {
             undo: txn.open_table(UNDO)?,
             accounts: Accounts(txn.open_table(ACCOUNTS)?),
             tree: Tree(txn.open_table(SMT)?),
+            snapshot: txn.open_table(SNAPSHOT)?,
             checkpoints: txn.open_table(CHECKPOINTS)?,
             tips: txn.open_table(TIPS)?,
             meta: txn.open_table(META)?,
@@ -291,8 +310,27 @@ impl<'t> Tables<'t> {
         db(self.blocks.get(id)).is_some()
     }
 
+    /// Whether the Block `id` lacks a body this Node would keep: not one it stores, nor one on
+    /// the best chain, whose body pruning or a state snapshot dropped.
+    pub fn needs_body(&self, id: &[u8; 32]) -> bool {
+        !self.has_block(id)
+            && !self
+                .header(id)
+                .is_some_and(|stored| self.on_best_chain(id, stored.header.height))
+    }
+
     pub fn remove_block(&mut self, id: &[u8; 32]) {
         db(self.blocks.remove(id));
+    }
+
+    /// Makes the stored Block `id` a branch's end, though it may have a child: a candidate to
+    /// look at, which costs only a walk.
+    pub fn add_tip(&mut self, id: &[u8; 32]) {
+        db(self.tips.insert(id, ()));
+    }
+
+    pub fn remove_tip(&mut self, id: &[u8; 32]) {
+        db(self.tips.remove(id));
     }
 
     pub fn tips(&self) -> Vec<[u8; 32]> {
@@ -321,8 +359,40 @@ impl<'t> Tables<'t> {
         (id, read_undo(undo.value()))
     }
 
+    /// Takes the best chain's Block at `height` off it, with its undo record if it has one.
+    pub fn drop_best(&mut self, height: u64) -> [u8; 32] {
+        let id = db(self.heights.remove(height)).expect("a Block").value();
+        db(self.undo.remove(id));
+        id
+    }
+
     pub fn put_undo(&mut self, id: &[u8; 32], before: &[(Address, Option<Account>)]) {
         db(self.undo.insert(id, undo_bytes(before).as_slice()));
+    }
+
+    /// The accounts the best chain's Block `id` changed, as they were before it.
+    pub fn undo_record(&self, id: &[u8; 32]) -> Vec<(Address, Option<Account>)> {
+        read_undo(db(self.undo.get(id)).expect("an undo record").value())
+    }
+
+    #[cfg(test)]
+    pub fn has_undo(&self, id: &[u8; 32]) -> bool {
+        db(self.undo.get(id)).is_some()
+    }
+
+    pub fn remove_undo(&mut self, id: &[u8; 32]) {
+        db(self.undo.remove(id));
+    }
+
+    /// The highest height of the best chain whose body and undo record are gone, or 0.
+    pub fn pruned(&self) -> u64 {
+        db(self.meta.get("pruned")).map_or(0, |bytes| {
+            u64::from_be_bytes(bytes.value().try_into().expect("8 bytes"))
+        })
+    }
+
+    pub fn set_pruned(&mut self, height: u64) {
+        db(self.meta.insert("pruned", height.to_be_bytes().as_slice()));
     }
 
     pub fn tip(&self) -> [u8; 32] {
@@ -347,6 +417,22 @@ impl<'t> Tables<'t> {
                 signature: signature.try_into().expect("a signature"),
             }
         })
+    }
+
+    /// The height of the highest Checkpoint the best chain holds, or 0: below it nothing changes.
+    pub fn held_checkpoint(&self) -> u64 {
+        let mut below = self
+            .header(&self.tip())
+            .expect("a stored tip")
+            .header
+            .height;
+        loop {
+            match self.checkpoint_at_or_below(below) {
+                None => return 0,
+                Some((height, id)) if self.on_best_chain(&id, height) => return height,
+                Some((height, _)) => below = height - 1,
+            }
+        }
     }
 
     /// The height and Block id of the highest Checkpoint at or below `height`.
@@ -409,5 +495,52 @@ impl ChainView for Branch<'_, '_> {
                 self.tables.header(&id).expect("a stored header").header
             }
         }
+    }
+}
+
+/// The farthest below a Block that its header's checks read: the Block whose id is its RandomX
+/// key is at most 2111 below it (`block::key_height`), the Retarget's window 61.
+const LOOKBACK: usize = 2112;
+
+/// The last headers of a branch, lowest first, as far down as checking a header on it reads, for
+/// `block::check_header`: a long branch of headers alone is checked without a walk to the best
+/// chain for each.
+pub struct Recent(Vec<Header>);
+
+impl Recent {
+    /// The headers that end with the stored header `tip_id`. Refused if a rule refused one of
+    /// them; one further down is not looked at.
+    pub fn new(tables: &Tables, tip_id: &[u8; 32]) -> Result<Self, Error> {
+        let mut headers = Vec::new();
+        let mut id = *tip_id;
+        while headers.len() < LOOKBACK {
+            let stored = tables.header(&id).expect("a stored ancestor");
+            if stored.refused {
+                return Err(Error::RefusedBranch);
+            }
+            headers.push(stored.header);
+            if stored.header.height == 0 {
+                break;
+            }
+            id = stored.header.prev_id;
+        }
+        headers.reverse();
+        Ok(Recent(headers))
+    }
+
+    /// Extends it with `header`, a child of its last.
+    pub fn push(&mut self, header: Header) {
+        self.0.push(header);
+    }
+}
+
+impl ChainView for Recent {
+    fn tip_height(&self) -> u64 {
+        self.0.last().expect("a header").height
+    }
+
+    fn header(&self, height: u64) -> Header {
+        let below = height.checked_sub(self.0[0].height);
+        self.0[below.expect("a header within `LOOKBACK`") as usize]
     }
 }

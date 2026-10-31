@@ -21,6 +21,9 @@ pub enum Error {
     RefusedBranch,
     /// The database holds another network's chain.
     OtherNetwork,
+    /// The best branch parts from the best chain below Blocks this Node pruned, so it cannot
+    /// undo back to it: only a Checkpoint signer that signed two branches leads here.
+    Pruned,
     Storage(redb::Error),
 }
 
@@ -31,6 +34,7 @@ impl fmt::Display for Error {
             Error::UnknownParent => f.write_str("the parent Block is unknown"),
             Error::RefusedBranch => f.write_str("the Block is on a branch a rule refused"),
             Error::OtherNetwork => f.write_str("the database holds another network's chain"),
+            Error::Pruned => f.write_str("the best branch parts below the pruned Blocks"),
             Error::Storage(error) => write!(f, "chain database: {error}"),
         }
     }
