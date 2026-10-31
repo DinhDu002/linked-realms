@@ -2,6 +2,7 @@
 //! and follows its best branch. Every chain rule is a call into `crates/core`.
 
 mod chain;
+pub mod control;
 mod mempool;
 pub mod mine;
 pub mod p2p;

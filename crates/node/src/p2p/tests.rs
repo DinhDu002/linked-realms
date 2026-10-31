@@ -552,6 +552,7 @@ fn a_peer_that_sends_no_block_asked_of_it_is_dropped_not_banned() {
     let now = PARAMS.genesis().timestamp;
     let from = SocketAddr::from(([10, 0, 0, 9], 5000));
     greet(&mut node, &mut net, 1, from, now);
+    assert!(node.synced());
     receive(
         &mut node,
         &mut net,
@@ -560,10 +561,12 @@ fn a_peer_that_sends_no_block_asked_of_it_is_dropped_not_banned() {
         now,
     );
     assert_eq!(net.sent.last(), Some(&(1, Message::GetData(vec![[1; 32]]))));
+    assert!(!node.synced(), "a Block asked for and not come");
     node.tick(&mut net, now + STALL_SECONDS).unwrap();
     assert!(net.dropped.is_empty());
     node.tick(&mut net, now + STALL_SECONDS + 1).unwrap();
     assert_eq!(net.dropped, [1]);
+    assert!(node.synced());
     connect(&mut node, &mut net, 2, from, now + STALL_SECONDS + 1);
     assert_eq!(net.dropped, [1]);
 }
@@ -1053,6 +1056,7 @@ fn headers_on_the_way_to_a_checkpoint_come_a_batch_at_a_time() {
     );
     let last = net.sent.last().unwrap();
     assert!(matches!(last, (1, Message::GetHeaders(l)) if l[0] == first[MAX_HEADERS - 1].id()));
+    assert!(!node.synced(), "headers on the way to a state snapshot");
     receive(
         &mut node,
         &mut net,
@@ -1065,6 +1069,7 @@ fn headers_on_the_way_to_a_checkpoint_come_a_batch_at_a_time() {
         after: None,
     };
     assert_eq!(net.sent.last().unwrap(), &(1, ask));
+    assert!(!node.synced(), "a state snapshot on the way");
 }
 
 #[test]

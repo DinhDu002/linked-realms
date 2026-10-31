@@ -8,17 +8,17 @@ use crate::p2p::{Node, Tcp};
 use crate::pow::verifier;
 use crate::{Chain, Mempool, Policy};
 
-type Verifier = Box<dyn Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send>;
+pub(crate) type Verifier = Box<dyn Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send>;
 
 /// A dev-network Node at work on `file`, checking Proof of Work with RandomX as a real one does.
-fn dev_node(file: &File, keys: &Arc<Keys>) -> Arc<Running<Verifier>> {
+pub(crate) fn dev_node(file: &File, keys: &Arc<Keys>) -> Arc<Running<Verifier>> {
     let verifier: Verifier = Box::new(verifier(keys.clone()));
     let chain = Chain::open(file.path(), DEV, verifier).unwrap();
     let node = Node::new(chain, Mempool::new(DEV, Policy::default()), &DEV, 0, &[]);
     Arc::new(Running::start(node, Tcp::new(None).unwrap()))
 }
 
-fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+pub(crate) fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(300);
     while !done() {
         assert!(Instant::now() < deadline, "{what}");
