@@ -1,0 +1,89 @@
+# LR's company services (docs/runbooks/public-world.md, "7. The chain"): the seed node every other
+# Node dials first, the Public node whose RPC the Shell reads, and an archive that keeps every
+# Block. A compose project of its own beside the public world's. The Checkpoint signer is not
+# here: it runs on another machine, from deploy/compose.signer.yaml.
+#
+#   docker compose -f deploy/compose.chain.yaml up -d --build
+#   docker network connect --ip 172.31.0.10 linked-realms-chain_default <the Caddy container>
+name: linked-realms-chain
+
+x-lr-node: &lr-node
+  build:
+    context: ..
+    target: lr-node
+  image: linked-realms-lr-node:chain
+  restart: unless-stopped
+
+services:
+  # The one port this project publishes.
+  seed:
+    <<: *lr-node
+    command:
+      - --network
+      - ${LR_NETWORK:-test}
+      - --data
+      - /data
+      - --listen
+      - 0.0.0.0:9444
+      - --rpc
+      - "off"
+    ports:
+      - "${LR_P2P_PORT:-9444}:9444"
+    volumes:
+      - seed-data:/data
+
+  # Behind the Caddy that joins this network at 172.31.0.10: the Public node counts its rate limits
+  # by the client the X-Forwarded-For from that address names, and from no one else.
+  public:
+    <<: *lr-node
+    command:
+      - --network
+      - ${LR_NETWORK:-test}
+      - --data
+      - /data
+      - --seed
+      - seed:9444
+      - --rpc
+      - 0.0.0.0:9445
+      - --rpc-proxy
+      - 172.31.0.10
+    volumes:
+      - public-data:/data
+    networks:
+      default:
+        ipv4_address: 172.31.0.3
+    depends_on:
+      - seed
+
+  # Its RPC is for the operator, inside this network only.
+  archive:
+    <<: *lr-node
+    command:
+      - --network
+      - ${LR_NETWORK:-test}
+      - --data
+      - /data
+      - --archive
+      - --seed
+      - seed:9444
+      - --rpc
+      - 0.0.0.0:9445
+    volumes:
+      - archive-data:/data
+    depends_on:
+      - seed
+
+networks:
+  default:
+    # Fixed, so the Public node can name its proxy. The others take addresses from the upper half,
+    # away from the two fixed ones. If it collides with a network on the server, change the
+    # subnet, the Public node's and the proxy's addresses and --rpc-proxy together.
+    ipam:
+      config:
+        - subnet: 172.31.0.0/24
+          ip_range: 172.31.0.128/25
+
+volumes:
+  seed-data:
+  public-data:
+  archive-data:

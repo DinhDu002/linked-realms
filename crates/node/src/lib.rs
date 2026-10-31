@@ -9,6 +9,7 @@ pub mod p2p;
 pub mod pow;
 pub mod rpc;
 pub mod run;
+pub mod signer;
 mod store;
 
 use std::fmt;

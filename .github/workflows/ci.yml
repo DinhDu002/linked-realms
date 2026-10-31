@@ -102,7 +102,7 @@ jobs:
       - run: cargo clippy --all-targets --all-features -- -D warnings
       - run: cargo test
       # The same vectors on musl, in the Dockerfile stage that builds lr-node for the Alpine image.
-      - run: docker build --target chain .
+      - run: docker build --target lr-node .
 
   image:
     runs-on: ubuntu-24.04
