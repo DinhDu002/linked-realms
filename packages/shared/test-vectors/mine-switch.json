@@ -1,0 +1,163 @@
+{
+  "note": "docs/protocols/map-server-node.md, the Mine switch: the line a Land owner signs as a Land message's Message. Every valid line parses to its fields, and building those fields gives the same line; every invalid one is refused. Threads is checked against the Node's maxThreads by the Map server, not by the grammar.",
+  "valid": [
+    {
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff",
+      "fields": {
+        "mapServerKey": "tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j",
+        "on": true,
+        "threads": 2,
+        "nonce": "00112233445566778899aabbccddeeff"
+      }
+    },
+    {
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: off; Threads: 0; Nonce: 00112233445566778899aabbccddeeff",
+      "fields": {
+        "mapServerKey": "tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j",
+        "on": false,
+        "threads": 0,
+        "nonce": "00112233445566778899aabbccddeeff"
+      }
+    },
+    {
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 1; Nonce: 00112233445566778899aabbccddeeff",
+      "fields": {
+        "mapServerKey": "tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j",
+        "on": true,
+        "threads": 1,
+        "nonce": "00112233445566778899aabbccddeeff"
+      }
+    },
+    {
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 9999; Nonce: 00112233445566778899aabbccddeeff",
+      "fields": {
+        "mapServerKey": "tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j",
+        "on": true,
+        "threads": 9999,
+        "nonce": "00112233445566778899aabbccddeeff"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "reason": "an empty line",
+      "text": ""
+    },
+    {
+      "reason": "another title",
+      "text": "linked-realms mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a Land message title",
+      "text": "linked-realms Land message; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "fields out of order",
+      "text": "linked-realms Mine switch; Mine: on; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a missing field",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2"
+    },
+    {
+      "reason": "a repeated field",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "an extra field",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff; Land: 7"
+    },
+    {
+      "reason": "a trailing semicolon",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff;"
+    },
+    {
+      "reason": "a trailing space",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff "
+    },
+    {
+      "reason": "a leading space",
+      "text": " linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a line feed after the line",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff\n"
+    },
+    {
+      "reason": "a carriage return after the line",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff\r"
+    },
+    {
+      "reason": "no space after a semicolon",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j;Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "two spaces after a colon",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine:  on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a key in another case",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "Mine in capitals",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: On; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "Mine in capitals, with the Threads that off needs",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: OFF; Threads: 0; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "ON in capitals, with the Threads a non-on word would need",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: ON; Threads: 0; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "Mine neither on nor off",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: yes; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "Threads with a leading zero",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 02; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "Threads of 5 digits",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 10000; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "negative Threads",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: -1; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "Threads 0 when on",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 0; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "Threads when off",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: off; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a Nonce in capitals",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899AABBCCDDEEFF"
+    },
+    {
+      "reason": "a Nonce of 31 characters",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeef"
+    },
+    {
+      "reason": "a Nonce of 33 characters",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff0"
+    },
+    {
+      "reason": "an address in capitals",
+      "text": "linked-realms Mine switch; Map server key: TLR1QQQ5L2QGMD2KT3PXWJVUL8VPGJNUGT2R9Q30QKLRFY35AU3PWCGQU6GVCF94J; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "an address with a wrong checksum",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94k; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a host instead of an address",
+      "text": "linked-realms Mine switch; Map server key: hub.example.org; Mine: on; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
+    }
+  ]
+}
