@@ -19,6 +19,7 @@ import {
   signStatement,
   type SignedStatement,
 } from "@linked-realms/shared/identity";
+import { buildMineSwitch } from "@linked-realms/shared/mine-switch";
 import {
   ClientMessageSchema,
   ServerMessageSchema,
@@ -32,6 +33,13 @@ import {
   MAX_INPUTS_PER_SECOND,
   type LandServer,
 } from "./land.ts";
+import {
+  NodeRefused,
+  type BlockFound,
+  type MineStatus,
+  type NodeInfo,
+  type NodeLink,
+} from "./node.ts";
 
 const LAND_ID = 7;
 const mapText = readFileSync(
@@ -46,6 +54,7 @@ const hub = seeded(0x48);
 const forger = seeded(0x49);
 const owner = seeded(1);
 const visitor = seeded(2);
+const mapServer = seeded(0x4d);
 
 let nowMs = 1_800_000_000_000;
 const nowSeconds = () => Math.floor(nowMs / 1000);
@@ -122,6 +131,94 @@ function handoff(
   };
 }
 
+interface SwitchOptions {
+  on?: boolean;
+  threads?: number;
+  land?: number;
+  issued?: number;
+  mapServerKey?: string;
+}
+
+/** A Land message carrying a Mine switch for `challenge`, signed by `key`. */
+function switchFor(
+  key: Key,
+  challenge: string,
+  {
+    on = true,
+    threads = on ? 2 : 0,
+    land = LAND_ID,
+    issued = nowSeconds(),
+    mapServerKey = mapServer.address,
+  }: SwitchOptions = {},
+): SignedStatement {
+  return signStatement(
+    "land-message",
+    {
+      land,
+      landUrl: "https://7.lands.example",
+      character: key.address,
+      issued,
+      message: buildMineSwitch({ mapServerKey, on, threads, nonce: challenge }),
+    },
+    key,
+  );
+}
+
+const OFF: MineStatus = {
+  state: "off",
+  threads: 0,
+  mode: null,
+  hashRate: 0,
+  blocksWon: 0,
+  rewardAddress: null,
+};
+
+/** A Node the test drives: its info and status, the calls it got, and what they answer. */
+interface FakeNode {
+  info: NodeInfo | undefined;
+  status: MineStatus | undefined;
+  calls: unknown[][];
+  answer: () => Promise<MineStatus>;
+  change(status: MineStatus | undefined): void;
+  win(found: BlockFound): void;
+  link: NodeLink;
+}
+
+function fakeNode(
+  info: NodeInfo | undefined = { synced: true, connections: 1, maxThreads: 4 },
+): FakeNode {
+  const changed: (() => void)[] = [];
+  const won: ((found: BlockFound) => void)[] = [];
+  const fake: FakeNode = {
+    info,
+    status: OFF,
+    calls: [],
+    answer: (): Promise<MineStatus> => Promise.resolve(fake.status!),
+    change(status: MineStatus | undefined) {
+      fake.status = status;
+      for (const listener of changed) listener();
+    },
+    win(found: BlockFound) {
+      for (const listener of won) listener(found);
+    },
+    link: {
+      info: () => fake.info,
+      status: () => fake.status,
+      start: (rewardAddress, threads) => {
+        fake.calls.push(["start", rewardAddress, threads]);
+        return fake.answer();
+      },
+      stop: () => {
+        fake.calls.push(["stop"]);
+        return fake.answer();
+      },
+      onChange: (listener) => void changed.push(listener),
+      onWon: (listener) => void won.push(listener),
+    },
+  };
+  return fake;
+}
+
 type Message = NonNullable<ServerMessage["message"]["case"]>;
 type Value<K extends Message> = Extract<
   ServerMessage["message"],
@@ -177,6 +274,17 @@ class Client {
         ClientMessageSchema,
         create(ClientMessageSchema, {
           message: { case: "input", value: { dx, dy, seq } },
+        }),
+      ),
+    );
+  }
+
+  mineSwitch(signed: SignedStatement | Record<string, string>): void {
+    this.sendRaw(
+      toBinary(
+        ClientMessageSchema,
+        create(ClientMessageSchema, {
+          message: { case: "mineSwitch", value: { signed } },
         }),
       ),
     );
@@ -246,6 +354,7 @@ describe("Land server", () => {
       mapText,
       hubTicketSigner: hub.address,
       landUiDir: uiDir,
+      mapServerKey: mapServer.address,
       now: () => nowMs,
       tickMs: 10,
       ...options,
@@ -635,6 +744,307 @@ describe("Land server", () => {
         second.client.input(0, 0, 100 + i);
       second.client.input(1, 0, 200); // the 30th of the second window
       await second.client.waitFor("moved", (m) => m.seq === 200);
+    });
+  });
+
+  describe("the Mine", () => {
+    /** The owner in the Land, their first MineState's challenge, and a way to read the next. */
+    async function ownerIn(node = fakeNode()) {
+      await start({ node: node.link });
+      const { client } = await enter(handoff(owner));
+      const first = await client.waitFor("mineState");
+      return { client, node, challenge: first.challenge, first };
+    }
+    const results = (client: Client) =>
+      client.messages.flatMap((m) =>
+        m.message.case === "mineSwitchResult" ? [m.message.value] : [],
+      );
+    /** The answer to the switch sent after `before` results. */
+    async function answerTo(client: Client, before: number) {
+      await waitUntil(() => results(client).length > before);
+      const { ok, code } = results(client)[before]!;
+      return ok ? "ok" : code;
+    }
+    async function send(client: Client, signed: SignedStatement) {
+      const before = results(client).length;
+      client.mineSwitch(signed);
+      return answerTo(client, before);
+    }
+
+    it("sends the Mine's state after welcome, with the challenge in the Land owner's copy only", async () => {
+      const { challenge } = await ownerIn();
+      expect(challenge).toMatch(/^[0-9a-f]{32}$/);
+      const { client } = await enter(handoff(visitor));
+      expect(await client.waitFor("mineState")).toMatchObject({
+        status: "off",
+        maxThreads: 4,
+        challenge: "",
+        mapServerKey: "",
+      });
+      const first = clients[0]!.messages.find(
+        (m) => m.message.case === "mineState",
+      )!.message.value;
+      expect(first).toMatchObject({ mapServerKey: mapServer.address });
+    });
+
+    it("starts the Mine for the Land owner's address and renews the spent challenge", async () => {
+      const { client, node, challenge } = await ownerIn();
+      expect(
+        await send(client, switchFor(owner, challenge, { threads: 3 })),
+      ).toBe("ok");
+      expect(node.calls).toEqual([["start", owner.address, 3]]);
+      const fresh = await client.waitFor(
+        "mineState",
+        (m) => m.challenge !== challenge,
+      );
+      nowMs += 2000;
+      expect(
+        await send(client, switchFor(owner, fresh.challenge, { on: false })),
+      ).toBe("ok");
+      expect(node.calls.at(-1)).toEqual(["stop"]);
+    });
+
+    it("stops a running Mine before the Node's node_info arrives, but starts none", async () => {
+      const node = fakeNode();
+      node.info = undefined;
+      node.status = { ...OFF, state: "on", threads: 2, mode: "fast" };
+      const { client, challenge, first } = await ownerIn(node);
+      expect(first.status).toBe("on");
+      expect(
+        await send(client, switchFor(owner, challenge, { on: false })),
+      ).toBe("ok");
+      const fresh = await client.waitFor(
+        "mineState",
+        (m) => m.challenge !== challenge,
+      );
+      nowMs += 2000;
+      expect(await send(client, switchFor(owner, fresh.challenge))).toBe(
+        "unavailable",
+      );
+      expect(node.calls).toEqual([["stop"]]);
+    });
+
+    it("tells every client of a change and of a win", async () => {
+      const { client, node } = await ownerIn();
+      const { client: other } = await enter(handoff(visitor));
+      await other.waitFor("mineState");
+      node.change({
+        state: "on",
+        threads: 2,
+        mode: "fast",
+        hashRate: 1180.5,
+        blocksWon: 0,
+        rewardAddress: owner.address,
+      });
+      for (const c of [client, other])
+        expect(
+          await c.waitFor("mineState", (m) => m.status === "on"),
+        ).toMatchObject({ threads: 2, mode: "fast", hashRate: 1180.5 });
+      node.win({
+        height: 1240,
+        reward: "500004000",
+        rewardAddress: owner.address,
+      });
+      for (const c of [client, other])
+        expect(await c.waitFor("mineWon")).toMatchObject({
+          height: 1240n,
+          reward: "500004000",
+          rewardAddress: owner.address,
+        });
+    });
+
+    describe("refuses", () => {
+      it("a switch from a visitor's session, even one the Land owner signed", async () => {
+        const { node, challenge } = await ownerIn();
+        const { client } = await enter(handoff(visitor));
+        expect(await send(client, switchFor(visitor, "0".repeat(32)))).toBe(
+          "not-owner",
+        );
+        nowMs += 2000;
+        expect(await send(client, switchFor(owner, challenge))).toBe(
+          "not-owner",
+        );
+        expect(node.calls).toEqual([]);
+      });
+
+      it("a switch another Character signed, in the Land owner's session", async () => {
+        const { client, challenge } = await ownerIn();
+        expect(await send(client, switchFor(visitor, challenge))).toBe(
+          "not-owner",
+        );
+      });
+
+      it("a bad statement: a broken signature, garbage, or another Map server's key", async () => {
+        const { client, node, challenge } = await ownerIn();
+        const good = switchFor(owner, challenge);
+        const forged = {
+          ...good,
+          statement: good.statement.replace("Threads: 2", "Threads: 3"),
+        };
+        expect(await send(client, forged)).toBe("bad-statement");
+        nowMs += 2000;
+        expect(
+          await send(client, { statement: "x", publicKey: "", signature: "" }),
+        ).toBe("bad-statement");
+        nowMs += 2000;
+        expect(
+          await send(
+            client,
+            switchFor(owner, challenge, { mapServerKey: visitor.address }),
+          ),
+        ).toBe("bad-statement");
+        expect(node.calls).toEqual([]);
+        // None of them spent the challenge.
+        nowMs += 2000;
+        expect(await send(client, good)).toBe("ok");
+      });
+
+      it("a switch for another Land", async () => {
+        const { client, challenge } = await ownerIn();
+        expect(
+          await send(
+            client,
+            switchFor(owner, challenge, { land: LAND_ID + 1 }),
+          ),
+        ).toBe("bad-statement");
+      });
+
+      it("a stale switch, on either side of the clock", async () => {
+        const { client, challenge } = await ownerIn();
+        expect(
+          await send(
+            client,
+            switchFor(owner, challenge, { issued: nowSeconds() - 301 }),
+          ),
+        ).toBe("stale");
+        nowMs += 2000;
+        expect(
+          await send(
+            client,
+            switchFor(owner, challenge, { issued: nowSeconds() + 301 }),
+          ),
+        ).toBe("stale");
+        nowMs += 2000;
+        expect(
+          await send(
+            client,
+            switchFor(owner, challenge, { issued: nowSeconds() - 300 }),
+          ),
+        ).toBe("ok");
+      });
+
+      it("a wrong nonce, which spends nothing, and a replay", async () => {
+        const { client, node, challenge } = await ownerIn();
+        expect(await send(client, switchFor(owner, "f".repeat(32)))).toBe(
+          "wrong-nonce",
+        );
+        nowMs += 2000;
+        const good = switchFor(owner, challenge);
+        expect(await send(client, good)).toBe("ok");
+        nowMs += 2000;
+        expect(await send(client, good)).toBe("wrong-nonce");
+        expect(node.calls).toHaveLength(1);
+      });
+
+      it("another session's challenge", async () => {
+        const { client, challenge } = await ownerIn();
+        client.socket.close();
+        await client.closed;
+        const again = await enter(handoff(owner));
+        const second = await again.client.waitFor("mineState");
+        expect(second.challenge).not.toBe(challenge);
+        expect(await send(again.client, switchFor(owner, challenge))).toBe(
+          "wrong-nonce",
+        );
+      });
+
+      it("an expired challenge, renewed at once", async () => {
+        const { client, challenge } = await ownerIn();
+        nowMs += 300_000;
+        const renewed = await client.waitFor(
+          "mineState",
+          (m) => m.challenge !== challenge,
+        );
+        expect(renewed.challenge).toMatch(/^[0-9a-f]{32}$/);
+        expect(await send(client, switchFor(owner, challenge))).toBe(
+          "wrong-nonce",
+        );
+        nowMs += 2000;
+        expect(await send(client, switchFor(owner, renewed.challenge))).toBe(
+          "ok",
+        );
+      });
+
+      it("more threads than the Node allows, before calling it", async () => {
+        const { client, node, challenge } = await ownerIn();
+        expect(
+          await send(client, switchFor(owner, challenge, { threads: 5 })),
+        ).toBe("bad-threads");
+        expect(node.calls).toEqual([]);
+      });
+
+      it("a second switch within 2 seconds of the last, without moving the window", async () => {
+        const { client, node, challenge } = await ownerIn();
+        expect(await send(client, switchFor(owner, challenge))).toBe("ok");
+        const fresh = await client.waitFor(
+          "mineState",
+          (m) => m.challenge !== challenge,
+        );
+        nowMs += 1999;
+        const next = switchFor(owner, fresh.challenge, { on: false });
+        expect(await send(client, next)).toBe("rate-limited");
+        nowMs += 1;
+        expect(await send(client, next)).toBe("ok");
+        expect(node.calls).toHaveLength(2);
+      });
+
+      it("a switch while one is with the Node, however long it takes", async () => {
+        const { client, node, challenge } = await ownerIn();
+        let release = () => {};
+        node.answer = () =>
+          new Promise((resolve) => (release = () => resolve(OFF)));
+        client.mineSwitch(switchFor(owner, challenge));
+        await waitUntil(() => node.calls.length === 1);
+        expect(await send(client, switchFor(owner, challenge))).toBe(
+          "rate-limited",
+        );
+        nowMs += 5000;
+        expect(await send(client, switchFor(owner, challenge))).toBe(
+          "rate-limited",
+        );
+        release();
+        // The first switch's answer comes after the two refusals.
+        expect(await answerTo(client, 2)).toBe("ok");
+        expect(node.calls).toHaveLength(1);
+      });
+
+      it("a switch the Node cannot carry out", async () => {
+        const down = fakeNode();
+        const { client, challenge } = await ownerIn(down);
+        down.answer = () => Promise.reject(new NodeRefused("node-unavailable"));
+        expect(await send(client, switchFor(owner, challenge))).toBe(
+          "unavailable",
+        );
+        const next = await client.waitFor(
+          "mineState",
+          (m) => m.challenge !== challenge,
+        );
+        nowMs += 2000;
+        down.answer = () => Promise.reject(new NodeRefused("bad-threads"));
+        expect(await send(client, switchFor(owner, next.challenge))).toBe(
+          "bad-threads",
+        );
+      });
+
+      it("every switch when the Land has no Node", async () => {
+        await start();
+        const { client } = await enter(handoff(owner));
+        const state = await client.waitFor("mineState");
+        expect(state.status).toBe("unavailable");
+        expect(await send(client, switchFor(owner, state.challenge))).toBe(
+          "unavailable",
+        );
+      });
     });
   });
 
