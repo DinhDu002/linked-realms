@@ -1,5 +1,8 @@
+import { Key } from "@linked-realms/core";
+import { signStatement } from "@linked-realms/shared/identity";
+import { buildMineSwitch } from "@linked-realms/shared/mine-switch";
 import { describe, expect, it } from "vitest";
-import { mineLine, mineState } from "./mine.ts";
+import { checkSwitch, mineLine, mineState } from "./mine.ts";
 import type { MineStatus, NodeInfo, NodeLink } from "./node.ts";
 
 const ADDRESS =
@@ -24,6 +27,44 @@ const READY: NodeInfo = { synced: true, connections: 1, maxThreads: 7 };
 
 const node = (info?: NodeInfo, status?: MineStatus) =>
   ({ info: () => info, status: () => status }) as NodeLink;
+
+describe("checkSwitch", () => {
+  const owner = Key.fromSeed(new Uint8Array(32).fill(1));
+  const nonce = "ab".repeat(16);
+  const signed = (issued: number) =>
+    signStatement(
+      "land-message",
+      {
+        land: 7,
+        landUrl: "https://7.lands.example",
+        character: owner.address,
+        issued,
+        message: buildMineSwitch({
+          mapServerKey: ADDRESS,
+          on: true,
+          threads: 2,
+          nonce,
+        }),
+      },
+      owner,
+    );
+  const served = (nowSeconds: number) => ({
+    landId: 7,
+    owner: owner.address,
+    mapServerKey: ADDRESS,
+    nowSeconds,
+    challenge: { nonce, issued: 1000 },
+  });
+
+  it("takes a challenge until it expires, whatever the switch's own time", () => {
+    expect(checkSwitch(signed(1299), served(1299))).toEqual({
+      switch: { mapServerKey: ADDRESS, on: true, threads: 2, nonce },
+    });
+    expect(checkSwitch(signed(1300), served(1300))).toEqual({
+      refused: "wrong-nonce",
+    });
+  });
+});
 
 describe("mineState", () => {
   it("reports what the Node runs, with the challenge only in the Land owner's copy", () => {
@@ -63,6 +104,8 @@ describe("mineState", () => {
   it("reports a running Mine as running, whatever the Node's sync (P5)", () => {
     const alone = { synced: false, connections: 0, maxThreads: 7 };
     expect(mineState(node(alone, ON)).status).toBe("on");
+    // Before the Node's first node_info, too.
+    expect(mineState(node(undefined, ON)).status).toBe("on");
     expect(mineState(node(alone, { ...ON, state: "starting" })).status).toBe(
       "starting",
     );

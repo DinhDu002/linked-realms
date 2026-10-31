@@ -1,3 +1,4 @@
+import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
 import { Key } from "@linked-realms/core";
 import { loadConfig } from "./config.ts";
@@ -81,6 +82,10 @@ describe("loadConfig", () => {
       seeds: ["seed:9444", "10.0.0.2:9444"],
     });
     expect(loadConfig({ ...base, NODE_ENABLED: "false" }).node).toBeUndefined();
+    // Absolute even beside a relative key file: the control socket's ws+unix:// URL needs it.
+    expect(
+      loadConfig({ ...base, MAP_SERVER_KEY_FILE: ".data/key" }).node,
+    ).toMatchObject({ dataDir: resolve(".data/lr-node") });
   });
 
   it("uses an external Node only with its secret", () => {

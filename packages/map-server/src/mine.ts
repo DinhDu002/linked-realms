@@ -93,9 +93,9 @@ export function mineState(
   const info = node?.info();
   const status = node?.status();
   const ready =
-    info !== undefined &&
     status !== undefined &&
-    (status.state !== "off" || (info.synced && info.connections > 0));
+    (status.state !== "off" ||
+      (info !== undefined && info.synced && info.connections > 0));
   return {
     status: ready ? status.state : "unavailable",
     threads: status?.threads ?? 0,

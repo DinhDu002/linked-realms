@@ -1,4 +1,10 @@
-import { chmodSync, mkdtempSync, readFileSync, writeFileSync } from "node:fs";
+import {
+  chmodSync,
+  mkdtempSync,
+  readFileSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
 import { createServer, type Server } from "node:http";
 import type { AddressInfo } from "node:net";
 import { tmpdir } from "node:os";
@@ -9,6 +15,7 @@ import {
   connectControl,
   NodeRefused,
   readStatus,
+  startNode,
   superviseNode,
   type BlockFound,
 } from "./node.ts";
@@ -111,6 +118,7 @@ describe("readStatus", () => {
   it("takes lr-node's mine_status and refuses anything else", () => {
     expect(readStatus(ON)).toMatchObject({ state: "on", mode: "fast" });
     expect(readStatus(OFF)).toMatchObject({ state: "off", mode: null });
+    expect(readStatus({ ...ON, blocksWon: 0xffffffff })).toBeDefined();
     for (const bad of [
       null,
       "on",
@@ -119,6 +127,9 @@ describe("readStatus", () => {
       { ...ON, threads: -1 },
       { ...ON, threads: 1.5 },
       { ...ON, blocksWon: "3" },
+      // land.proto's uint32 fields: more would fail every session's MineState.
+      { ...ON, threads: 2 ** 32 },
+      { ...ON, blocksWon: 2 ** 32 },
       { ...ON, hashRate: Number.NaN },
       { ...ON, hashRate: -1 },
       { ...ON, rewardAddress: 7 },
@@ -180,6 +191,14 @@ describe("connectControl", () => {
     });
   });
 
+  it("tells of no change while node_info stays the same", async () => {
+    const { link, changes } = overUnix();
+    await until(() => link.info() !== undefined && link.status() !== undefined);
+    const before = changes.length;
+    await new Promise((resolve) => setTimeout(resolve, 2200)); // one more node_info
+    expect(changes).toHaveLength(before);
+  });
+
   it("starts and stops the Mine, and shows what it answered at once", async () => {
     const { control, link, changes } = overUnix();
     await until(() => link.status() !== undefined);
@@ -226,24 +245,24 @@ describe("connectControl", () => {
   });
 });
 
-describe("superviseNode", () => {
-  /** A fake lr-node: appends its arguments to a file, then runs `then`. */
-  function fakeBin(then: string) {
-    const dir = mkdtempSync(join(tmpdir(), "fake-node-"));
-    const bin = join(dir, "lr-node");
-    const runs = join(dir, "runs");
-    writeFileSync(bin, `#!/bin/sh\necho "$@" >> ${runs}\n${then}\n`);
-    chmodSync(bin, 0o755);
-    const count = () => {
-      try {
-        return readFileSync(runs, "utf8").trim().split("\n").length;
-      } catch {
-        return 0;
-      }
-    };
-    return { bin, runs, count };
-  }
+/** A fake lr-node: appends its arguments to a file, then runs `then`. */
+function fakeBin(then: string) {
+  const dir = mkdtempSync(join(tmpdir(), "fake-node-"));
+  const bin = join(dir, "lr-node");
+  const runs = join(dir, "runs");
+  writeFileSync(bin, `#!/bin/sh\necho "$@" >> ${runs}\n${then}\n`);
+  chmodSync(bin, 0o755);
+  const count = () => {
+    try {
+      return readFileSync(runs, "utf8").trim().split("\n").length;
+    } catch {
+      return 0;
+    }
+  };
+  return { bin, runs, count };
+}
 
+describe("superviseNode", () => {
   it("starts the Node again when it stops, and stops it on request", async () => {
     const { bin, runs, count } = fakeBin("exit 1");
     const lines: string[] = [];
@@ -289,5 +308,43 @@ describe("superviseNode", () => {
       /Could not run the Node \(NODE_BIN \/nonexistent\/lr-node\).*NODE_ENABLED=false/,
     );
     await none.stop();
+  });
+});
+
+describe("startNode", () => {
+  const cleanups: (() => unknown)[] = [];
+  afterEach(async () => {
+    for (const cleanup of cleanups.splice(0).reverse()) await cleanup();
+  });
+
+  it("reaches an external Node with its secret, at least 32 bytes, in hex", async () => {
+    const control = fakeControl((http) => http.listen(0, "127.0.0.1"));
+    cleanups.push(control.close);
+    await new Promise((resolve) => control.http.once("listening", resolve));
+    const { port } = control.http.address() as AddressInfo;
+    const secretFile = join(mkdtempSync(join(tmpdir(), "secret-")), "secret");
+    const config = { controlUrl: `ws://127.0.0.1:${port}`, secretFile };
+    writeFileSync(secretFile, Buffer.alloc(31, 7));
+    expect(() => startNode(config, () => {})).toThrow(/at least 32 bytes/);
+    writeFileSync(secretFile, Buffer.alloc(32, 7));
+    const node = startNode(config, () => {});
+    cleanups.push(node.close);
+    await until(() => node.link.status() !== undefined);
+    expect(control.authorizations).toEqual([`Bearer ${"07".repeat(32)}`]);
+  });
+
+  it("spawns lr-node on a Unix socket in its own data directory, with no RPC", async () => {
+    const { bin, runs, count } = fakeBin("exit 1");
+    const dataDir = join(mkdtempSync(join(tmpdir(), "node-data-")), "lr-node");
+    const node = startNode(
+      { bin, network: "dev", dataDir, seeds: ["seed:9444", "10.0.0.2:9444"] },
+      () => {},
+    );
+    cleanups.push(node.close);
+    await until(() => count() === 1);
+    expect(readFileSync(runs, "utf8").split("\n")[0]).toBe(
+      `--network dev --data ${dataDir} --control unix:${dataDir}/control.sock --rpc off --seed seed:9444 --seed 10.0.0.2:9444`,
+    );
+    expect(statSync(dataDir).mode & 0o777).toBe(0o700);
   });
 });

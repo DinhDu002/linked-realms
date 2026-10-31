@@ -297,9 +297,13 @@ export function createLandServer(options: LandServerOptions) {
     session.challenge = newChallenge(nowSeconds);
     sendMine(session);
     const { on, threads } = checked.switch;
-    const info = node?.info();
-    if (!node || !info) return answer(false, "unavailable");
-    if (on && threads > info.maxThreads) return answer(false, "bad-threads");
+    if (!node) return answer(false, "unavailable");
+    // Only a start needs node_info, for its ceiling: an OFF reaches a running Mine without it.
+    if (on) {
+      const info = node.info();
+      if (!info) return answer(false, "unavailable");
+      if (threads > info.maxThreads) return answer(false, "bad-threads");
+    }
     session.switching = true;
     try {
       await (on ? node.start(land.owner, threads) : node.stop());
