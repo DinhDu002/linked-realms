@@ -21,11 +21,15 @@ use crate::mempool::tests::{key, pay};
 pub(crate) type TestNode = Node<fn(&[u8], &[u8; 32]) -> [u8; 32]>;
 
 pub(crate) fn node(file: &File, listen: u16, seeds: &[SocketAddr]) -> TestNode {
-    let chain: Test = file.open();
+    node_on(&PARAMS, file, listen, seeds)
+}
+
+fn node_on(params: &ChainParams, file: &File, listen: u16, seeds: &[SocketAddr]) -> TestNode {
+    let chain: Test = file.open_on(params.clone());
     Node::new(
         chain,
-        Mempool::new(PARAMS, Policy::default()),
-        &PARAMS,
+        Mempool::new(params.clone(), Policy::default()),
+        params,
         listen,
         seeds,
     )
@@ -47,7 +51,7 @@ struct Wires {
 }
 
 /// The `Network` as Node `from` sees it.
-struct Wire<'a> {
+pub(crate) struct Wire<'a> {
     from: usize,
     wires: &'a mut Wires,
 }
@@ -95,16 +99,22 @@ impl Network for Wire<'_> {
 }
 
 /// Nodes joined in memory, all on one clock.
-struct Mesh {
-    nodes: Vec<TestNode>,
+pub(crate) struct Mesh {
+    pub(crate) nodes: Vec<TestNode>,
     wires: Wires,
-    now: u64,
+    pub(crate) now: u64,
     files: Vec<File>,
+    params: ChainParams,
 }
 
 impl Mesh {
     /// `n` Nodes; each `(i, j)` of `seeds` makes Node `j` a seed of Node `i`.
-    fn new(name: &str, n: usize, seeds: &[(usize, usize)]) -> Self {
+    pub(crate) fn new(name: &str, n: usize, seeds: &[(usize, usize)]) -> Self {
+        Self::on(PARAMS, name, n, seeds)
+    }
+
+    /// `n` Nodes of the network `params`, seeded as `new` says.
+    pub(crate) fn on(params: ChainParams, name: &str, n: usize, seeds: &[(usize, usize)]) -> Self {
         let files: Vec<File> = (0..n).map(|i| File::new(&format!("{name}-{i}"))).collect();
         let nodes = files
             .iter()
@@ -115,7 +125,7 @@ impl Mesh {
                     .filter(|(from, _)| *from == i)
                     .map(|(_, to)| address(*to))
                     .collect();
-                node(file, 9444, &seeds)
+                node_on(&params, file, 9444, &seeds)
             })
             .collect();
         Mesh {
@@ -124,8 +134,9 @@ impl Mesh {
                 nodes: n,
                 ..Wires::default()
             },
-            now: PARAMS.genesis().timestamp,
+            now: params.genesis().timestamp,
             files,
+            params,
         }
     }
 
@@ -143,7 +154,7 @@ impl Mesh {
         }
     }
 
-    fn tick(&mut self) {
+    pub(crate) fn tick(&mut self) {
         for i in 0..self.nodes.len() {
             let mut wire = Wire {
                 from: i,
@@ -155,7 +166,11 @@ impl Mesh {
     }
 
     /// Runs `act` on Node `i`, then delivers what it sent.
-    fn with<T>(&mut self, i: usize, act: impl FnOnce(&mut TestNode, &mut Wire) -> T) -> T {
+    pub(crate) fn with<T>(
+        &mut self,
+        i: usize,
+        act: impl FnOnce(&mut TestNode, &mut Wire) -> T,
+    ) -> T {
         let mut wire = Wire {
             from: i,
             wires: &mut self.wires,
@@ -170,18 +185,18 @@ impl Mesh {
         let seeds: Vec<SocketAddr> = self.nodes[i].known.keys().copied().collect();
         // Its database opens once: the Node goes first.
         drop(self.nodes.remove(i));
-        let chain = self.files[i].open().pruning(keep);
-        let pool = Mempool::new(PARAMS, Policy::default());
+        let chain = self.files[i].open_on(self.params.clone()).pruning(keep);
+        let pool = Mempool::new(self.params.clone(), Policy::default());
         self.nodes
-            .insert(i, Node::new(chain, pool, &PARAMS, 9444, &seeds));
+            .insert(i, Node::new(chain, pool, &self.params, 9444, &seeds));
     }
 
-    fn tip(&self, i: usize) -> [u8; 32] {
+    pub(crate) fn tip(&self, i: usize) -> [u8; 32] {
         self.nodes[i].chain.tip().unwrap().id()
     }
 
     /// Whether Node `i` holds a connection with Node `to`, whichever dialed.
-    fn connected(&self, i: usize, to: usize) -> bool {
+    pub(crate) fn connected(&self, i: usize, to: usize) -> bool {
         let ip = address(to).ip();
         self.nodes[i].peers.values().any(|p| p.address.ip() == ip)
     }

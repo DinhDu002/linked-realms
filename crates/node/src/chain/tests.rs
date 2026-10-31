@@ -43,9 +43,14 @@ impl File {
     }
 
     pub(crate) fn open(&self) -> Test {
+        self.open_on(PARAMS)
+    }
+
+    /// The database of a Node of the network `params`, with the same fake Proof of Work.
+    pub(crate) fn open_on(&self, params: ChainParams) -> Test {
         Chain::open(
             &self.0,
-            PARAMS,
+            params,
             fake_hash as fn(&[u8], &[u8; 32]) -> [u8; 32],
         )
         .unwrap()
