@@ -462,6 +462,18 @@ fn methods<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static>(
         })
         .await
     })?;
+    module.register_async_method("lr_getNewAccountCounts", |params, ctx, _| async move {
+        let (from, count): (u64, u64) = params.parse()?;
+        let count = count.min(MAX_HEADERS as u64);
+        ctx.ask(move |node, _| {
+            let counted = node.chain.new_accounts_from(from, count)?;
+            Ok(counted
+                .iter()
+                .map(|(id, created)| json!({ "id": hex::encode(id), "newAccounts": created }))
+                .collect::<Vec<_>>())
+        })
+        .await
+    })?;
     module.register_async_method("lr_getBlock", |params, ctx, _| async move {
         let block: BlockRef = params.one()?;
         let id = match &block {
