@@ -64,6 +64,40 @@
           </form>
         </section>
 
+        <section aria-labelledby="gold-title">
+          <h2 id="gold-title">Gold</h2>
+          <p>Balance: <strong id="balance">…</strong></p>
+          <p id="gold-status" role="status"></p>
+          <form id="send-form">
+            <h3>Send Gold</h3>
+            <label for="send-to">Recipient address</label>
+            <input
+              id="send-to"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="tlr1…"
+              required
+            />
+            <label for="send-amount">Amount (GOLD)</label>
+            <input
+              id="send-amount"
+              inputmode="decimal"
+              autocomplete="off"
+              required
+            />
+            <label for="send-memo">Memo (optional, at most 80 bytes)</label>
+            <input id="send-memo" autocomplete="off" />
+            <label for="send-fee">Fee (GOLD, empty for automatic)</label>
+            <input id="send-fee" inputmode="decimal" autocomplete="off" />
+            <p>
+              <button id="send-submit" type="submit">Send</button>
+            </p>
+            <p id="send-status" role="status"></p>
+          </form>
+          <h3>Recent transactions</h3>
+          <ul id="transactions" aria-label="Recent transactions"></ul>
+        </section>
+
         <section aria-labelledby="directory-title">
           <h2 id="directory-title">Directory</h2>
           <button id="refresh-directory" type="button">
@@ -163,6 +197,42 @@
         <div class="actions">
           <button id="sign-deny" value="deny">Deny</button>
           <button id="sign-approve" type="button" aria-disabled="true">
+            Approve
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog
+      id="pay"
+      class="prompt"
+      tabindex="-1"
+      autofocus
+      aria-labelledby="pay-title"
+    >
+      <form method="dialog">
+        <h2 id="pay-title">Send Gold</h2>
+        <p>
+          Check every line. Gold sent on the chain cannot be taken back. The
+          Shell signs only when you approve.
+        </p>
+        <dl>
+          <dt>From</dt>
+          <dd id="pay-from"></dd>
+          <dt>To</dt>
+          <dd id="pay-to"></dd>
+          <dt>Amount</dt>
+          <dd id="pay-amount"></dd>
+          <dt>Memo</dt>
+          <dd id="pay-memo"></dd>
+          <dt>Fee</dt>
+          <dd id="pay-fee"></dd>
+          <dt>Total</dt>
+          <dd id="pay-total"></dd>
+        </dl>
+        <div class="actions">
+          <button id="pay-deny" value="deny">Deny</button>
+          <button id="pay-approve" type="button" aria-disabled="true">
             Approve
           </button>
         </div>

@@ -4,17 +4,21 @@ import { defineConfig } from "vitest/config";
 import { shellHeaders } from "./src/headers.ts";
 
 export default defineConfig(({ mode }) => {
-  const hubUrl =
-    loadEnv(mode, import.meta.dirname, "VITE_").VITE_HUB_URL ||
-    "http://localhost:8787";
+  const env = loadEnv(mode, import.meta.dirname, "VITE_");
+  const hubUrl = env.VITE_HUB_URL || "http://localhost:8787";
+  const nodeUrl = env.VITE_NODE_URL || "http://localhost:9445";
   return {
     appType: "mpa",
     server: {
       port: 5182,
       strictPort: true,
-      headers: shellHeaders(hubUrl, true),
+      headers: shellHeaders(hubUrl, nodeUrl, true),
     },
-    preview: { port: 4182, strictPort: true, headers: shellHeaders(hubUrl) },
+    preview: {
+      port: 4182,
+      strictPort: true,
+      headers: shellHeaders(hubUrl, nodeUrl),
+    },
     build: {
       rollupOptions: {
         input: {

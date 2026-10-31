@@ -1,15 +1,30 @@
-import { ready } from "@linked-realms/core";
+import { formatAmount, ready } from "@linked-realms/core";
 import { shortAddress, type LandInfo } from "@linked-realms/shared";
 import { isName, signStatement } from "@linked-realms/shared/identity";
 import { createAccount } from "./account.ts";
-import { hubHost, hubUrl, landCommand, landImage } from "./config.ts";
+import {
+  hubHost,
+  hubUrl,
+  landCommand,
+  landImage,
+  network,
+  networkIdOf,
+  nodeUrl,
+} from "./config.ts";
 import { el, make } from "./dom.ts";
 import { createFrameHost, type FrameHost } from "./frame.ts";
+import {
+  describeTransaction,
+  memoText,
+  preparePayment,
+  signPayment,
+} from "./gold.ts";
 import { prepareHandoff } from "./handoff.ts";
 import { createHubClient } from "./hub.ts";
 import { loadRecord, WrongPasswordError } from "./keystore.ts";
-import { errorText, registerErrorText } from "./messages.ts";
+import { errorText, registerErrorText, sendErrorText } from "./messages.ts";
 import { createModals } from "./modals.ts";
+import { createNodeClient, toHex, type PlacedTransaction } from "./node.ts";
 import { createPortHandler, type TravelOutcome } from "./portHandler.ts";
 import { planTravel, ticketRefusal } from "./travel.ts";
 import { createVault, LockedError } from "./vault.ts";
@@ -32,6 +47,8 @@ async function main() {
   await ready;
 
   const hub = createHubClient(hubUrl);
+  const node = createNodeClient(nodeUrl);
+  const networkId = networkIdOf(network);
   // The frame host needs the modals (to freeze) and the modals need it: tie them lazily.
   // eslint-disable-next-line prefer-const
   let frameHost: FrameHost;
@@ -455,9 +472,101 @@ async function main() {
     }
   }
 
+  // --- Gold: balance, send and recent transactions, from the Public node ---
+
+  const sendForm = el<HTMLFormElement>("send-form");
+  const sendStatus = el("send-status");
+  const sendSubmit = el<HTMLButtonElement>("send-submit");
+  const goldStatus = el("gold-status");
+  const field = (id: string) => el<HTMLInputElement>(id);
+  // ponytail: sends wait here only until the page reloads; after that they show in the list once a
+  // Block holds them.
+  const pending = new Map<string, PlacedTransaction>();
+
+  sendForm.addEventListener("submit", async (event) => {
+    event.preventDefault();
+    sendSubmit.disabled = true;
+    sendStatus.textContent = "Reading your account…";
+    try {
+      const memo = field("send-memo").value;
+      const payment = await preparePayment(node, networkId, address, {
+        to: field("send-to").value,
+        amount: field("send-amount").value,
+        memo,
+        fee: field("send-fee").value,
+      });
+      sendStatus.textContent = "";
+      const gold = (units: bigint) => `${formatAmount(units)} GOLD`;
+      const answer = await modals.confirmPayment({
+        from: account.name ? `${account.name} (${address})` : address,
+        to: payment.to,
+        amount: gold(payment.amount),
+        memo: memo === "" ? "(none)" : memoText(payment.memo),
+        fee: gold(payment.fee),
+        total: gold(payment.amount + payment.fee),
+      });
+      if (answer !== "approved") {
+        sendStatus.textContent = "Not sent: nothing was signed.";
+        return;
+      }
+      const { bytes, id } = vault.withKey((key) => signPayment(key, payment));
+      await node.send(bytes);
+      pending.set(id, {
+        tx: {
+          id,
+          sender: address,
+          nonce: Number(payment.nonce),
+          fee: payment.fee.toString(),
+          kind: "transfer",
+          to: payment.to,
+          amount: payment.amount.toString(),
+          memo: toHex(payment.memo),
+        },
+        block: null,
+      });
+      sendForm.reset();
+      sendStatus.textContent = `Sent ${gold(payment.amount)}. It is confirmed once a Block holds it.`;
+      void refreshGold();
+    } catch (e) {
+      sendStatus.textContent = sendErrorText(e);
+    } finally {
+      sendSubmit.disabled = false;
+    }
+  });
+
+  async function refreshGold() {
+    try {
+      const [mine, recent] = await Promise.all([
+        node.account(address),
+        node.addressTxs(address),
+      ]);
+      // A send stops waiting once a Block holds it, or the Node no longer has it.
+      await Promise.all(
+        [...pending.keys()].map(async (id) => {
+          const found = await node.transaction(id);
+          if (found?.block || !found) pending.delete(id);
+          if (!found)
+            sendStatus.textContent =
+              "A send left the Node without a Block: check the recent transactions, and send it again if it is not there.";
+        }),
+      );
+      el("balance").textContent = `${formatAmount(mine?.balance ?? 0n)} GOLD`;
+      const list = el("transactions");
+      list.replaceChildren();
+      const rows = [...pending.values(), ...recent];
+      if (rows.length === 0) list.append(make("li", "No transactions yet."));
+      for (const placed of rows)
+        list.append(make("li", describeTransaction(placed, address)));
+      goldStatus.textContent = "";
+    } catch (e) {
+      goldStatus.textContent = `Cannot read Gold from the Node at ${nodeUrl}: ${errorText(e)}`;
+    }
+  }
+
   async function refreshHome() {
     if (!vault.unlocked || frameHost.land) return;
     void refreshDirectory();
+    void refreshGold();
     await refreshYourLand();
     if (!nameLoaded && vault.token) {
       nameLoaded = true;

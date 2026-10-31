@@ -74,7 +74,7 @@ Land owners may also serve their Land at a domain of their own (self-hosting, st
 LR's company services: a seed node that every other Node dials first, the Public node whose RPC the Shell reads, and an archive that keeps every Block. They are a compose project of their own (`deploy/compose.chain.yaml`), on this server or another. Each runs the `lr-node` image, which holds the binary and no key.
 
 1. Open the P2P port to the internet: TCP 9444, or `LR_P2P_PORT` in `deploy/.env`. It is the only port the chain publishes.
-2. Choose a name for the Public node's RPC, `rpc.example.org` here, give it DNS like the others, and add it to the Caddy in front (`deploy/Caddyfile`):
+2. Choose a name for the Public node's RPC, `rpc.example.org` here, give it DNS like the others, put it in `RPC_DOMAIN` in `deploy/.env`, and add it to the Caddy in front (`deploy/Caddyfile`):
 
    ```
    rpc.example.org {
@@ -90,6 +90,8 @@ LR's company services: a seed node that every other Node dials first, the Public
    curl -s https://rpc.example.org -H 'Content-Type: application/json' \
      -d '{"jsonrpc":"2.0","id":1,"method":"lr_getInfo"}'   # the tip, and latestCheckpoint
    ```
+
+   Then rebuild the Shell, which is built with that name and the network (`LR_NETWORK`) and calls only it and the Hub: `docker compose -f deploy/compose.public.yaml up -d --build shell`.
 
    Recreating the Caddy container drops the join; run `docker network connect` again. If the subnet `172.31.0.0/24` is already used on the server, change it, the two addresses and `--rpc-proxy` in `deploy/compose.chain.yaml` together.
 
