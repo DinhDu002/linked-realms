@@ -32,6 +32,9 @@ importers:
       '@bufbuild/protobuf':
         specifier: 2.16.0
         version: 2.16.0
+      '@linked-realms/core':
+        specifier: workspace:*
+        version: link:../core
       '@linked-realms/shared':
         specifier: workspace:*
         version: link:../shared

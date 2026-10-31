@@ -3,11 +3,13 @@ import {
   ClientMessageSchema,
   ServerMessageSchema,
 } from "@linked-realms/shared/land-protocol";
-import { describe, expect, it } from "vitest";
+import { describe, expect, it, vi } from "vitest";
 import {
+  connect,
   decodeServerMessage,
   encodeHello,
   encodeInput,
+  encodeMineSwitch,
   errorText,
   playUrl,
 } from "./connection.ts";
@@ -47,6 +49,48 @@ describe("encoding", () => {
         case: "input",
         value: { dx, dy, seq },
       });
+    }
+  });
+});
+
+describe("encodeMineSwitch", () => {
+  it("encodes the signed switch as it came from the Shell", () => {
+    const m = fromBinary(ClientMessageSchema, encodeMineSwitch(statement("s")));
+    expect(m.message.case).toBe("mineSwitch");
+    if (m.message.case !== "mineSwitch") return;
+    expect(m.message.value.signed).toMatchObject(statement("s"));
+  });
+});
+
+describe("sendMineSwitch", () => {
+  it("says whether the signed switch left, so the page never claims a switch it dropped", () => {
+    const sockets: FakeSocket[] = [];
+    class FakeSocket {
+      static readonly OPEN = 1;
+      readyState = 0;
+      sent: Uint8Array[] = [];
+      constructor() {
+        sockets.push(this);
+      }
+      send(bytes: Uint8Array) {
+        this.sent.push(bytes);
+      }
+    }
+    vi.stubGlobal("WebSocket", FakeSocket);
+    try {
+      const connection = connect(
+        "ws://land.test/play",
+        { ticket: statement("t"), arrival: statement("a") },
+        { onMessage() {}, onProblem() {} },
+      );
+      const socket = sockets[0]!;
+      expect(connection.sendMineSwitch(statement("s"))).toBe(false);
+      expect(socket.sent).toHaveLength(0);
+      socket.readyState = FakeSocket.OPEN;
+      expect(connection.sendMineSwitch(statement("s"))).toBe(true);
+      expect(socket.sent).toEqual([encodeMineSwitch(statement("s"))]);
+    } finally {
+      vi.unstubAllGlobals();
     }
   });
 });
