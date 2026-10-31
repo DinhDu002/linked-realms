@@ -8,6 +8,7 @@ import {
   decodeServerMessage,
   encodeHello,
   encodeInput,
+  encodeMineSwitch,
   errorText,
   playUrl,
 } from "./connection.ts";
@@ -48,6 +49,15 @@ describe("encoding", () => {
         value: { dx, dy, seq },
       });
     }
+  });
+});
+
+describe("encodeMineSwitch", () => {
+  it("encodes the signed switch as it came from the Shell", () => {
+    const m = fromBinary(ClientMessageSchema, encodeMineSwitch(statement("s")));
+    expect(m.message.case).toBe("mineSwitch");
+    if (m.message.case !== "mineSwitch") return;
+    expect(m.message.value.signed).toMatchObject(statement("s"));
   });
 });
 
