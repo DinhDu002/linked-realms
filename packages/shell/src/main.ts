@@ -169,6 +169,8 @@ async function main() {
           travelFrom(land, direction, unlock, isCurrent),
         isUnlocked: () => vault.unlocked,
         ensureUnlocked,
+        isCurrent,
+        dialogOpen: () => modals.isOpen,
         confirm: (request) => modals.confirmSign(request),
         sign: (fields) =>
           vault.withKey((key) => signStatement("land-message", fields, key)),
