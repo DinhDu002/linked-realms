@@ -7,6 +7,8 @@ import {
   type SignedStatement,
   type StatementFields,
 } from "@linked-realms/shared/identity";
+import { readTransfer, type Payment, type SendForm } from "./gold.ts";
+import { NodeError } from "./node.ts";
 import { LockedError } from "./vault.ts";
 
 export const MAX_MESSAGE_BYTES = 64 * 1024;
@@ -27,6 +29,13 @@ export interface SignRequest {
   origin: string;
   character: { address: string; name: string };
   text: string;
+}
+
+/** What the Player sees in the payment prompt: the Shell's own lines about a Land's `pay`. */
+export interface PayRequest {
+  landId: number;
+  origin: string;
+  payment: Payment;
 }
 
 /** What the Player did with the signing prompt; `busy` when another Land's prompt is open. */
@@ -53,6 +62,18 @@ export interface PortDeps {
   confirm(request: SignRequest): Promise<SignAnswer>;
   /** Signs the statement; throws LockedError if the Shell locked meanwhile. */
   sign(fields: StatementFields<"land-message">): SignedStatement;
+  /**
+   * Checks a payment against the Character's account and the Node, and prices it; throws when it
+   * cannot be made, after telling the Player why in the Shell's own bar.
+   */
+  preparePayment(form: SendForm): Promise<Payment>;
+  /** Shows the payment prompt. */
+  confirmPayment(request: PayRequest): Promise<SignAnswer>;
+  /**
+   * Signs and sends the payment; its transaction id, also when the Node's answer was lost. Throws
+   * LockedError if the Shell locked meanwhile, and the Node's refusal.
+   */
+  sendPayment(payment: Payment): Promise<string>;
 }
 
 /** The message's JSON form, or undefined when it cannot be serialised or is over 64 KiB. */
@@ -78,6 +99,7 @@ function readMessage(data: unknown): Record<string, unknown> | undefined {
 export function createPortHandler(deps: PortDeps) {
   let lastTravelAt = -Infinity;
   let travelling = false;
+  /** A `signMessage` or a `pay` is open: one at a time. */
   let signOpen = false;
   let refusals = 0;
   let lastRefusalAt = -Infinity;
@@ -169,6 +191,59 @@ export function createPortHandler(deps: PortDeps) {
     }
   }
 
+  /**
+   * A payment the Land asks for. The Land gets the transaction id the Shell sent, never the signed
+   * bytes; it learns that the payment happened only from the chain.
+   */
+  async function pay(id: string, m: Record<string, unknown>) {
+    const { amount, recipient, memo = "" } = m;
+    if (
+      typeof amount !== "string" ||
+      typeof recipient !== "string" ||
+      typeof memo !== "string" ||
+      !memo.isWellFormed()
+    )
+      return signResult(id, { error: "invalid" });
+    const form = { to: recipient, amount, memo, fee: "" };
+    try {
+      readTransfer(form);
+    } catch {
+      return signResult(id, { error: "invalid" });
+    }
+    if (refusals >= MAX_REFUSALS) return signResult(id, { error: "blocked" });
+    if (signOpen || coolingDown()) return signResult(id, { error: "busy" });
+    signOpen = true;
+    try {
+      if (!(await unlock())) return signResult(id, { error: "locked" });
+      let payment: Payment;
+      try {
+        payment = await deps.preparePayment(form);
+      } catch {
+        // Counted like a refusal, so a Land cannot keep the Shell calling the Node for it.
+        refuse();
+        return signResult(id, { error: "failed" });
+      }
+      const answer = await deps.confirmPayment({ ...deps.land, payment });
+      if (answer === "busy") return signResult(id, { error: "busy" });
+      if (answer === "denied") {
+        refuse();
+        return signResult(id, { error: "denied" });
+      }
+      signResult(id, { txId: await deps.sendPayment(payment) });
+    } catch (e) {
+      signResult(id, {
+        error:
+          e instanceof LockedError
+            ? "locked"
+            : e instanceof NodeError
+              ? "failed"
+              : "invalid",
+      });
+    } finally {
+      signOpen = false;
+    }
+  }
+
   return {
     /** Handles one message from the port; unknown or malformed ones are ignored. */
     async handle(data: unknown): Promise<void> {
@@ -187,8 +262,8 @@ export function createPortHandler(deps: PortDeps) {
         m.id.length > MAX_ID_LENGTH
       )
         return;
-      if (m.type === "pay") return signResult(m.id, { error: "unsupported" });
-      await signMessage(m.id, m.text);
+      if (m.type === "pay") await pay(m.id, m);
+      else await signMessage(m.id, m.text);
     },
   };
 }

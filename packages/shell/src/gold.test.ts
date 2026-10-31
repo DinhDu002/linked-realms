@@ -45,7 +45,7 @@ describe("preparePayment", () => {
       node,
       DEV,
       sender.address,
-      form({ to: ` ${recipient} `, memo: "hi" }),
+      form({ memo: "hi" }),
     );
     expect(payment).toEqual({
       networkId: DEV,
@@ -85,6 +85,8 @@ describe("preparePayment", () => {
   it.each([
     [{ to: "tlr1nope" }, /not a Character address/],
     [{ to: recipient.toUpperCase() }, /not a Character address/],
+    [{ to: ` ${recipient}` }, /not a Character address/],
+    [{ amount: "1.5 " }, /amount is not an amount of GOLD/],
     [{ amount: "1." }, /amount is not an amount of GOLD/],
     [{ amount: "0.123456789" }, /amount is not an amount of GOLD/],
     [{ amount: "-1" }, /amount is not an amount of GOLD/],

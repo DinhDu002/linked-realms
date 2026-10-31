@@ -1,4 +1,7 @@
+import { Key } from "@linked-realms/core";
 import { describe, expect, it, vi } from "vitest";
+import type { Payment } from "./gold.ts";
+import { NodeError } from "./node.ts";
 import {
   createPortHandler,
   type PortDeps,
@@ -21,6 +24,9 @@ function setup(over: Partial<PortDeps> = {}) {
     ensureUnlocked: vi.fn(async () => true),
     confirm: vi.fn(async () => "approved" as const),
     sign: vi.fn(() => signed),
+    preparePayment: vi.fn(async () => payment),
+    confirmPayment: vi.fn(async () => "approved" as const),
+    sendPayment: vi.fn(async () => "ab01"),
     ...over,
   };
   return {
@@ -135,20 +141,180 @@ describe("travel", () => {
   });
 });
 
+const RECIPIENT = Key.fromEntropy(new Uint8Array(32).fill(8), 0).address;
+const payment: Payment = {
+  networkId: 1,
+  sender: "tlr1abc",
+  nonce: 0n,
+  to: RECIPIENT,
+  amount: 150_000_000n,
+  memo: new TextEncoder().encode("Lantern"),
+  fee: 38_290n,
+  withPublicKey: true,
+};
+const pay = (id: string, fields: Record<string, unknown> = {}) => ({
+  type: "pay",
+  id,
+  amount: "1.5",
+  recipient: RECIPIENT,
+  memo: "Lantern",
+  ...fields,
+});
+
 describe("pay", () => {
-  it("is unsupported", async () => {
+  it("prices the payment, shows the Shell's prompt with the Land, and returns only the transaction id", async () => {
     const { handler, sent, deps } = setup();
-    await handler.handle({
-      type: "pay",
-      id: "p1",
-      amount: "1",
-      recipient: "tlr1x",
-      memo: "m",
+    await handler.handle(pay("p1"));
+    expect(deps.preparePayment).toHaveBeenCalledWith({
+      to: RECIPIENT,
+      amount: "1.5",
+      memo: "Lantern",
+      fee: "",
     });
-    expect(sent).toEqual([
-      { type: "signResult", id: "p1", error: "unsupported" },
+    expect(deps.confirmPayment).toHaveBeenCalledWith({
+      landId: 7,
+      origin: "https://7.lands.example",
+      payment,
+    });
+    expect(deps.sendPayment).toHaveBeenCalledWith(payment);
+    expect(sent).toEqual([{ type: "signResult", id: "p1", txId: "ab01" }]);
+  });
+
+  it("takes no memo as an empty one", async () => {
+    const { handler, deps } = setup();
+    await handler.handle(pay("p1", { memo: undefined }));
+    expect(deps.preparePayment).toHaveBeenCalledWith(
+      expect.objectContaining({ memo: "" }),
+    );
+  });
+
+  it.each([
+    ["no amount", { amount: undefined }],
+    ["an amount that is a number", { amount: 1.5 }],
+    ["an amount with a space", { amount: " 1.5" }],
+    ["nine decimals", { amount: "0.000000001" }],
+    ["a zero amount", { amount: "0" }],
+    ["a recipient that is not an address", { recipient: "tlr1x" }],
+    ["a recipient with a space", { recipient: `${RECIPIENT} ` }],
+    ["a memo that is not text", { memo: 5 }],
+    ["a memo over 80 bytes", { memo: "é".repeat(41) }],
+    ["a memo with a lone surrogate", { memo: "\ud800" }],
+  ])("answers invalid to %s, before anything else", async (_, fields) => {
+    const { handler, sent, deps } = setup({ isUnlocked: () => false });
+    await handler.handle(pay("p1", fields));
+    expect(sent).toEqual([{ type: "signResult", id: "p1", error: "invalid" }]);
+    expect(deps.ensureUnlocked).not.toHaveBeenCalled();
+    expect(deps.preparePayment).not.toHaveBeenCalled();
+  });
+
+  it("does not send without approval, and counts the refusal with signMessage's", async () => {
+    const { handler, sent, deps, advance } = setup({
+      confirm: vi.fn(async () => "denied" as const),
+      confirmPayment: vi.fn(async () => "denied" as const),
+    });
+    await handler.handle(pay("p1"));
+    // busy for 10 seconds after a refusal, for a signature as for a payment
+    await handler.handle(sign("s1"));
+    await handler.handle(pay("p2"));
+    advance(10_000);
+    await handler.handle(pay("p3"));
+    advance(10_000);
+    await handler.handle(sign("s2"));
+    expect(deps.sendPayment).not.toHaveBeenCalled();
+    expect(sent.map((m) => [m.id, m.error])).toEqual([
+      ["p1", "denied"],
+      ["s1", "busy"],
+      ["p2", "busy"],
+      ["p3", "denied"],
+      ["s2", "denied"],
     ]);
-    expect(deps.confirm).not.toHaveBeenCalled();
+    advance(60_000);
+    await handler.handle(pay("p4"));
+    expect(sent.at(-1)).toEqual({
+      type: "signResult",
+      id: "p4",
+      error: "blocked",
+    });
+    expect(deps.confirmPayment).toHaveBeenCalledTimes(2);
+  });
+
+  it("is busy while a signature or another payment is open", async () => {
+    let answer: (a: SignAnswer) => void = () => {};
+    const { handler, sent } = setup({
+      confirmPayment: vi.fn(
+        () => new Promise<SignAnswer>((resolve) => (answer = resolve)),
+      ),
+    });
+    const first = handler.handle(pay("p1"));
+    await vi.waitFor(() => expect(answer).not.toBe(undefined));
+    await new Promise((r) => setTimeout(r, 0));
+    await handler.handle(pay("p2"));
+    await handler.handle(sign("s1"));
+    answer("approved");
+    await first;
+    expect(sent.map((m) => [m.id, m.error ?? m.txId])).toEqual([
+      ["p2", "busy"],
+      ["s1", "busy"],
+      ["p1", "ab01"],
+    ]);
+  });
+
+  it("answers failed when the payment cannot be made, and counts it, so a Land cannot keep the Shell calling the Node", async () => {
+    const { handler, sent, deps, advance } = setup({
+      preparePayment: vi.fn(async () => {
+        throw new Error("Not enough Gold");
+      }),
+    });
+    for (const id of ["a", "b", "c", "d"]) {
+      await handler.handle(pay(id));
+      advance(10_000);
+    }
+    expect(sent.map((m) => m.error)).toEqual([
+      "failed",
+      "failed",
+      "failed",
+      "blocked",
+    ]);
+    expect(deps.preparePayment).toHaveBeenCalledTimes(3);
+    expect(deps.confirmPayment).not.toHaveBeenCalled();
+  });
+
+  it("answers failed when the Node refuses the signed payment, without counting a refusal", async () => {
+    const { handler, sent } = setup({
+      sendPayment: vi.fn(async () => {
+        throw new NodeError(-32003, "x", "fee-too-low");
+      }),
+    });
+    await handler.handle(pay("a"));
+    await handler.handle(pay("b"));
+    expect(sent.map((m) => m.error)).toEqual(["failed", "failed"]);
+  });
+
+  it("answers locked when the Player cancels the unlock or the Shell locked before it signed", async () => {
+    const { handler, sent, deps } = setup({
+      isUnlocked: () => false,
+      ensureUnlocked: vi.fn(async () => false),
+    });
+    await handler.handle(pay("a"));
+    expect(sent).toEqual([{ type: "signResult", id: "a", error: "locked" }]);
+    expect(deps.preparePayment).not.toHaveBeenCalled();
+    const late = setup({
+      sendPayment: vi.fn(async () => {
+        throw new LockedError();
+      }),
+    });
+    await late.handler.handle(pay("b"));
+    expect(late.sent).toEqual([
+      { type: "signResult", id: "b", error: "locked" },
+    ]);
+  });
+
+  it("answers busy, and counts no refusal, when another Land's prompt is open", async () => {
+    const { handler, sent } = setup({
+      confirmPayment: vi.fn(async () => "busy" as const),
+    });
+    for (const id of ["a", "b", "c", "d"]) await handler.handle(pay(id));
+    expect(sent.map((m) => m.error)).toEqual(["busy", "busy", "busy", "busy"]);
   });
 });
 
