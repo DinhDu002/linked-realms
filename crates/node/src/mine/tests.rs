@@ -165,10 +165,11 @@ fn a_mine_moves_to_the_next_key_when_it_comes() {
 
     // Block 2111 on the genesis's key, then 2112 and 2113 on the next one.
     mine.start(reward, threads, Mode::Light).unwrap();
-    let tip = || running.call_blocking(|node, _| node.chain.tip().unwrap().height);
-    wait_for("2 Blocks on the next key", || tip() >= Some(SWITCH + 1));
+    // Counted once the Node took them, so after the tip moved.
+    wait_for("3 Blocks won", || mine.status().blocks_won >= 3);
+    let tip = running.call_blocking(|node, _| node.chain.tip().unwrap().height);
+    assert!(tip >= Some(SWITCH + 1), "{tip:?}");
     let status = mine.status();
-    assert!(status.blocks_won >= 3, "{status:?}");
     assert_eq!(
         (status.state, status.threads),
         (State::On, threads),
