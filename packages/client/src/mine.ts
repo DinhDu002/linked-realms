@@ -3,7 +3,7 @@
 // the Land's statement, not proof; Gold is only what the chain says. formatAmount and the switch
 // line's address check need `ready` from @linked-realms/core.
 import { formatAmount } from "@linked-realms/core";
-import { shortAddress } from "@linked-realms/shared";
+import { hashRateText, shortAddress } from "@linked-realms/shared";
 import type { MineState, MineWon } from "@linked-realms/shared/land-protocol";
 import { buildMineSwitch } from "@linked-realms/shared/mine-switch";
 import { characterLabel } from "./players.ts";
@@ -60,12 +60,6 @@ export function readMineWon(m: MineWon): WinView | undefined {
 }
 
 const count = (n: number, word: string) => `${n} ${word}${n === 1 ? "" : "s"}`;
-
-export function hashRateText(perSecond: number): string {
-  if (perSecond >= 1e6) return `${(perSecond / 1e6).toFixed(1)} MH/s`;
-  if (perSecond >= 1e3) return `${(perSecond / 1e3).toFixed(1)} kH/s`;
-  return `${Math.round(perSecond)} H/s`;
-}
 
 /** Who the rewards go to: the Land owner's name when it is their address, else the short address. */
 export function rewardsTo(

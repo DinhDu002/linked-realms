@@ -7,7 +7,6 @@ import { shortAddress } from "@linked-realms/shared";
 import { buildMineSwitch } from "@linked-realms/shared/mine-switch";
 import { describe, expect, it } from "vitest";
 import {
-  hashRateText,
   mineHudText,
   mineMotion,
   readMineState,
@@ -104,16 +103,6 @@ describe("readMineWon", () => {
 });
 
 describe("texts", () => {
-  it("writes hash rates in H/s, kH/s and MH/s", () => {
-    expect(hashRateText(0)).toBe("0 H/s");
-    expect(hashRateText(850.4)).toBe("850 H/s");
-    expect(hashRateText(1180.5)).toBe("1.2 kH/s");
-    expect(hashRateText(3_400_000)).toBe("3.4 MH/s");
-    expect(hashRateText(999)).toBe("999 H/s");
-    expect(hashRateText(1000)).toBe("1.0 kH/s");
-    expect(hashRateText(1_000_000)).toBe("1.0 MH/s");
-  });
-
   it("names the Land owner, else shows the short address", () => {
     const owner = { address: OWNER, name: "Mai" };
     expect(rewardsTo(OWNER, owner)).toBe("Mai");

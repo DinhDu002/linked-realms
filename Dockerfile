@@ -88,7 +88,8 @@ COPY --chown=node:node . .
 RUN pnpm install --frozen-lockfile --prod \
     --filter @linked-realms/hub-api... \
     --filter @linked-realms/relay... \
-    --filter @linked-realms/map-server...
+    --filter @linked-realms/map-server... \
+    --filter @linked-realms/dashboard...
 COPY --from=wasm --chown=node:node /pkg packages/core/pkg
 COPY --from=build --chown=node:node /app/packages/client/dist packages/client/dist
 
