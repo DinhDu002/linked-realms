@@ -7,7 +7,7 @@ use std::os::unix::fs::PermissionsExt;
 use std::os::unix::net::UnixStream;
 use std::path::PathBuf;
 use std::process::{Child, ChildStdout, Command, Stdio};
-use std::sync::mpsc;
+use std::sync::{Mutex, MutexGuard, mpsc};
 use std::time::{Duration, Instant};
 
 use linked_realms_core::params::DEV_CHECKPOINT_SEED;
@@ -28,6 +28,17 @@ impl Drop for Data {
     fn drop(&mut self) {
         let _ = std::fs::remove_dir_all(&self.0);
     }
+}
+
+/// Taken by each test that mines, so two Mines never share the CPU. On macOS a Mine's threads run in
+/// the background band, and a Mine on every core but one starved another's single thread, which
+/// then won no Block in 300 seconds.
+fn mining() -> MutexGuard<'static, ()> {
+    static MINING: Mutex<()> = Mutex::new(());
+    // A test that failed while mining leaves the lock poisoned; the next one may still mine.
+    MINING
+        .lock()
+        .unwrap_or_else(|poisoned| poisoned.into_inner())
 }
 
 /// A running `lr-node`, killed if a test ends before it stops.
@@ -157,6 +168,7 @@ fn lr_node_serves_its_rpc_and_stops_cleanly_on_a_signal() {
 
 #[test]
 fn lr_node_mines_for_one_address_from_the_start() {
+    let _mining = mining();
     let data = Data::new("mines");
     let address = address();
     let socket = data.0.join("control.sock");
@@ -285,6 +297,7 @@ fn lines(stdout: BufReader<ChildStdout>) -> mpsc::Receiver<String> {
 
 #[test]
 fn a_signer_following_a_seed_signs_checkpoints_the_seed_takes() {
+    let _mining = mining();
     let (seed_data, signer_data) = (Data::new("seed"), Data::new("signer"));
     std::fs::create_dir(&signer_data.0).unwrap();
     let words = signer_data.0.join("checkpoint-words");

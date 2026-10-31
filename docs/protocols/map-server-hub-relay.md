@@ -1,6 +1,6 @@
 # Map server ↔ Hub and relay
 
-Status: mandatory (ADR 0008). A Map server, in any language, uses these to register, find its Land and serve it through the relay. Map server ↔ Node over JSON-RPC follows in step 2C. Signed statements are defined in `identity.md`.
+Status: mandatory (ADR 0008). A Map server, in any language, uses these to register, find its Land and serve it through the relay. A Map server and its Node speak `map-server-node.md`. Signed statements are defined in `identity.md`.
 
 ## Registering with the Hub
 

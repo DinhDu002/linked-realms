@@ -34,7 +34,7 @@ LAND_OWNER=tlr1… pnpm --filter @linked-realms/map-server start
 | `NODE_CONTROL_URL`         | none                                  | `ws://HOST:PORT` of a Node this server does not spawn; needs `NODE_CONTROL_SECRET_FILE`          |
 | `NODE_CONTROL_SECRET_FILE` | none                                  | That Node's control secret (`--control-secret`), at least 32 bytes                               |
 
-`.env.example` lists the development values. The repository's Docker image runs this server by default, with `MAP_SERVER_KEY_FILE=/data/map-server-key` so the key lives in a volume (`docs/self-hosting.md`). The development ticket signer is the address of the seed `0x48` repeated 32 times.
+`.env.example` lists the development values. The repository's Docker image runs this server by default, with `MAP_SERVER_KEY_FILE=/data/map-server-key` so the key and the Node's chain live in a volume (`docs/self-hosting.md`), and holds `lr-node` on the `PATH`. The development ticket signer is the address of the seed `0x48` repeated 32 times.
 
 ## Start-up
 
