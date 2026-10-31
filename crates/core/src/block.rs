@@ -219,8 +219,25 @@ pub fn check_block(
     if block.size() > MAX_BLOCK_SIZE {
         return Err(Error::BlockTooLarge);
     }
+    check_header(params, &block.header, chain, hash)?;
+    // 5. The transactions, then the reward, then the state root.
+    let ids: Vec<[u8; 32]> = block.txs.iter().map(|tx| tx.id(params)).collect();
+    match tx_root(&ids) == block.header.tx_root {
+        true => Ok(()),
+        false => Err(Error::WrongTxRoot),
+    }
+}
+
+/// The checks of `check_block` on the header alone, in its order: the parent, the timestamp, the
+/// Target and the Proof of Work. A Node that starts from a state snapshot runs them on the
+/// headers below the Checkpoint, whose Blocks it never fetches.
+pub fn check_header(
+    params: &ChainParams,
+    header: &Header,
+    chain: &(impl ChainView + ?Sized),
+    hash: impl Fn(&[u8], &[u8; 32]) -> [u8; 32],
+) -> Result<(), Error> {
     // 2. The parent.
-    let header = &block.header;
     let height = chain.tip_height() + 1;
     if header.height != height {
         return Err(Error::WrongHeight);
@@ -245,14 +262,9 @@ pub fn check_block(
     }
     // 4. Proof of Work: expensive, so before the transactions.
     let key = chain.header(key_height(height)).id();
-    if U256::from_be_bytes(hash(&header.to_bytes(), &key)) >= header.target {
-        return Err(Error::InsufficientWork);
-    }
-    // 5. The transactions, then the reward, then the state root.
-    let ids: Vec<[u8; 32]> = block.txs.iter().map(|tx| tx.id(params)).collect();
-    match tx_root(&ids) == header.tx_root {
+    match U256::from_be_bytes(hash(&header.to_bytes(), &key)) < header.target {
         true => Ok(()),
-        false => Err(Error::WrongTxRoot),
+        false => Err(Error::InsufficientWork),
     }
 }
 

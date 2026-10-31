@@ -11,12 +11,16 @@ use std::collections::{HashMap, HashSet, VecDeque};
 use std::hash::{BuildHasher, Hasher};
 use std::net::{IpAddr, SocketAddr};
 
-use linked_realms_core::block::Block;
+use linked_realms_core::Address;
+use linked_realms_core::block::{Block, Header, MAX_NEW_ACCOUNTS};
+use linked_realms_core::checkpoint::Checkpoint;
 use linked_realms_core::params::ChainParams;
+use linked_realms_core::state::{Account, tree_key};
 use linked_realms_core::tx::Tx;
 
 pub use message::{
-    IN_FLIGHT, MAX_HEADERS, MAX_IDS, MAX_NODES, MAX_PAYLOAD, Malformed, Message, Version,
+    IN_FLIGHT, MAX_HEADERS, MAX_IDS, MAX_NODES, MAX_PAYLOAD, MAX_SNAPSHOT_ACCOUNTS, Malformed,
+    Message, Version,
 };
 pub use tcp::Tcp;
 
@@ -98,6 +102,20 @@ struct Peer {
     asked_at: u64,
 }
 
+/// A state snapshot being taken from a peer, part by part.
+struct Download {
+    peer: PeerId,
+    /// The Checkpoint's height.
+    height: u64,
+    /// When the last part was asked for.
+    // ponytail: a peer that sends full parts just inside `STALL_SECONDS` holds the download
+    // until its root fails, at most `MAX_NEW_ACCOUNTS` accounts a Block below the Checkpoint;
+    // ask for a rate across parts if that shows.
+    asked_at: u64,
+    /// The accounts taken so far.
+    taken: u64,
+}
+
 /// An address another Node takes connections on.
 struct Known {
     /// When this Node last dialed it, or 0.
@@ -124,6 +142,10 @@ pub struct Node<H> {
     own: HashSet<SocketAddr>,
     /// Counts ticks, to ask each peer for headers in turn.
     ticks: usize,
+    /// The state snapshot being taken, if any.
+    snapshot: Option<Download>,
+    /// The last header stored on the way to a state snapshot, until it is taken.
+    headers_tip: Option<[u8; 32]>,
 }
 
 impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
@@ -160,6 +182,8 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                 .collect(),
             own: HashSet::new(),
             ticks: 0,
+            snapshot: None,
+            headers_tip: None,
         }
     }
 
@@ -227,9 +251,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                     }
                 }
             }
-            Event::Disconnected { peer } => {
-                self.peers.remove(&peer);
-            }
+            Event::Disconnected { peer } => self.forget(peer),
         }
         Ok(())
     }
@@ -244,8 +266,12 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
         let late: Vec<PeerId> = self
             .peers
             .iter()
-            .filter(|(_, p)| {
+            .filter(|(id, p)| {
                 let stalled = !p.asked.is_empty() && p.asked_at.saturating_add(STALL_SECONDS) < now;
+                let stalled = stalled
+                    || self.snapshot.as_ref().is_some_and(|d| {
+                        d.peer == **id && d.asked_at.saturating_add(STALL_SECONDS) < now
+                    });
                 let silent = match p.ready {
                     true => p.heard.saturating_add(IDLE_SECONDS) < now,
                     false => p.since.saturating_add(HANDSHAKE_SECONDS) < now,
@@ -302,7 +328,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
             self.ticks += 1;
             let state = &self.peers[&peer];
             if state.asked.is_empty() && state.wanted.is_empty() {
-                let locator = self.chain.locator()?;
+                let locator = self.locator()?;
                 self.send(net, peer, &Message::GetHeaders(locator));
             }
         }
@@ -365,9 +391,10 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
             Message::Verack => {
                 let state = self.peers.get_mut(&peer).expect("a peer");
                 (state.ready, state.nodes_asked) = (true, true);
-                let locator = self.chain.locator()?;
-                self.send(net, peer, &Message::GetHeaders(locator));
+                // The Checkpoint first: it decides whether the headers start a state snapshot.
                 self.send(net, peer, &Message::GetCheckpoint);
+                let locator = self.locator()?;
+                self.send(net, peer, &Message::GetHeaders(locator));
                 self.send(net, peer, &Message::GetNodes);
             }
             Message::Ping(nonce) => self.send(net, peer, &Message::Pong(nonce)),
@@ -403,11 +430,14 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
             }
             Message::Headers(headers) => {
                 // Nothing at or above a header too far ahead of the clock.
-                let ids: Vec<[u8; 32]> = headers
-                    .iter()
+                let headers: Vec<Header> = headers
+                    .into_iter()
                     .take_while(|h| h.timestamp <= self.now.saturating_add(MAX_AHEAD))
-                    .map(|h| h.id())
                     .collect();
+                if let Some(checkpoint) = self.far_behind()? {
+                    return self.headers_to_checkpoint(net, peer, &headers, &checkpoint);
+                }
+                let ids: Vec<[u8; 32]> = headers.iter().map(|h| h.id()).collect();
                 let wanted = self.chain.missing(&ids)?;
                 if !wanted.is_empty() {
                     self.peers.get_mut(&peer).expect("a peer").wanted = wanted.into();
@@ -441,7 +471,7 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                 let state = &self.peers[&peer];
                 // A sync that ran out asks where to go on from the new tip.
                 if more || (syncing && state.asked.is_empty() && state.wanted.is_empty()) {
-                    let locator = self.chain.locator()?;
+                    let locator = self.locator()?;
                     self.send(net, peer, &Message::GetHeaders(locator));
                 }
             }
@@ -484,6 +514,154 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
                     addresses.into_iter().for_each(|a| self.learn(a, from));
                 }
             }
+            Message::GetStateSnapshot { height, after } => {
+                let (accounts, more) = self
+                    .chain
+                    .snapshot(height, after, MAX_SNAPSHOT_ACCOUNTS)?
+                    .unwrap_or_default();
+                let part = Message::StateSnapshot {
+                    height,
+                    accounts,
+                    more,
+                };
+                self.send(net, peer, &part);
+            }
+            Message::StateSnapshot {
+                height,
+                accounts,
+                more,
+            } => self.take_snapshot(net, peer, height, &accounts, more)?,
+        }
+        Ok(())
+    }
+
+    /// The Node's locator, after the last header it stored on the way to a state snapshot.
+    fn locator(&self) -> Result<Vec<[u8; 32]>, Error> {
+        let mut locator = self.chain.locator()?;
+        if let Some(id) = self.headers_tip {
+            locator.insert(0, id);
+            locator.truncate(message::MAX_LOCATOR);
+        }
+        Ok(locator)
+    }
+
+    /// The highest Checkpoint taken, if this Node prunes and its tip is more Blocks below it than
+    /// it keeps: no other Node may still have them, so it starts from a state snapshot there.
+    fn far_behind(&self) -> Result<Option<Checkpoint>, Error> {
+        let (Some(keep), Some(checkpoint)) = (self.chain.keep(), self.chain.latest_checkpoint()?)
+        else {
+            return Ok(None);
+        };
+        let tip = self.chain.tip()?.height;
+        Ok((tip.saturating_add(keep) < checkpoint.height).then_some(checkpoint))
+    }
+
+    /// Stores the headers of a sync without their Blocks, then asks `peer` for the state
+    /// snapshot at `checkpoint` once its header is in.
+    fn headers_to_checkpoint(
+        &mut self,
+        net: &mut impl Network,
+        peer: PeerId,
+        headers: &[Header],
+        checkpoint: &Checkpoint,
+    ) -> Result<(), Error> {
+        match self.chain.submit_headers(headers) {
+            Ok(()) => {}
+            Err(Error::Rule(_) | Error::RefusedBranch) => {
+                self.ban(net, peer);
+                return Ok(());
+            }
+            // Not from where this Node asked: nothing to go on with.
+            Err(Error::UnknownParent) => return Ok(()),
+            Err(error) => return Err(error),
+        }
+        if let Some(last) = headers.last() {
+            self.headers_tip = Some(last.id());
+        }
+        if self.chain.has_header(&checkpoint.block_id)? {
+            if self.snapshot.is_none() {
+                self.chain.begin_snapshot()?;
+                self.snapshot = Some(Download {
+                    peer,
+                    height: checkpoint.height,
+                    asked_at: self.now,
+                    taken: 0,
+                });
+                let ask = Message::GetStateSnapshot {
+                    height: checkpoint.height,
+                    after: None,
+                };
+                self.send(net, peer, &ask);
+            }
+        } else if headers.len() == MAX_HEADERS {
+            let locator = self.locator()?;
+            self.send(net, peer, &Message::GetHeaders(locator));
+        }
+        Ok(())
+    }
+
+    /// Takes a part of the state snapshot this Node asked `peer` for, then asks for the next or
+    /// checks the whole. A part out of the tree's key order, one that says more follow but is
+    /// not full, accounts beyond what the Blocks below the Checkpoint could create, or a whole
+    /// whose root is not the Checkpoint's bans `peer`, and nothing of it stays.
+    fn take_snapshot(
+        &mut self,
+        net: &mut impl Network,
+        peer: PeerId,
+        height: u64,
+        accounts: &[(Address, Account)],
+        more: bool,
+    ) -> Result<(), Error> {
+        let Some(download) = self
+            .snapshot
+            .as_mut()
+            .filter(|d| (d.peer, d.height) == (peer, height))
+        else {
+            // A part this Node did not ask for, or no longer wants.
+            return Ok(());
+        };
+        // No honest Node sends either: it fills every part but the last, and no state at
+        // `height` holds more accounts than its Blocks could create.
+        download.taken = download.taken.saturating_add(accounts.len() as u64);
+        let most = (MAX_NEW_ACCOUNTS as u64).saturating_mul(height);
+        if (more && accounts.len() < MAX_SNAPSHOT_ACCOUNTS) || download.taken > most {
+            self.chain.begin_snapshot()?;
+            self.ban(net, peer);
+            return Ok(());
+        }
+        let Some((last, _)) = accounts.last() else {
+            // It does not serve that snapshot: another peer is asked at a later sync.
+            self.snapshot = None;
+            return Ok(());
+        };
+        if more {
+            download.asked_at = self.now;
+            let ask = Message::GetStateSnapshot {
+                height,
+                after: Some(tree_key(last)),
+            };
+            match self.chain.add_snapshot(accounts) {
+                Ok(()) => self.send(net, peer, &ask),
+                Err(Error::Rule(_)) => self.ban(net, peer),
+                Err(error) => return Err(error),
+            }
+            return Ok(());
+        }
+        self.snapshot = None;
+        let tip = self.chain.tip()?.id();
+        let finished = self
+            .chain
+            .add_snapshot(accounts)
+            .and_then(|()| self.chain.finish_snapshot(height));
+        match finished {
+            Ok(()) => {
+                self.headers_tip = None;
+                self.after_blocks(net, tip)?;
+                let locator = self.locator()?;
+                self.send(net, peer, &Message::GetHeaders(locator));
+            }
+            Err(Error::Rule(_)) => self.ban(net, peer),
+            Err(error) => return Err(error),
         }
         Ok(())
     }
@@ -573,8 +751,16 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
     }
 
     fn drop_peer(&mut self, net: &mut impl Network, peer: PeerId) {
-        self.peers.remove(&peer);
+        self.forget(peer);
         net.disconnect(peer);
+    }
+
+    /// Forgets a peer that is gone, and the state snapshot it was sending.
+    fn forget(&mut self, peer: PeerId) {
+        self.peers.remove(&peer);
+        if self.snapshot.as_ref().is_some_and(|d| d.peer == peer) {
+            self.snapshot = None;
+        }
     }
 
     fn send(&self, net: &mut impl Network, peer: PeerId, message: &Message) {
