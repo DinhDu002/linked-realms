@@ -43,16 +43,18 @@ if (isOutsideFrame(window)) {
   let sentOn = false;
 
   const showMineControl = () => {
-    if (!owner) mineFormEl.hidden = true;
-    mineOpenEl.hidden = !owner || !mineFormEl.hidden;
     const down = mine?.status === "unavailable";
+    // While the Node is down the form closes and the switch is disabled (plan item 22).
+    if (!owner || down) mineFormEl.hidden = true;
+    mineOpenEl.hidden = !owner || !mineFormEl.hidden;
     mineOpenEl.disabled = down;
-    mineFieldsEl.disabled = down || signing;
+    mineFieldsEl.disabled = signing;
     mineThreadsEl.disabled = !mineOnEl.checked;
     mineThreadsEl.max = String(mine?.maxThreads ?? 1);
   };
   const openMineForm = () => {
-    if (!owner || !mine || !mineFormEl.hidden) return;
+    if (!owner || !mine || mine.status === "unavailable" || !mineFormEl.hidden)
+      return;
     // Offer the other state, with the threads the Mine runs or 1.
     mineOnEl.checked = mine.status === "off";
     mineOffEl.checked = !mineOnEl.checked;
@@ -85,11 +87,13 @@ if (isOutsideFrame(window)) {
       signing = false;
       if ("error" in answer) {
         noticeEl.textContent = signErrorText(answer.error);
-      } else {
+      } else if (connection?.sendMineSwitch(answer.signed)) {
         sentOn = on;
-        connection?.sendMineSwitch(answer.signed);
         noticeEl.textContent = "Switch sent to the Land…";
         mineFormEl.hidden = true;
+      } else {
+        noticeEl.textContent =
+          "Not connected to the Land: the switch was not sent. Reload the Land.";
       }
       showMineControl();
     });

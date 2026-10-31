@@ -87,7 +87,8 @@ export interface ConnectionHandlers {
 
 export interface Connection {
   sendInput(dx: number, dy: number, seq: number): void;
-  sendMineSwitch(signed: SignedStatement): void;
+  /** False when the socket is not open: nothing was sent. */
+  sendMineSwitch(signed: SignedStatement): boolean;
   close(): void;
 }
 
@@ -119,7 +120,9 @@ export function connect(
       if (ws.readyState === WebSocket.OPEN) ws.send(encodeInput(dx, dy, seq));
     },
     sendMineSwitch(signed) {
-      if (ws.readyState === WebSocket.OPEN) ws.send(encodeMineSwitch(signed));
+      if (ws.readyState !== WebSocket.OPEN) return false;
+      ws.send(encodeMineSwitch(signed));
+      return true;
     },
     close() {
       problem = true; // closing on purpose is not a problem to report

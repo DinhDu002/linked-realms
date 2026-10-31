@@ -109,6 +109,9 @@ describe("texts", () => {
     expect(hashRateText(850.4)).toBe("850 H/s");
     expect(hashRateText(1180.5)).toBe("1.2 kH/s");
     expect(hashRateText(3_400_000)).toBe("3.4 MH/s");
+    expect(hashRateText(999)).toBe("999 H/s");
+    expect(hashRateText(1000)).toBe("1.0 kH/s");
+    expect(hashRateText(1_000_000)).toBe("1.0 MH/s");
   });
 
   it("names the Land owner, else shows the short address", () => {
@@ -229,6 +232,10 @@ describe("switchResultText", () => {
     );
     expect(new Set(texts).size).toBe(codes.length);
     for (const text of texts) expect(text).not.toContain("(");
+    // A refusal is a refusal, whatever its code.
+    expect(switchResultText({ ok: false, code: "" }, true)).toBe(
+      "The Land refused the switch ().",
+    );
     expect(switchResultText({ ok: false, code: "odd" }, true)).toBe(
       "The Land refused the switch (odd).",
     );
