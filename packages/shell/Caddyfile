@@ -1,0 +1,12 @@
+# The Shell image (Dockerfile, target `shell`): the static pages with the Shell's headers, which
+# the image build writes to headers.caddy from src/headers.ts. Plain HTTP: in production TLS ends at
+# the edge (deploy/Caddyfile).
+{
+	admin off
+}
+
+:80 {
+	root * /srv
+	import /etc/caddy/headers.caddy
+	file_server
+}

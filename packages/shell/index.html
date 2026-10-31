@@ -1,0 +1,264 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>linked-realms Shell</title>
+    <link rel="stylesheet" href="/src/shell.css" />
+    <!-- Add to Home Screen opens the Shell without the browser's bars (iPhone has no full screen). -->
+    <link rel="manifest" href="/manifest.json" />
+  </head>
+  <body>
+    <header id="bar">
+      <strong>Shell</strong>
+      <span id="land-info" hidden>
+        <span id="land-name"></span>
+        <code id="land-origin"></code>
+      </span>
+      <span id="status" role="status"></span>
+      <button id="retry" type="button" hidden>Try again</button>
+      <span class="spacer"></span>
+      <button id="fullscreen" type="button" hidden>Full screen</button>
+      <button id="report" type="button" hidden>Report this Land</button>
+      <button id="leave" type="button" hidden>Leave Land</button>
+      <button id="lock" type="button" hidden>Lock</button>
+      <button id="unlock-button" type="button" hidden>Unlock</button>
+      <p id="warning">The Shell never asks for your 24 words outside Setup.</p>
+    </header>
+
+    <main>
+      <section id="view-nochar" hidden>
+        <h1>No Character in this browser</h1>
+        <p>
+          <a href="/setup.html">Create a Character or restore one</a> to get
+          started.
+        </p>
+      </section>
+
+      <section id="view-locked" hidden>
+        <h1>The Shell is locked</h1>
+        <p>
+          Unlock it with your password to see the Directory and enter a Land.
+        </p>
+      </section>
+
+      <div id="view-home" hidden>
+        <p id="fullscreen-hint" hidden>
+          This browser has no full screen. To play without its bars, add the
+          Shell to your Home Screen (on iPhone: Share, then Add to Home Screen)
+          and open it from there. It keeps its own storage, so restore your
+          Character there with your 24 words.
+        </p>
+        <section aria-labelledby="character-title">
+          <h2 id="character-title">Character</h2>
+          <p>
+            <code id="character-address"></code>
+            <button id="copy-address" type="button">Copy address</button>
+          </p>
+          <p>Short form: <span id="character-short"></span></p>
+          <form id="name-form">
+            <label for="name">Name</label>
+            <input id="name" maxlength="64" autocomplete="off" />
+            <button type="submit">Save name</button>
+            <span id="name-status" role="status"></span>
+          </form>
+        </section>
+
+        <section aria-labelledby="gold-title">
+          <h2 id="gold-title">Gold</h2>
+          <p>Balance: <strong id="balance">…</strong></p>
+          <p id="gold-status" role="status"></p>
+          <form id="send-form">
+            <h3>Send Gold</h3>
+            <label for="send-to">Recipient address</label>
+            <input
+              id="send-to"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="tlr1…"
+              required
+            />
+            <label for="send-amount">Amount (GOLD)</label>
+            <input
+              id="send-amount"
+              inputmode="decimal"
+              autocomplete="off"
+              required
+            />
+            <label for="send-memo">Memo (optional, at most 80 bytes)</label>
+            <input id="send-memo" autocomplete="off" />
+            <label for="send-fee">Fee (GOLD, empty for automatic)</label>
+            <input id="send-fee" inputmode="decimal" autocomplete="off" />
+            <p>
+              <button id="send-submit" type="submit">Send</button>
+            </p>
+            <p id="send-status" role="status"></p>
+          </form>
+          <h3>Recent transactions</h3>
+          <ul id="transactions" aria-label="Recent transactions"></ul>
+        </section>
+
+        <section aria-labelledby="directory-title">
+          <h2 id="directory-title">Directory</h2>
+          <button id="refresh-directory" type="button">
+            Refresh Directory
+          </button>
+          <p id="directory-status" role="status"></p>
+          <ul id="directory" aria-labelledby="directory-title"></ul>
+        </section>
+
+        <section aria-labelledby="your-land-title">
+          <h2 id="your-land-title">Your Land</h2>
+          <p>
+            To host a Land, install Docker on the computer that will serve it
+            and run this command there. Its Map server then appears below under
+            "Waiting Map servers": register it.
+          </p>
+          <pre id="land-command"></pre>
+          <p>
+            <button id="copy-land-command" type="button">Copy command</button>
+          </p>
+          <p id="land-status"></p>
+          <form id="domain-form" hidden>
+            <h3>Own domain</h3>
+            <p>
+              Optional: serve your Land at a domain you own. Point the domain at
+              this world's relay as its operator explains, add a DNS TXT record
+              named <code>_linked-realms.</code> followed by your domain, with
+              the value <code id="domain-txt"></code>, then save the domain
+              here. The Hub checks the record again once a day.
+            </p>
+            <label for="domain">Domain</label>
+            <input
+              id="domain"
+              autocomplete="off"
+              spellcheck="false"
+              placeholder="play.example.com"
+            />
+            <button type="submit">Save domain</button>
+            <button id="remove-domain" type="button">Remove domain</button>
+            <p id="domain-status" role="status"></p>
+          </form>
+          <h3>Waiting Map servers</h3>
+          <ul id="map-servers" aria-label="Waiting Map servers"></ul>
+          <p id="register-status" role="alert"></p>
+        </section>
+      </div>
+
+      <div id="frame-area" hidden></div>
+    </main>
+
+    <dialog id="unlock" aria-labelledby="unlock-title">
+      <form id="unlock-form" method="dialog">
+        <h2 id="unlock-title">Unlock the Shell</h2>
+        <p>Enter your password. Only the Shell's own page asks for it.</p>
+        <label for="password">Password</label>
+        <input
+          id="password"
+          type="password"
+          autocomplete="current-password"
+          required
+        />
+        <p id="unlock-error" role="alert"></p>
+        <div class="actions">
+          <button id="unlock-cancel" type="button">Cancel</button>
+          <button id="unlock-submit" type="submit">Unlock</button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog
+      id="sign"
+      class="prompt"
+      tabindex="-1"
+      autofocus
+      aria-labelledby="sign-title"
+    >
+      <form method="dialog">
+        <h2 id="sign-title">A Land asks you to sign a message</h2>
+        <p>The Shell wrote these lines. The Land cannot change them.</p>
+        <dl>
+          <dt>Land</dt>
+          <dd id="sign-land"></dd>
+          <dt>Origin</dt>
+          <dd id="sign-origin"></dd>
+          <dt>Character</dt>
+          <dd id="sign-character"></dd>
+        </dl>
+        <p id="sign-text-label">
+          Text from the Land. Control, invisible and direction characters are
+          shown as escapes.
+        </p>
+        <pre
+          id="sign-text"
+          tabindex="0"
+          aria-labelledby="sign-text-label"
+        ></pre>
+        <div class="actions">
+          <button id="sign-deny" value="deny">Deny</button>
+          <button id="sign-approve" type="button" aria-disabled="true">
+            Approve
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog
+      id="pay"
+      class="prompt"
+      tabindex="-1"
+      autofocus
+      aria-labelledby="pay-title"
+    >
+      <form method="dialog">
+        <h2 id="pay-title">Send Gold</h2>
+        <p>
+          Check every line. Gold sent on the chain cannot be taken back. The
+          Shell signs only when you approve.
+        </p>
+        <dl>
+          <dt id="pay-land-label" hidden>Land</dt>
+          <dd id="pay-land" hidden></dd>
+          <dt>From</dt>
+          <dd id="pay-from"></dd>
+          <dt>To</dt>
+          <dd id="pay-to"></dd>
+          <dt>Amount</dt>
+          <dd id="pay-amount"></dd>
+          <dt>Memo</dt>
+          <dd id="pay-memo"></dd>
+          <dt>Fee</dt>
+          <dd id="pay-fee"></dd>
+          <dt>Total</dt>
+          <dd id="pay-total"></dd>
+        </dl>
+        <div class="actions">
+          <button id="pay-deny" value="deny">Deny</button>
+          <button id="pay-approve" type="button" aria-disabled="true">
+            Approve
+          </button>
+        </div>
+      </form>
+    </dialog>
+
+    <dialog id="report-dialog" aria-labelledby="report-title">
+      <form id="report-form" method="dialog">
+        <h2 id="report-title">Report this Land</h2>
+        <label for="report-reason">Reason</label>
+        <textarea
+          id="report-reason"
+          rows="4"
+          maxlength="500"
+          required
+        ></textarea>
+        <p id="report-error" role="alert"></p>
+        <div class="actions">
+          <button id="report-cancel" type="button">Cancel</button>
+          <button id="report-submit" type="submit">Send report</button>
+        </div>
+      </form>
+    </dialog>
+
+    <script type="module" src="/src/main.ts"></script>
+  </body>
+</html>

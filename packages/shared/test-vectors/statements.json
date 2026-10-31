@@ -1,0 +1,378 @@
+{
+  "note": "docs/protocols/identity.md, the statement grammar. Every valid statement parses to its fields, and building those fields gives the same text; every invalid one is refused. Signatures are in crates/core/test-vectors/identity.json.",
+  "valid": [
+    {
+      "kind": "hub-sign-in",
+      "statement": "linked-realms Hub sign-in\nHub: hub.example.org\nNonce: 00112233445566778899aabbccddeeff\nIssued: 1793232000",
+      "fields": {
+        "hub": "hub.example.org",
+        "nonce": "00112233445566778899aabbccddeeff",
+        "issued": 1793232000
+      }
+    },
+    {
+      "kind": "map-server",
+      "statement": "linked-realms Map server\nHub: hub.example.org\nOwner: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nMap server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j\nIssued: 1793232000",
+      "fields": {
+        "hub": "hub.example.org",
+        "owner": "tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d",
+        "mapServerKey": "tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j",
+        "issued": 1793232000
+      }
+    },
+    {
+      "kind": "delegation",
+      "statement": "linked-realms Delegation\nHub: hub.example.org\nOwner: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nMap server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j\nIssued: 1793232000",
+      "fields": {
+        "hub": "hub.example.org",
+        "owner": "tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d",
+        "mapServerKey": "tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j",
+        "issued": 1793232000
+      }
+    },
+    {
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff",
+      "fields": {
+        "hub": "hub.example.org",
+        "character": "tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d",
+        "name": "Mai",
+        "land": 7,
+        "gate": 4,
+        "issued": 1793232000,
+        "expires": 1793232060,
+        "nonce": "00112233445566778899aabbccddeeff"
+      }
+    },
+    {
+      "kind": "arrival",
+      "statement": "linked-realms arrival\nLand: 7\nTicket nonce: 00112233445566778899aabbccddeeff\nDriven by AI: no",
+      "fields": {
+        "land": 7,
+        "ticketNonce": "00112233445566778899aabbccddeeff",
+        "drivenByAi": false
+      }
+    },
+    {
+      "kind": "relay-host",
+      "statement": "linked-realms relay host\nRelay: localhost:8788\nLand: 7\nNonce: 00112233445566778899aabbccddeeff",
+      "fields": {
+        "relay": "localhost:8788",
+        "land": 7,
+        "nonce": "00112233445566778899aabbccddeeff"
+      }
+    },
+    {
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"Xin ch\\u00e0o \\\"Mai\\\"\\u000aSee you at the \\ud83c\\udff0\"",
+      "fields": {
+        "land": 7,
+        "landUrl": "https://7.lands.example",
+        "character": "tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d",
+        "issued": 1793232000,
+        "message": "Xin ch\u00e0o \"Mai\"\nSee you at the \ud83c\udff0"
+      }
+    },
+    {
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: \nLand: 9007199254740991\nGate: 0\nIssued: 0\nExpires: 60\nNonce: 00112233445566778899aabbccddeeff",
+      "fields": {
+        "hub": "hub.example.org",
+        "character": "tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d",
+        "name": "",
+        "land": 9007199254740991,
+        "gate": 0,
+        "issued": 0,
+        "expires": 60,
+        "nonce": "00112233445566778899aabbccddeeff"
+      }
+    },
+    {
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: L\u00ea Th\u1ecb Mai \ud83c\udff0\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff",
+      "fields": {
+        "hub": "hub.example.org",
+        "character": "tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d",
+        "name": "L\u00ea Th\u1ecb Mai \ud83c\udff0",
+        "land": 7,
+        "gate": 4,
+        "issued": 1793232000,
+        "expires": 1793232060,
+        "nonce": "00112233445566778899aabbccddeeff"
+      }
+    },
+    {
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: localhost:8787\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff",
+      "fields": {
+        "hub": "localhost:8787",
+        "character": "tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d",
+        "name": "mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm",
+        "land": 7,
+        "gate": 4,
+        "issued": 1793232000,
+        "expires": 1793232060,
+        "nonce": "00112233445566778899aabbccddeeff"
+      }
+    },
+    {
+      "kind": "arrival",
+      "statement": "linked-realms arrival\nLand: 1\nTicket nonce: ffffffffffffffffffffffffffffffff\nDriven by AI: yes",
+      "fields": {
+        "land": 1,
+        "ticketNonce": "ffffffffffffffffffffffffffffffff",
+        "drivenByAi": true
+      }
+    },
+    {
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: http://localhost:8080\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"\"",
+      "fields": {
+        "land": 7,
+        "landUrl": "http://localhost:8080",
+        "character": "tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d",
+        "issued": 1793232000,
+        "message": ""
+      }
+    },
+    {
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\"",
+      "fields": {
+        "land": 7,
+        "landUrl": "https://7.lands.example",
+        "character": "tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d",
+        "issued": 1793232000,
+        "message": "aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+      }
+    },
+    {
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"tab\\u0009 quote\\\" backslash\\\\ end\"",
+      "fields": {
+        "land": 7,
+        "landUrl": "https://7.lands.example",
+        "character": "tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d",
+        "issued": 1793232000,
+        "message": "tab\t quote\" backslash\\ end"
+      }
+    }
+  ],
+  "invalid": [
+    {
+      "reason": "a repeated key",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nHub: hub.example.org\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a missing key",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "an extra line",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff\nExtra: 1"
+    },
+    {
+      "reason": "a line feed after the last line",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff\n"
+    },
+    {
+      "reason": "carriage returns",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\r\nHub: hub.example.org\r\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\r\nName: Mai\r\nLand: 7\r\nGate: 4\r\nIssued: 1793232000\r\nExpires: 1793232060\r\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "keys out of order",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nGate: 4\nLand: 7\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "another title",
+      "kind": "travel-ticket",
+      "statement": "linked-realms travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a title with a trailing space",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket \nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a key in another case",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nland: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "no space after the colon",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand:7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "two spaces after the colon",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand:  7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a trailing space",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai \nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "U+2028 in a name",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\u2028Evil\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a bidi control in a name",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: \u202eiaM\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a zero-width space in a name",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Ma\u200bi\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a tab in a name",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Ma\ti\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a name of 33 code points",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: mmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmmm\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "an uppercase address",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: TLR1QQQMJR3L6NXMR48V02CG6NV96RNSKQ9YZMPNZ7V82UZ3UEP4SUTSVRQ3SFT4D\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "Land 0",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 0\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a Land with a leading zero",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 07\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a Land above 2^53 - 1",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 9007199254740992\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a negative Land",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: -7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "Gate 5",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 5\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "an Issued time with a leading zero",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 01793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "an Issued time above 2^53 - 1",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 9007199254740992\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a Nonce in uppercase hex",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899AABBCCDDEEFF"
+    },
+    {
+      "reason": "a short Nonce",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddee"
+    },
+    {
+      "reason": "an uppercase Hub",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: Hub.example.org\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a Hub with a path",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: hub.example.org/x\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "a Hub with port 65536",
+      "kind": "travel-ticket",
+      "statement": "linked-realms Travel ticket\nHub: localhost:65536\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nName: Mai\nLand: 7\nGate: 4\nIssued: 1793232000\nExpires: 1793232060\nNonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "an empty Hub",
+      "kind": "hub-sign-in",
+      "statement": "linked-realms Hub sign-in\nHub: \nNonce: 00112233445566778899aabbccddeeff\nIssued: 1793232000"
+    },
+    {
+      "reason": "Driven by AI in another case",
+      "kind": "arrival",
+      "statement": "linked-realms arrival\nLand: 7\nTicket nonce: 00112233445566778899aabbccddeeff\nDriven by AI: Yes"
+    },
+    {
+      "reason": "a Land URL with a path",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example/\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"hi\""
+    },
+    {
+      "reason": "a Land URL without a scheme",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: 7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"hi\""
+    },
+    {
+      "reason": "a Message without quotes",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: hi"
+    },
+    {
+      "reason": "a raw non-ASCII character in a Message",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"Xin ch\u00e0o\""
+    },
+    {
+      "reason": "a short escape in a Message",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"a\\nb\""
+    },
+    {
+      "reason": "uppercase hex in a Message escape",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"\\u00E0\""
+    },
+    {
+      "reason": "an escaped printable character in a Message",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"\\u0041\""
+    },
+    {
+      "reason": "an escaped slash in a Message",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"a\\/b\""
+    },
+    {
+      "reason": "an unpaired surrogate in a Message",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"\\ud83c\""
+    },
+    {
+      "reason": "a Message of 1,001 code points",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa\""
+    },
+    {
+      "reason": "text after a Message",
+      "kind": "land-message",
+      "statement": "linked-realms Land message\nLand: 7\nLand URL: https://7.lands.example\nCharacter: tlr1qqqmjr3l6nxmr48v02cg6nv96rnskq9yzmpnz7v82uz3uep4sutsvrq3sft4d\nIssued: 1793232000\nMessage: \"hi\" x"
+    }
+  ]
+}

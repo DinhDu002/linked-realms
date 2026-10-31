@@ -1,0 +1,55 @@
+# The public world's front (docs/runbooks/public-world.md): TLS for every name, then each name to
+# its service. Caddy keeps the Host header, which the relay routes by, and writes X-Forwarded-For,
+# which the Hub reads because HUB_TRUSTED_PROXIES names this container.
+{
+	email {$ACME_EMAIL}
+	# A certificate for an unknown name is asked for only if the Hub answers 200: a Land owner's
+	# own domain whose TXT record it checked, on a visible Land with a cell.
+	on_demand_tls {
+		ask http://hub-api:8787/tls/allowed
+	}
+}
+
+{$SHELL_DOMAIN} {
+	reverse_proxy shell:80
+}
+
+{$HUB_DOMAIN} {
+	reverse_proxy hub-api:8787
+}
+
+# Map servers dial wss://{$RELAY_HOST}/host/<landId>. The relay's /online and /stats are for the
+# operator and hub-api, which reads them inside the stack (packages/relay/README.md).
+{$RELAY_HOST} {
+	@public path /host/* /health
+	handle @public {
+		reverse_proxy relay:8080
+	}
+	handle {
+		respond 404
+	}
+}
+
+# Every Land at <landId>.{$LAND_BASE_DOMAIN}, under one wildcard certificate. A wildcard needs the
+# DNS-01 challenge: the dns module is compiled in by compose.public.yaml (Cloudflare here; use your
+# DNS provider's module from https://github.com/caddy-dns).
+*.{$LAND_BASE_DOMAIN} {
+	tls {
+		dns cloudflare {env.CLOUDFLARE_API_TOKEN}
+	}
+	# Without its port: the relay keeps its own routes to hosts with a port.
+	reverse_proxy relay:8080 {
+		header_up Host {host}
+	}
+}
+
+# Land owners' own domains, each with its own certificate on its first visit. The relay is told
+# the name the certificate was made for, whatever Host the request sends.
+https:// {
+	tls {
+		on_demand
+	}
+	reverse_proxy relay:8080 {
+		header_up Host {http.request.tls.server_name}
+	}
+}

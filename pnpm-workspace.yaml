@@ -1,6 +1,5 @@
 packages:
-  - contracts
   - packages/*
 allowBuilds:
-  # Optional native accelerator for msgpackr (Colyseus); the pure JavaScript path is enough.
-  msgpackr-extract: false
+  # Its postinstall only swaps the JavaScript launcher for the platform binary; the launcher works.
+  "@bufbuild/buf": false

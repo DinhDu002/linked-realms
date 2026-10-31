@@ -1,0 +1,303 @@
+//! The official v2 vectors in every mode, and the vendored tree's checksum.
+
+use super::*;
+use sha2::{Digest, Sha256};
+use std::path::Path;
+
+/// `test_a` to `test_e` of `vendor/src/tests/tests.cpp` at tag v2.0.1: key, input, the v2 hash
+/// and the v1 hash. Keys and text inputs are hashed without their terminating zero byte.
+const VECTORS: [(&str, &str, &str, &str); 5] = [
+    (
+        "test key 000",
+        "This is a test",
+        "22ec6b861b3eb23686b2efbad69513c967ecfce80983df66c9c5b4fbfb4cdb6f",
+        "639183aae1bf4c9a35884cb46b09cad9175f04efd7684e7262a0ac1c2f0b4e3f",
+    ),
+    (
+        "test key 000",
+        "Lorem ipsum dolor sit amet",
+        "9e2c772c12fd48f93c14c97fdc89d556264d9100597023f44d9163e279012ecf",
+        "300a0adb47603dedb42228ccb2b211104f4da45af709cd7547cd049e9489c969",
+    ),
+    (
+        "test key 000",
+        "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua",
+        "4d6b063a1a603751d525f18a171336a4002f2f06df6c17e4b25fe17e17796e42",
+        "c36d4ed4191e617309867ed66a443be4075014e2b061bcdaf9ce7b721d2b77a8",
+    ),
+    (
+        "test key 001",
+        "sed do eiusmod tempor incididunt ut labore et dolore magna aliqua",
+        "97024134686ce27d362ea8d86d8ef16483ac272abdabd46ef13359400777fe5e",
+        "e9ff4503201c0c2cca26d285c93ae883f9b1d30c9eb240b820756f2d5a7905fc",
+    ),
+    (
+        "test key 001",
+        // calcHexHash: this input is hex, hashed as its 76 bytes.
+        "0b0b98bea7e805e0010a2126d287a2a0cc833d312cb786385a7c2f9de69d25537f584a9bc9977b00000000666fd8753bf61a8631f12984e3fd44f4014eca629276817b56f32e9b68bd82f416",
+        "c8e92c5f7c1946fecf06bc382b92e3111da38ee3e6a5ad90704e1a9d8aaf6e76",
+        "c56414121acda1713c2f2a819d8ae38aed7c80c35c2a769298d34f03833cd5f1",
+    ),
+];
+
+const KEYS: [&str; 2] = ["test key 000", "test key 001"];
+
+fn hex(bytes: &[u8]) -> String {
+    bytes.iter().map(|b| format!("{b:02x}")).collect()
+}
+
+fn input(vector: usize) -> Vec<u8> {
+    let text = VECTORS[vector].1;
+    match vector {
+        0..4 => text.as_bytes().to_vec(),
+        _ => unhex(text),
+    }
+}
+
+/// Checks every vector of `key` on `vm`.
+fn check(vm: &mut Vm, key: &str, mode: &str) {
+    for (i, (_, _, v2, v1)) in VECTORS.iter().enumerate() {
+        if VECTORS[i].0 != key {
+            continue;
+        }
+        let hash = hex(&vm.hash(&input(i)));
+        assert_ne!(&hash, v1, "{mode}, vector {i}: a v1 hash");
+        assert_eq!(&hash, v2, "{mode}, vector {i}");
+    }
+}
+
+/// Every set of flags this machine supports: the interpreter and, where RandomX has one, the
+/// JIT, each with software AES and, where the CPU has it, hardware AES.
+fn flag_sets() -> Vec<(c_int, String)> {
+    let supported = supported();
+    let mut sets = vec![(0, "interpreter".to_string())];
+    if supported & ffi::FLAG_JIT != 0 {
+        sets.push((supported & (ffi::FLAG_JIT | ffi::FLAG_SECURE), "JIT".into()));
+    }
+    if supported & ffi::FLAG_HARD_AES != 0 {
+        let hard: Vec<_> = (sets.iter())
+            .map(|(flags, name)| (flags | ffi::FLAG_HARD_AES, format!("{name}, hardware AES")))
+            .collect();
+        sets.extend(hard);
+    }
+    sets
+}
+
+/// The JIT on x86_64 and arm64, and hardware AES wherever the CPU has it: a build that misses it
+/// (no `linux-headers` on musl ARM) hashes quietly slower. An ARM CPU without AES (a Raspberry Pi 4)
+/// still builds the image.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
+#[test]
+fn x86_64_and_arm64_have_the_jit_and_hardware_aes_where_the_cpu_does() {
+    #[cfg(target_arch = "x86_64")]
+    let cpu_aes = std::arch::is_x86_feature_detected!("aes");
+    #[cfg(target_arch = "aarch64")]
+    let cpu_aes = std::arch::is_aarch64_feature_detected!("aes");
+    let has = supported();
+    assert_ne!(has & ffi::FLAG_JIT, 0);
+    assert_eq!(has & ffi::FLAG_HARD_AES != 0, cpu_aes);
+}
+
+#[test]
+fn light_mode_gives_the_official_v2_hashes() {
+    for key in KEYS {
+        let cache = Arc::new(Cache::new(key.as_bytes()).unwrap());
+        for (flags, name) in flag_sets() {
+            let mut vm = Vm::with_flags(Memory::Light(cache.clone()), flags).unwrap();
+            check(&mut vm, key, &format!("light, {name}"));
+        }
+    }
+}
+
+#[test]
+fn fast_mode_gives_the_official_v2_hashes() {
+    let threads = std::thread::available_parallelism().unwrap();
+    for key in KEYS {
+        let dataset = {
+            let cache = Cache::new(key.as_bytes()).unwrap();
+            Arc::new(Dataset::new(&cache, threads, || {}).unwrap())
+        };
+        for (flags, name) in flag_sets() {
+            let mut vm = Vm::with_flags(Memory::Fast(dataset.clone()), flags).unwrap();
+            check(&mut vm, key, &format!("fast, {name}"));
+        }
+    }
+}
+
+/// Our own vector: a header as Nodes hash it (the first Block of `blocks.chain` in
+/// `crates/core/test-vectors/chain.json`), keyed by its genesis id, `blocks.genesis.id`. Its hash
+/// came from this binding; every mode, the CPUs of CI and musl must agree on it (ADR 0012).
+const HEADER: (&str, &str, &str) = (
+    "be163207bfdccbc1f5af6dc89c701561343dce989de8c8c262dd2c71f78728b8",
+    "010000000000000001be163207bfdccbc1f5af6dc89c701561343dce989de8c8c262dd2c71f78728b8000000006b49d23c7fffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffffc5d2460186f7233c927e7db2dcc703c0e500b653ca82273b7bfad8045d85a470bb45aeb130a0adbeea5c34b5776bd04d9d8cbbfaaac8ba79b4c87c550f7497050001097abe538d6a49cd3b7921e92749328f6330e99e30fda5a88eb5f4760bd360b90000000000000002",
+    "767f1394c4f827b2f44a5468fc75ac6b66a701763dd87d7565fb8c1d57630357",
+);
+
+fn unhex(text: &str) -> Vec<u8> {
+    (0..text.len())
+        .step_by(2)
+        .map(|i| u8::from_str_radix(&text[i..i + 2], 16).unwrap())
+        .collect()
+}
+
+#[test]
+fn a_header_hashes_the_same_in_every_mode() {
+    let (key, header, hash) = (unhex(HEADER.0), unhex(HEADER.1), HEADER.2);
+    assert_eq!(header.len(), 187);
+    let cache = Arc::new(Cache::new(&key).unwrap());
+    let threads = std::thread::available_parallelism().unwrap();
+    let started = std::sync::atomic::AtomicUsize::new(0);
+    let dataset = Dataset::new(&cache, threads, || {
+        started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    let dataset = Arc::new(dataset.unwrap());
+    assert_eq!(
+        started.into_inner(),
+        threads.get(),
+        "every thread calls `on_thread`"
+    );
+    for (memory, mode) in [
+        (Memory::Light(cache), "light"),
+        (Memory::Fast(dataset), "fast"),
+    ] {
+        for (flags, name) in flag_sets() {
+            let mut vm = Vm::with_flags(memory.clone(), flags).unwrap();
+            assert_eq!(hex(&vm.hash(&header)), hash, "{mode}, {name}");
+        }
+    }
+}
+
+#[test]
+fn dataset_runs_cover_every_item_once() {
+    let items = unsafe { ffi::randomx_dataset_item_count() };
+    for (items, threads) in [(items, 1), (items, 7), (items, 16), (10, 3), (3, 8), (0, 4)] {
+        let runs: Vec<_> = runs(items, threads).collect();
+        assert!(
+            runs.len() as c_ulong <= threads,
+            "{items} items, {threads} threads"
+        );
+        let mut next = 0;
+        for (start, count) in runs {
+            assert_eq!(start, next, "{items} items, {threads} threads");
+            assert!(count > 0);
+            next += count;
+        }
+        assert_eq!(next, items, "{items} items, {threads} threads");
+    }
+}
+
+#[test]
+fn a_vm_compiles_only_when_asked_and_able() {
+    let cache = Arc::new(Cache::new(KEYS[0].as_bytes()).unwrap());
+    let mut interpreted = Vm::light(cache.clone(), false).unwrap();
+    assert!(!interpreted.jit());
+    check(&mut interpreted, KEYS[0], "Vm::light without JIT");
+    let mut compiled = Vm::light(cache, true).unwrap();
+    assert_eq!(compiled.jit(), supported() & ffi::FLAG_JIT != 0);
+    check(&mut compiled, KEYS[0], "Vm::light with JIT");
+}
+
+#[test]
+fn threads_share_one_cache() {
+    let cache = Arc::new(Cache::new(KEYS[0].as_bytes()).unwrap());
+    std::thread::scope(|scope| {
+        for jit in [false, true, false, true] {
+            let cache = cache.clone();
+            scope.spawn(move || {
+                let mut vm = Vm::light(cache, jit).unwrap();
+                for _ in 0..3 {
+                    check(&mut vm, KEYS[0], "a thread");
+                }
+            });
+        }
+    });
+}
+
+/// `vendor/` is RandomX at tag v2.0.1, file for file. The same value comes from
+/// `find . -type f -print0 | LC_ALL=C sort -z | xargs -0 shasum -a 256 | shasum -a 256`, run in
+/// `vendor/` or in the release's source.
+#[test]
+fn the_vendored_tree_is_unchanged() {
+    fn walk(dir: &Path, relative: &str, files: &mut Vec<String>) {
+        for entry in std::fs::read_dir(dir).unwrap() {
+            let entry = entry.unwrap();
+            let path = format!("{relative}/{}", entry.file_name().to_str().unwrap());
+            if entry.file_type().unwrap().is_dir() {
+                walk(&entry.path(), &path, files);
+            } else {
+                files.push(path);
+            }
+        }
+    }
+    let root = Path::new(env!("CARGO_MANIFEST_DIR")).join("vendor");
+    let mut files = Vec::new();
+    walk(&root, ".", &mut files);
+    files.sort();
+    let listing: String = (files.iter())
+        .map(|path| {
+            let digest = Sha256::digest(std::fs::read(root.join(&path[2..])).unwrap());
+            format!("{}  {path}\n", hex(&digest))
+        })
+        .collect();
+    assert_eq!(
+        hex(&Sha256::digest(listing)),
+        "c1e66fb2a030454c97df05753a6df9c62dbbd21ed31111041d006fdcecc87f1b"
+    );
+}
+
+/// `cargo test --release -p linked-realms-randomx -- --ignored --nocapture hash_rate`
+///
+/// Hashes per second with the JIT, in light and fast mode, on 1 thread and on every thread (one
+/// VM each), and how long the Cache and the Dataset take to build. Plan item 9 sets
+/// `INITIAL_TARGET` from it (ADR 0012).
+#[test]
+#[ignore = "a measurement, run in release"]
+fn hash_rate() {
+    use std::time::{Duration, Instant};
+    let all = std::thread::available_parallelism().unwrap();
+    let start = Instant::now();
+    let cache = Arc::new(Cache::new(b"hash rate").unwrap());
+    println!("Cache: {:.2} s", start.elapsed().as_secs_f64());
+    let start = Instant::now();
+    let dataset = Arc::new(Dataset::new(&cache, all, || {}).unwrap());
+    println!(
+        "Dataset on {all} threads: {:.1} s",
+        start.elapsed().as_secs_f64()
+    );
+    // Each thread hashes a 187-byte header, its last 8 bytes counting, for `time`.
+    let rate = |memory: &Memory, threads: usize, time: Duration| {
+        let hashes: u64 = std::thread::scope(|scope| {
+            let runs: Vec<_> = (0..threads)
+                .map(|thread| {
+                    let memory = memory.clone();
+                    scope.spawn(move || {
+                        let mut vm = Vm::new(memory, true).unwrap();
+                        assert!(vm.jit());
+                        let mut header = [thread as u8; 187];
+                        let start = Instant::now();
+                        let mut n = 0u64;
+                        while start.elapsed() < time {
+                            header[179..].copy_from_slice(&n.to_be_bytes());
+                            vm.hash(&header);
+                            n += 1;
+                        }
+                        n
+                    })
+                })
+                .collect();
+            runs.into_iter().map(|run| run.join().unwrap()).sum()
+        });
+        hashes as f64 / time.as_secs_f64()
+    };
+    let light = Memory::Light(cache);
+    let fast = Memory::Fast(dataset);
+    for (name, memory) in [("light", &light), ("fast", &fast)] {
+        for threads in [1, all.get()] {
+            let total = rate(memory, threads, Duration::from_secs(5));
+            println!(
+                "{name} on {threads} threads: {total:.0} H/s, {:.0} H/s a thread",
+                total / threads as f64
+            );
+        }
+    }
+}

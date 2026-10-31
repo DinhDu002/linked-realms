@@ -1,6 +1,6 @@
 # 0005 — Embedded wallet and paymaster
 
-Status: accepted, 2026-10-29 — option F, by the project owner
+Status: accepted, 2026-10-29 — option F, by the project owner. Superseded by ADR 0008 on 2026-10-29: the Shell holds Players' keys.
 
 > Proposed earlier the same day; the project owner chose option F and answered the questions that ended the proposal (section "The project owner's answers"). Evidence, prices, sources and the list of unverified claims: `docs/research/2026-10-29-embedded-wallet.md`. Plan of record: `docs/plans/phase-2-d5-embedded-wallet.md`.
 

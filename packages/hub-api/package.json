@@ -7,14 +7,14 @@
     "dev": "node --watch src/main.ts",
     "start": "node src/main.ts",
     "typecheck": "tsc",
-    "test": "vitest run"
+    "test": "vitest run --fsModuleCachePath node_modules/.vitest-cache"
   },
   "dependencies": {
     "@hono/node-server": "1.19.5",
+    "@linked-realms/core": "workspace:*",
     "@linked-realms/shared": "workspace:*",
     "hono": "4.13.14",
-    "pg": "8.23.1",
-    "viem": "2.57.12"
+    "pg": "8.23.1"
   },
   "devDependencies": {
     "@electric-sql/pglite": "0.2.13",

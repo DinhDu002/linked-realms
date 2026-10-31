@@ -4,8 +4,8 @@ import {
   ProtocolError,
   decodeFrame,
   encodeFrame,
-  hostHelloMessage,
   isForwardPath,
+  isRelayedResponseHeader,
   parseControl,
   sendableCloseCode,
 } from "./protocol.ts";
@@ -29,12 +29,12 @@ describe("data frames", () => {
 });
 
 describe("parseControl", () => {
-  const sig = `0x${"ab".repeat(65)}`;
+  const hello = { statement: "s", publicKey: "AAAA", signature: "AAAA" };
 
   it("accepts every message type", () => {
     for (const m of [
       { t: "challenge", nonce: "abc123" },
-      { t: "hello", signature: sig },
+      { t: "hello", ...hello },
       { t: "ready" },
       {
         t: "http",
@@ -49,8 +49,9 @@ describe("parseControl", () => {
         id: 1,
         status: 200,
         headers: { "set-cookie": ["a", "b"] },
-        body: "aGk=",
       },
+      { t: "http-end", id: 1 },
+      { t: "http-end", id: 1, aborted: true },
       { t: "open", stream: 7, path: "/p/r?x=y" },
       { t: "close", stream: 7, code: 1000 },
     ])
@@ -67,14 +68,18 @@ describe("parseControl", () => {
       '{"t":"open","stream":1,"path":"a"}',
       '{"t":"open","stream":1,"path":"/a b"}',
       '{"t":"close","stream":1,"code":99999}',
-      '{"t":"hello","signature":"0x12"}',
+      '{"t":"hello","statement":"s","publicKey":"***","signature":"AAAA"}',
+      '{"t":"hello","statement":"s","publicKey":"AAAA"}',
+      `{"t":"hello","statement":"${"s".repeat(1025)}","publicKey":"AAAA","signature":"AAAA"}`,
+      '{"t":"http-end","id":1,"aborted":false}',
+      '{"t":"http-end","id":-1}',
       '{"t":"challenge","nonce":"XYZ"}',
       '{"t":"http","id":1,"method":"get","path":"/","headers":{},"body":""}',
       '{"t":"http","id":1,"method":"GET","path":"/","headers":{"bad name":"x"},"body":""}',
       '{"t":"http","id":1,"method":"GET","path":"/","headers":{"a":1},"body":""}',
       '{"t":"http","id":1,"method":"GET","path":"/","headers":{},"body":"***"}',
-      '{"t":"http-response","id":1,"status":700,"headers":{},"body":""}',
-      '{"t":"http-response","id":1,"status":101,"headers":{},"body":""}',
+      '{"t":"http-response","id":1,"status":700,"headers":{}}',
+      '{"t":"http-response","id":1,"status":101,"headers":{}}',
     ];
     for (const raw of bad)
       expect(() => parseControl(raw), raw).toThrow(ProtocolError);
@@ -82,7 +87,7 @@ describe("parseControl", () => {
 
   it("keeps a __proto__ header as plain data", () => {
     const m = parseControl(
-      '{"t":"http-response","id":1,"status":200,"headers":{"__proto__":"x"},"body":""}',
+      '{"t":"http-response","id":1,"status":200,"headers":{"__proto__":"x"}}',
     );
     expect(
       Object.getPrototypeOf(m.t === "http-response" ? m.headers : null),
@@ -91,10 +96,22 @@ describe("parseControl", () => {
   });
 });
 
-it("builds the host hello message", () => {
-  expect(hostHelloMessage(7, "ff")).toBe(
-    "linked-realms relay: host Land 7\nNonce: ff",
-  );
+it("relays only the response headers the spec lists", () => {
+  for (const h of [
+    "content-type",
+    "etag",
+    "content-encoding",
+    "access-control-allow-origin",
+  ])
+    expect(isRelayedResponseHeader(h), h).toBe(true);
+  for (const h of [
+    "set-cookie",
+    "location",
+    "content-length",
+    "content-security-policy",
+    "x-custom",
+  ])
+    expect(isRelayedResponseHeader(h), h).toBe(false);
 });
 
 it("checks forward paths", () => {
