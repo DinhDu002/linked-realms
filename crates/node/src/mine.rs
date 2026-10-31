@@ -391,6 +391,13 @@ impl Crew {
     }
 }
 
+/// A crew dropped without `retire`, as on a panic, still stops: no thread hashes on unseen.
+impl Drop for Crew {
+    fn drop(&mut self) {
+        self.retired.store(true, SeqCst);
+    }
+}
+
 struct Worker {
     vm: Vm,
     work: Arc<Work>,

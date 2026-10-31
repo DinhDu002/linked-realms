@@ -1,3 +1,4 @@
+use std::collections::HashSet;
 use std::io::{BufRead, BufReader, Read, Write};
 use std::net::TcpStream;
 use std::os::unix::net::UnixStream;
@@ -198,13 +199,19 @@ fn the_control_socket_serves_the_node_and_its_mine() {
     let started = call("mine_start", start("land", &address, cap))["result"].clone();
     assert_eq!(started["state"], "starting");
     assert_eq!(started["rewardAddress"], json!(address));
-    let (mut states, mut found) = (Vec::new(), None);
+    let (mut states, mut found, mut told) = (Vec::new(), None, HashSet::new());
     while found.is_none() || !states.contains(&json!("on")) {
         let message = ws.next();
         assert_eq!(message["params"]["subscription"], subscription);
         let result = message["params"]["result"].clone();
         match message["method"].as_str() {
-            Some("mine_blockFound") => found = found.or(Some(result)),
+            Some("mine_blockFound") => {
+                assert!(
+                    told.insert(result["hash"].to_string()),
+                    "{result} told twice"
+                );
+                found = found.or(Some(result));
+            }
             Some("mine_status") => states.push(result["state"].clone()),
             other => panic!("{other:?}"),
         }
@@ -229,6 +236,21 @@ fn the_control_socket_serves_the_node_and_its_mine() {
         (&stopped["state"], &stopped["threads"]),
         (&json!("off"), &json!(0))
     );
+    // Each Block is told once, up to the status that tells the Mine is off.
+    loop {
+        let message = ws.next();
+        let result = &message["params"]["result"];
+        match message["method"].as_str() {
+            Some("mine_blockFound") => {
+                assert!(
+                    told.insert(result["hash"].to_string()),
+                    "{result} told twice"
+                );
+            }
+            _ if result["state"] == "off" => break,
+            _ => {}
+        }
+    }
     drop(control);
     assert!(!path.exists(), "the socket goes with its listener");
     drop(mine);
@@ -439,7 +461,7 @@ fn a_tcp_control_listener_bounds_the_connections_without_the_secret() {
     };
     // One more is closed at once, even one that would send the secret.
     let more = TcpStream::connect(address).unwrap();
-    assert!(closed(&more, Duration::from_secs(5)));
+    assert!(closed(&more, Duration::from_secs(1)));
 
     // Those that never send the secret are closed, long before jsonrpsee's own 30 seconds; the
     // one that sent it stays open.

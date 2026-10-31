@@ -294,12 +294,36 @@ fn lr_node_refuses_bad_settings() {
         let stderr = String::from_utf8(output.stderr).unwrap();
         assert!(stderr.contains("usage: lr-node"), "{args:?}: {stderr}");
     }
-    // The thread cap, lowered by MINE_MAX_THREADS, which must be a count.
-    for (limit, threads) in [("1", "2"), ("0", "1"), ("x", "1")] {
-        let output = lr_node(&mine(&["--threads", threads]))
-            .env("MINE_MAX_THREADS", limit)
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(2), "{limit} {threads}");
+    // The thread cap, one fewer than the cores, lowered by MINE_MAX_THREADS, which must be a
+    // count. A Node that starts instead is stopped after 10 seconds.
+    let data = Data::new("refused");
+    let cores = std::thread::available_parallelism().map_or(1, |cores| cores.get());
+    let cores: &'static str = cores.max(2).to_string().leak();
+    for (limit, threads) in [
+        (None, cores),
+        (Some("1"), "2"),
+        (Some("0"), "1"),
+        (Some("x"), "1"),
+    ] {
+        let mut command = lr_node(&mine(&["--threads", threads]));
+        command.args([
+            "--network",
+            "dev",
+            "--rpc",
+            "off",
+            "--data",
+            data.0.to_str().unwrap(),
+        ]);
+        command.env_remove("MINE_MAX_THREADS").stdout(Stdio::null());
+        if let Some(limit) = limit {
+            command.env("MINE_MAX_THREADS", limit);
+        }
+        let mut child = Process(command.spawn().unwrap());
+        let deadline = Instant::now() + Duration::from_secs(10);
+        while child.0.try_wait().unwrap().is_none() && Instant::now() < deadline {
+            std::thread::sleep(Duration::from_millis(50));
+        }
+        let code = child.0.try_wait().unwrap().and_then(|status| status.code());
+        assert_eq!(code, Some(2), "{limit:?} {threads}");
     }
 }
