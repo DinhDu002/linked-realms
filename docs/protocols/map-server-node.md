@@ -43,7 +43,7 @@ ADR 0013 also names `lr_getConnections` and `lr_addNode` for this listener; they
 ```
 
 - `state` is `off`, `starting` (the RandomX dataset is being built) or `on`.
-- `mode` is `fast` or `light` while starting or on, and `null` when off.
+- `mode` is `fast` or `light` while on, and `null` while off or starting.
 - `hashRate` is hashes a second over the last 10 seconds.
 - `blocksWon` counts the Blocks this Mine found that the Node took into its best chain since it started.
 - `rewardAddress` is the address of the last start, or `null` before the first.
@@ -116,17 +116,19 @@ Signed, it is about 5.3 KB, under the relay's 16,384-byte frame limit for player
 **The challenge.**
 
 - The Map server keeps one random challenge in memory for each session of the Land owner, so a phone and a laptop do not spend each other's. It sends it only in that session's `MineState`, with its own address as `map_server_key`.
-- A challenge expires 300 seconds after it was issued, the same window as `Issued`. A fresh one comes in the next `MineState` after it is spent or expires.
-- It is spent only when the submitted `Nonce` equals it, compared before any signature work; a wrong nonce spends nothing. A replayed switch fails, because its nonce is spent.
+- A challenge expires 300 seconds after it was issued, the same window as `Issued`. When it is spent or expires, the Map server sends that session a `MineState` with a fresh one at once, whether or not the Mine changed.
+- It is spent only by a switch whose signature, Land and time pass and whose `Nonce` equals it; a wrong nonce spends nothing. A replayed switch fails, because its nonce is spent.
 
-**Checks, in order** (cheap first; the `MineSwitchResult` code in brackets):
+**Checks, in order** (the `MineSwitchResult` code in brackets):
 
 1. at most one switch per 2 seconds per session, and one verification in flight (`rate-limited`);
-2. the session is the Land owner's (`is_owner` from the Hub's `land.owner`), and the statement's `Character` equals `land.owner` (`not-owner`);
-3. the statement and its `Message` parse, and `Map server key` is this Map server's own address (`bad-statement`); `Nonce` equals the session's unexpired challenge, which is spent here (`wrong-nonce`);
-4. `Issued` is within 300 seconds of the Map server's clock (`stale`); `Land` is the Land this Map server serves (`bad-statement`);
-5. `verifyStatement(signed, "land-message")` passes: the signature, and `Character` is the signer (`bad-statement`);
-6. for `on`, `Threads` is 1 to `maxThreads` (`bad-threads`), and the Node is up and synced (`unavailable`).
+2. the session is the Land owner's (`is_owner` from the Hub's `land.owner`) (`not-owner`);
+3. `verifyStatement(signed, "land-message")` passes, in `identity.md`'s order: the signature before anything is parsed, then the grammar, then `Character` is the signer (`bad-statement`);
+4. the statement's `Character` equals `land.owner` (`not-owner`); `Land` is the Land this Map server serves (`bad-statement`); `Issued` is within 300 seconds of the Map server's clock (`stale`);
+5. the `Message` parses as a switch and `Map server key` is this Map server's own address (`bad-statement`); `Nonce` equals the session's unexpired challenge, which is spent here (`wrong-nonce`);
+6. for `on`, `Threads` is 1 to `maxThreads` (`bad-threads`); then the Node's `mine_start` or `mine_stop` succeeds, for `off` too (`unavailable` if the Node is down, not synced or refuses).
+
+Only the Land owner's sessions reach the signature, at most one every 2 seconds each, so nothing is read from the statement before its signature passes.
 
 `Land URL` is not checked: with its own domain the Shell may load the Land from a host other than the Hub's `url`, and `Land` already binds the statement to the Land.
 
@@ -135,7 +137,7 @@ Signed, it is about 5.3 KB, under the relay's 16,384-byte frame limit for player
 The reference kit's game protocol (`packages/shared/proto/linked_realms/land/v1/land.proto`) carries the switch and the Mine's state:
 
 - `ClientMessage.mine_switch` (`MineSwitch { signed }`): the signed Land message.
-- `ServerMessage.mine_state` (`MineState`), sent to every client after `welcome`, on each change, and about every 2 seconds while on. `challenge` and `map_server_key` are only in the Land owner's copy. `status` is `off`, `starting`, `on`, or `unavailable` while the Land has no Node or it is not synced.
+- `ServerMessage.mine_state` (`MineState`), sent to every client after `welcome`, on each change, and about every 2 seconds while on, and to a Land owner's session whenever its challenge is renewed. `challenge` and `map_server_key` are only in the Land owner's copy. `mode` is empty while off or starting. `status` is `off`, `starting`, `on`, or `unavailable` while the Land has no Node or it is not synced.
 - `ServerMessage.mine_switch_result` (`MineSwitchResult { ok, code }`), to the session that sent the switch.
 - `ServerMessage.mine_won` (`MineWon { height, reward, reward_address }`), to every client.
 

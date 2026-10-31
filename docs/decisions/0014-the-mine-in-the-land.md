@@ -19,8 +19,8 @@ Each Land runs a Node, and its Mine mines Gold by Proof of Work (ADR 0006). P5 s
    - The line is strict both ways (`parseMineSwitch` in `packages/shared`, with vectors). Default: `Threads` has at most 4 digits; the Map server checks it against the Node's `maxThreads`.
    - Rejected: a new statement kind for the switch, which would change the Shell and `identity.md` for one Land feature; a switch in the Shell's own page, which the project owner placed in the Land.
 3. **The Map server checks the switch, then tells its Node.**
-   - A challenge per session of the Land owner, sent only in that session's `MineState` and spent when a switch uses it, stops replays without an extra round trip. It expires after 300 seconds, like `Issued`.
-   - The checks run cheap first: the rate, the Land owner, the line and the challenge, the time and the Land, then the signature, then the threads and the Node.
+   - A challenge per session of the Land owner, sent only in that session's `MineState` and spent when a switch uses it, stops replays without an extra round trip. It expires after 300 seconds, like `Issued`, and the session gets a fresh one at once when it is spent or expires.
+   - The rate and the session's owner are checked first, so only the Land owner's sessions reach the signature. The signature is then checked before anything in the statement is read, as `identity.md` orders a verifier. Then come the Land owner, the Land, the time, the line and the challenge, the threads and the Node.
    - The reward address is always the switch's `Character`, which must be the Hub's `land.owner`.
    - Only the Map server can start the Mine: it holds the Node's control socket, or the control secret for an external Node. The public RPC serves no `mine_*` method.
    - Nothing about "on" is stored: a restart of the Node or the container leaves the Mine off (P5).

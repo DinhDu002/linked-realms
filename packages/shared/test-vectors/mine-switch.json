@@ -104,6 +104,14 @@
       "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: On; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
     },
     {
+      "reason": "Mine in capitals, with the Threads that off needs",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: OFF; Threads: 0; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
+      "reason": "ON in capitals, with the Threads a non-on word would need",
+      "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: ON; Threads: 0; Nonce: 00112233445566778899aabbccddeeff"
+    },
+    {
       "reason": "Mine neither on nor off",
       "text": "linked-realms Mine switch; Map server key: tlr1qqq5l2qgmd2kt3pxwjvul8vpgjnugt2r9q30qklrfy35au3pwcgqu6gvcf94j; Mine: yes; Threads: 2; Nonce: 00112233445566778899aabbccddeeff"
     },
