@@ -121,10 +121,11 @@ impl Settings {
                 }
                 "--rpc-proxy" => {
                     let text = value()?;
-                    let ip = text
+                    let ip: IpAddr = text
                         .parse()
                         .map_err(|_| format!("not an IP address: {text}"))?;
-                    settings.rpc_proxies.push(ip);
+                    // As the RPC compares them: an IPv4-mapped address is the IPv4 one.
+                    settings.rpc_proxies.push(ip.to_canonical());
                 }
                 "--archive" => settings.archive = true,
                 "--checkpoint-words" if sign => words = Some(PathBuf::from(value()?)),

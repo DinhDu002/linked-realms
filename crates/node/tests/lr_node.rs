@@ -358,17 +358,19 @@ fn a_signer_needs_the_network_s_own_key() {
     let data = Data::new("wrong-key");
     std::fs::create_dir(&data.0).unwrap();
     let words = data.0.join("checkpoint-words");
-    for (network, text) in [
-        ("test", words_from_entropy(&DEV_CHECKPOINT_SEED)),
-        ("dev", "not twenty-four words".to_string()),
+    for (network, text, why) in [
+        (
+            "test",
+            words_from_entropy(&DEV_CHECKPOINT_SEED),
+            "not the network's Checkpoint signer key",
+        ),
+        ("dev", "not twenty-four words".to_string(), "no 24 words"),
     ] {
         std::fs::write(&words, text).unwrap();
-        let output = lr_node(&["sign", "--checkpoint-words", words.to_str().unwrap()])
-            .args(["--network", network, "--data", data.0.to_str().unwrap()])
-            .output()
-            .unwrap();
-        assert_eq!(output.status.code(), Some(1), "{network}");
-        assert_eq!(output.stdout, b"");
+        let mut command = lr_node(&["sign", "--checkpoint-words", words.to_str().unwrap()]);
+        command.args(["--network", network, "--rpc", "off"]);
+        let stderr = exits(command, &data, 1);
+        assert!(stderr.contains(why), "{network}: {stderr}");
     }
 }
 
@@ -404,7 +406,7 @@ fn lr_node_refuses_bad_settings() {
         &["mine", "--checkpoint-words", "words"],
         &["--rpc-proxy", "caddy"],
     ] {
-        let stderr = refused(lr_node(args), &data);
+        let stderr = exits(lr_node(args), &data, 2);
         assert!(stderr.contains("usage: lr-node"), "{args:?}: {stderr}");
     }
     // The thread cap, one fewer than the cores, lowered by MINE_MAX_THREADS, which must be a
@@ -422,29 +424,33 @@ fn lr_node_refuses_bad_settings() {
         if let Some(limit) = limit {
             command.env("MINE_MAX_THREADS", limit);
         }
-        refused(command, &data);
+        exits(command, &data, 2);
     }
 }
 
-/// Runs `command` in `data` and asserts it exits with code 2 within 10 seconds: its stderr. A
-/// Node that starts instead of refusing is stopped, and keeps its chain in `data`.
-fn refused(mut command: Command, data: &Data) -> String {
+/// Runs `command` in `data` and asserts it exits with `code` within 10 seconds, printing nothing
+/// on stdout: its stderr. A Node that starts instead of refusing is stopped, and keeps its chain
+/// in `data`.
+fn exits(mut command: Command, data: &Data, code: i32) -> String {
     std::fs::create_dir_all(&data.0).unwrap();
     command
         .current_dir(&data.0)
-        .stdout(Stdio::null())
+        .stdout(Stdio::piped())
         .stderr(Stdio::piped());
     let mut child = Process(command.spawn().unwrap());
     let deadline = Instant::now() + Duration::from_secs(10);
     while child.0.try_wait().unwrap().is_none() && Instant::now() < deadline {
         std::thread::sleep(Duration::from_millis(50));
     }
-    let code = child.0.try_wait().unwrap().and_then(|status| status.code());
-    let mut stderr = String::new();
-    if code.is_some() {
+    let exited = child.0.try_wait().unwrap().and_then(|status| status.code());
+    let (mut stdout, mut stderr) = (String::new(), String::new());
+    if exited.is_some() {
+        let mut pipe = child.0.stdout.take().unwrap();
+        pipe.read_to_string(&mut stdout).unwrap();
         let mut pipe = child.0.stderr.take().unwrap();
         pipe.read_to_string(&mut stderr).unwrap();
     }
-    assert_eq!(code, Some(2), "{command:?}: {stderr}");
+    assert_eq!(exited, Some(code), "{command:?}: {stderr}");
+    assert_eq!(stdout, "", "{command:?}");
     stderr
 }
