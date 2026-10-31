@@ -90,6 +90,7 @@ describe("preparePayment", () => {
     [{ amount: "-1" }, /amount is not an amount of GOLD/],
     [{ amount: "0" }, /more than 0/],
     [{ memo: "é".repeat(41) }, /at most 80 bytes; this one has 82/],
+    [{ memo: `a${"é".repeat(40)}` }, /at most 80 bytes; this one has 81/],
     [{ fee: "x" }, /fee is not an amount of GOLD/],
   ])("refuses %o before signing anything", async (fields, message) => {
     const node = stubNode();
@@ -102,7 +103,7 @@ describe("preparePayment", () => {
     const node = stubNode();
     await expect(
       preparePayment(node, DEV, sender.address, form({ amount: "" })),
-    ).rejects.toBeInstanceOf(SendError);
+    ).rejects.toThrow(/amount is not an amount of GOLD/);
     expect(node.info).not.toHaveBeenCalled();
   });
 
@@ -125,6 +126,15 @@ describe("preparePayment", () => {
   it("refuses to spend more than the balance, fee included", async () => {
     await expect(
       preparePayment(stubNode({ account: null }), DEV, sender.address, form()),
+    ).rejects.toThrow(/no Gold to send/);
+    const emptied = { balance: 0n, nonce: 2, hasKey: true };
+    await expect(
+      preparePayment(
+        stubNode({ account: emptied }),
+        DEV,
+        sender.address,
+        form(),
+      ),
     ).rejects.toThrow(/no Gold to send/);
     const exact = { balance: 150_000_000n + 25_170n, nonce: 1, hasKey: true };
     expect(

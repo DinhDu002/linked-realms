@@ -27,6 +27,13 @@ describe("headers", () => {
     ).not.toContain("unsafe-inline");
   });
 
+  it("names the build setting that is not a URL", () => {
+    // compose builds the Shell with https://${RPC_DOMAIN}, which is "https://" while it is unset
+    expect(() =>
+      contentSecurityPolicy("https://hub.example.org", "https://"),
+    ).toThrow('VITE_NODE_URL is not a URL: "https://"');
+  });
+
   it("isolates the browsing context group", () => {
     expect(
       shellHeaders("http://localhost:8787", "http://localhost:9445"),

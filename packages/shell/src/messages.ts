@@ -1,6 +1,5 @@
 // Wording for what the Hub, the Node and the vault can refuse.
 import { formatAmount } from "@linked-realms/core";
-import { SendError } from "./gold.ts";
 import { HubError } from "./hub.ts";
 import { NodeError } from "./node.ts";
 import { LockedError } from "./vault.ts";
@@ -34,9 +33,8 @@ export function errorText(e: unknown): string {
   return e instanceof Error ? e.message : String(e);
 }
 
-/** What the Player reads when sending Gold fails: nothing was sent unless the Node says it holds it. */
+/** What the Player reads when preparing or sending Gold fails, before the Node took it. */
 export function sendErrorText(e: unknown): string {
-  if (e instanceof SendError) return e.message;
   if (e instanceof NodeError) {
     if (e.code === 0) return "The Node cannot be reached, so nothing was sent.";
     if (e.code === -32005)
