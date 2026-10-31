@@ -38,6 +38,10 @@ impl File {
         File(path)
     }
 
+    pub(crate) fn path(&self) -> &std::path::Path {
+        &self.0
+    }
+
     pub(crate) fn open(&self) -> Test {
         Chain::open(
             &self.0,

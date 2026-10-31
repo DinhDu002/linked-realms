@@ -125,8 +125,13 @@ unsafe impl Send for Dataset {}
 unsafe impl Sync for Dataset {}
 
 impl Dataset {
-    /// Builds the Dataset on `threads` threads. The Cache is not needed afterwards.
-    pub fn new(cache: &Cache, threads: NonZeroUsize) -> Result<Dataset, Error> {
+    /// Builds the Dataset on `threads` threads, each calling `on_thread` first (to lower its
+    /// priority, say). The Cache is not needed afterwards.
+    pub fn new(
+        cache: &Cache,
+        threads: NonZeroUsize,
+        on_thread: impl Fn() + Sync,
+    ) -> Result<Dataset, Error> {
         let dataset = NonNull::new(unsafe { ffi::randomx_alloc_dataset(0) })
             .map(Dataset)
             .ok_or(Error::Dataset)?;
@@ -135,9 +140,17 @@ impl Dataset {
         // randomx.h allows several calls on items that do not overlap.
         std::thread::scope(|scope| {
             for (start, count) in runs(items, threads) {
-                let dataset = &dataset;
-                scope.spawn(move || unsafe {
-                    ffi::randomx_init_dataset(dataset.0.as_ptr(), cache.0.as_ptr(), start, count)
+                let (dataset, on_thread) = (&dataset, &on_thread);
+                scope.spawn(move || {
+                    on_thread();
+                    unsafe {
+                        ffi::randomx_init_dataset(
+                            dataset.0.as_ptr(),
+                            cache.0.as_ptr(),
+                            start,
+                            count,
+                        )
+                    }
                 });
             }
         });

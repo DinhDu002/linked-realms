@@ -109,7 +109,7 @@ fn fast_mode_gives_the_official_v2_hashes() {
     for key in KEYS {
         let dataset = {
             let cache = Cache::new(key.as_bytes()).unwrap();
-            Arc::new(Dataset::new(&cache, threads).unwrap())
+            Arc::new(Dataset::new(&cache, threads, || {}).unwrap())
         };
         for (flags, name) in flag_sets() {
             let mut vm = Vm::with_flags(Memory::Fast(dataset.clone()), flags).unwrap();
@@ -140,7 +140,16 @@ fn a_header_hashes_the_same_in_every_mode() {
     assert_eq!(header.len(), 187);
     let cache = Arc::new(Cache::new(&key).unwrap());
     let threads = std::thread::available_parallelism().unwrap();
-    let dataset = Arc::new(Dataset::new(&cache, threads).unwrap());
+    let started = std::sync::atomic::AtomicUsize::new(0);
+    let dataset = Dataset::new(&cache, threads, || {
+        started.fetch_add(1, std::sync::atomic::Ordering::SeqCst);
+    });
+    let dataset = Arc::new(dataset.unwrap());
+    assert_eq!(
+        started.into_inner(),
+        threads.get(),
+        "every thread calls `on_thread`"
+    );
     for (memory, mode) in [
         (Memory::Light(cache), "light"),
         (Memory::Fast(dataset), "fast"),
@@ -244,7 +253,7 @@ fn hash_rate() {
     let cache = Arc::new(Cache::new(b"hash rate").unwrap());
     println!("Cache: {:.2} s", start.elapsed().as_secs_f64());
     let start = Instant::now();
-    let dataset = Arc::new(Dataset::new(&cache, all).unwrap());
+    let dataset = Arc::new(Dataset::new(&cache, all, || {}).unwrap());
     println!(
         "Dataset on {all} threads: {:.1} s",
         start.elapsed().as_secs_f64()
