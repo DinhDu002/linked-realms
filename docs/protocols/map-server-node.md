@@ -82,7 +82,7 @@ ADR 0013 also names `lr_getConnections` and `lr_addNode` for this listener; they
 
 ## Flows
 
-1. **Start.** The Map server spawns `lr-node` with `--control unix:/data/…` as a supervised child, or connects to `NODE_CONTROL_URL` with the secret. It calls `mine_subscribe` and keeps the Mine's status. If the Node stops, the Map server restarts it, and the Mine stays off.
+1. **Start.** The Map server spawns `lr-node` with `--control unix:/data/…` as a supervised child, or connects to `NODE_CONTROL_URL` with the secret. It calls `mine_subscribe`, keeps the Mine's status and asks `node_info` every 2 seconds. If the Node stops, the Map server restarts it, and the Mine stays off.
 2. **The Land owner switches the Mine** (the step 2C plan, flow 2). The Land UI sends the Map server a signed switch (below). If every check passes, the Map server calls `mine_start` with the Land owner's address as `rewardAddress`, or `mine_stop`. It answers the Land UI, broadcasts the new state, and logs "Mine ON: threads, mode, reward address" or "Mine OFF".
 3. **A won Block** (flow 3). On `mine_blockFound` the Map server broadcasts `MineWon` to every connected client. Every Land UI shows the win.
 
@@ -137,7 +137,7 @@ Only the Land owner's sessions reach the signature, at most one every 2 seconds 
 The reference kit's game protocol (`packages/shared/proto/linked_realms/land/v1/land.proto`) carries the switch and the Mine's state:
 
 - `ClientMessage.mine_switch` (`MineSwitch { signed }`): the signed Land message.
-- `ServerMessage.mine_state` (`MineState`), sent to every client after `welcome`, on each change, and about every 2 seconds while on, and to a Land owner's session whenever its challenge is renewed. `challenge` and `map_server_key` are only in the Land owner's copy. `mode` is empty while off or starting. `status` is `off`, `starting`, `on`, or `unavailable` while the Land has no Node or it is not synced.
+- `ServerMessage.mine_state` (`MineState`), sent to every client after `welcome`, on each change, and about every 2 seconds while on, and to a Land owner's session whenever its challenge is renewed. `challenge` and `map_server_key` are only in the Land owner's copy. `mode` is empty while off or starting. `status` is `off`, `starting`, `on`, or `unavailable` while the Map server cannot reach the Land's Node, or while the Mine is off and the Node has no other Node or is not synced. A Mine that runs is reported as running, whatever the Node's sync (P5).
 - `ServerMessage.mine_switch_result` (`MineSwitchResult { ok, code }`), to the session that sent the switch.
 - `ServerMessage.mine_won` (`MineWon { height, reward, reward_address }`), to every client.
 
