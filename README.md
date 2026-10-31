@@ -30,11 +30,11 @@ Copy `.env.example` to `.env` to change the local ports or credentials. The Shel
 
 ## Run the world
 
-The `world` profile adds the Hub, the relay, the Shell and two Map servers to PostgreSQL. Run it as its own Compose project, so it never touches the state of a default stack:
+The `world` profile adds the Hub, the relay, the Shell, a seed Node of LR and two Map servers to PostgreSQL. Each Map server runs its own Node on LR's dev network, whose Blocks come in seconds. Run it as its own Compose project, so it never touches the state of a default stack:
 
 ```bash
 POSTGRES_PORT=5433 docker compose -p linked-realms-world --profile world up -d --build
-pnpm e2e:world   # register both Lands, walk from Land 1 through a Gate into Land 2, stop and restart Land 1
+pnpm e2e:world   # register both Lands, walk from Land 1 through a Gate into Land 2, stop and restart Land 1, switch its Mine on and off
 docker compose -p linked-realms-world --profile world down -v   # reset everything
 ```
 
@@ -44,12 +44,13 @@ docker compose -p linked-realms-world --profile world down -v   # reset everythi
 | `hub-api`  | Land registration, cells, the Directory, sign-in, names, Travel tickets, reports                | `HUB_PORT` (8787)      |
 | `relay`    | Carries Players to Map servers that have no open port; Land `n` is `http://n.localhost:8080`     | `RELAY_PORT` (8080)    |
 | `shell`    | The Shell                                                                                       | `SHELL_PORT` (8788)    |
-| `map-1`    | Development Character 1's Map server; it keeps its Map server key in its own volume             | none                   |
-| `map-2`    | Development Character 2's Map server                                                            | none                   |
+| `seed`     | The Node every Land's Node dials first; its RPC is the Shell's Public node                       | `NODE_RPC_PORT` (9445) |
+| `map-1`    | Development Character 1's Map server and Node; its volume keeps the key and the chain; fast Mine | none                   |
+| `map-2`    | Development Character 2's Map server and Node; light Mine, 1 thread                              | none                   |
 
 With other ports or another project name, give `pnpm e2e:world` the same `HUB_PORT` and `SHELL_PORT`, and the project as `WORLD_PROJECT`.
 
-To play by hand, open the Shell at <http://localhost:8788>, choose "Restore from 24 words" and enter a development Character's words. Under "Your Land", "Register" gives that Character its Land; within about 15 seconds the Land has a cell and is online in the Directory. A browser profile holds one Character, so use a second profile for the second Character.
+To play by hand, open the Shell at <http://localhost:8788>, choose "Restore from 24 words" and enter a development Character's words. Under "Your Land", "Register" gives that Character its Land; within about 15 seconds the Land has a cell and is online in the Directory. A browser profile holds one Character, so use a second profile for the second Character. In its own Land, a Character's "Switch the Mine" starts its Mine after the Shell signs the switch; every visitor sees the Blocks it wins.
 
 | Development Character | Owns    | 24 words                                                                                                                                                                                  |
 | --------------------- | ------- | ----------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- |

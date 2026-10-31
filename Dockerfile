@@ -1,15 +1,16 @@
 # Three images:
-# - the default target: hub-api, the relay and the Map server. Its default command is a self-hosted
-#   Map server (docs/self-hosting.md); compose.yaml names the command for the other services.
+# - the default target: hub-api, the relay and the Map server, with `lr-node`, the Land's Node, which
+#   the Map server runs (packages/map-server/src/node.ts). Its default command is a self-hosted Map
+#   server (docs/self-hosting.md); compose.yaml names the command for the other services.
 # - `shell` (docker build --target shell): the Shell's static pages behind Caddy with its headers.
 #   The Hub's URL is fixed when it is built: --build-arg VITE_HUB_URL=https://hub.example.org, and
 #   so are the Map server image its "Your Land" command runs (--build-arg VITE_LAND_IMAGE=<image>),
 #   the Public node's RPC (VITE_NODE_URL=https://rpc.example.org) and its network (VITE_NETWORK).
 # - `lr-node` (docker build --target lr-node): a Node of LR alone, for the company's seed, Public
 #   node, archive and Checkpoint signer (deploy/compose.chain.yaml, deploy/compose.signer.yaml).
-# Node 26 runs the services' TypeScript directly; only the WebAssembly core and the two web pages
-# are built, on the build machine's platform, so a multi-platform build (image.yml) emulates only
-# the last stage.
+# Node 26 runs the services' TypeScript directly; the WebAssembly core and the two web pages are
+# built on the build machine's platform. `lr-node` is built for the image's own platform, so
+# image.yml builds each platform on a runner of that architecture rather than under emulation.
 
 # wasm-bindgen-cli, the version in crates/core/Cargo.toml, for the build machine's architecture.
 FROM scratch AS wasm-bindgen-amd64
@@ -76,8 +77,11 @@ COPY --from=build /app/packages/shell/dist /srv
 
 FROM node:26.12.1-alpine3.24
 RUN npm install -g pnpm@11.3.0
+# The Land's Node, built for musl like this image. The Map server spawns it (NODE_BIN).
+COPY --from=chain /src/target/release/lr-node /usr/local/bin/lr-node
 WORKDIR /app
-# /data: the Map server key, one volume per Map server, writable by the unprivileged user.
+# /data: the Map server key and its Node's chain (/data/lr-node), one volume per Map server,
+# writable by the unprivileged user.
 RUN mkdir -p /data && chown -R node:node /app /data
 USER node
 COPY --chown=node:node . .

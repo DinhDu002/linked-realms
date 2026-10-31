@@ -83,13 +83,19 @@ fn flag_sets() -> Vec<(c_int, String)> {
     sets
 }
 
+/// The JIT on x86_64 and arm64, and hardware AES wherever the CPU has it: a build that misses it
+/// (no `linux-headers` on musl ARM) hashes quietly slower. An ARM CPU without AES (a Raspberry Pi 4)
+/// still builds the image.
+#[cfg(any(target_arch = "x86_64", target_arch = "aarch64"))]
 #[test]
-fn x86_64_and_arm64_have_the_jit_and_hardware_aes() {
+fn x86_64_and_arm64_have_the_jit_and_hardware_aes_where_the_cpu_does() {
+    #[cfg(target_arch = "x86_64")]
+    let cpu_aes = std::arch::is_x86_feature_detected!("aes");
+    #[cfg(target_arch = "aarch64")]
+    let cpu_aes = std::arch::is_aarch64_feature_detected!("aes");
     let has = supported();
-    if cfg!(any(target_arch = "x86_64", target_arch = "aarch64")) {
-        assert_ne!(has & ffi::FLAG_JIT, 0);
-        assert_ne!(has & ffi::FLAG_HARD_AES, 0);
-    }
+    assert_ne!(has & ffi::FLAG_JIT, 0);
+    assert_eq!(has & ffi::FLAG_HARD_AES != 0, cpu_aes);
 }
 
 #[test]

@@ -1,5 +1,6 @@
-// The world end to end (docs/plans/phase-2b-world-without-chain.md, Verification 4), against
-// `docker compose --profile world up -d`: the real Hub, relay, Shell and two Map servers.
+// The world end to end (docs/plans/phase-2b-world-without-chain.md, Verification 4, and the Mine
+// of docs/plans/phase-2c-the-chain.md, item 24), against `docker compose --profile world up -d`:
+// the real Hub, relay, Shell, seed Node and two Map servers with their Nodes.
 // Run with `pnpm e2e:world`; HUB_PORT, SHELL_PORT and WORLD_PROJECT follow compose.yaml.
 import { execFileSync } from "node:child_process";
 import { devices, expect, test, type Page } from "@playwright/test";
@@ -163,6 +164,72 @@ test("two Characters register their Lands, and one walks through a Gate into the
     .toBe(true);
   await page.locator("#refresh-directory").click();
   await expect(row.locator(".online")).toHaveText("online");
+});
+
+/** Approves the Land's signMessage in the Shell's own prompt, which takes no click in its first second. */
+async function approveSigning(page: Page) {
+  const prompt = page.getByRole("dialog", {
+    name: "A Land asks you to sign a message",
+  });
+  await expect(prompt).toBeVisible();
+  await page.waitForTimeout(1200);
+  await prompt.getByRole("button", { name: "Approve" }).click();
+  await expect(prompt).toBeHidden();
+}
+
+test("the Land owner switches the Mine on in the Shell, a visitor sees it win, and it goes off", async ({
+  browser,
+}) => {
+  test.setTimeout(360_000);
+  const home = (await directory()).find((l) => l.owner === OWNERS[0].address)!;
+  expect(home.online).toBe(true);
+  // The Land owner and a visitor, each in its own browser, in Land 1.
+  const pages: Page[] = [];
+  for (const character of OWNERS) {
+    const page = await (await browser.newContext()).newPage();
+    await signIn(page, character);
+    await page
+      .getByRole("button", { name: `Enter Land ${home.landId}` })
+      .click();
+    pages.push(page);
+  }
+  const [page, visitorPage] = pages as [Page, Page];
+  const land = page.frameLocator("#frame-area iframe");
+  const visiting = visitorPage.frameLocator("#frame-area iframe");
+  // Off after every start; available once map-1's Node has the seed and its chain (P5).
+  await expect(land.locator("#hud-mine")).toHaveText("Mine OFF", {
+    timeout: 60_000,
+  });
+  await expect(visiting.locator("#mine-open")).toBeHidden();
+
+  // map-1 has 3 CPUs, so 2 threads, and room for fast mode (compose.yaml).
+  await land.getByRole("button", { name: "Switch the Mine" }).click();
+  await land.getByLabel("Threads").fill("2");
+  await land.getByRole("button", { name: "Sign in the Shell" }).click();
+  await approveSigning(page);
+  await expect(land.locator("#hud-notice")).toHaveText("The Mine is starting.");
+  // Fast mode builds its 2 GiB dataset first.
+  for (const view of [land, visiting])
+    await expect(view.locator("#hud-mine")).toContainText(
+      "Mine ON · 2 threads · fast",
+      { timeout: 180_000 },
+    );
+  // The dev network's easy Target: a Block within seconds, flashed to the visitor too.
+  await expect(visiting.locator("#hud-mine-won")).toHaveText(
+    /^The Mine won Block #\d+ \(\+[\d.]+ GOLD\)$/,
+    { timeout: 120_000 },
+  );
+
+  await land.getByRole("button", { name: "Switch the Mine" }).click();
+  await expect(land.getByLabel("Off")).toBeChecked();
+  await land.getByRole("button", { name: "Sign in the Shell" }).click();
+  await approveSigning(page);
+  for (const view of [land, visiting])
+    await expect(view.locator("#hud-mine")).toHaveText("Mine OFF", {
+      timeout: 30_000,
+    });
+  // Leave Land 1: a Map server refuses a Character already in it ("duplicate").
+  for (const each of pages) await each.context().close();
 });
 
 test("on a phone, the touch pad walks a Character through a Gate and back", async ({

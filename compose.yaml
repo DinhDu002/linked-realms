@@ -1,7 +1,9 @@
 name: linked-realms
 
-# The "world" profile (docker compose --profile world up -d) adds the Hub, the relay, the Shell and
-# two Map servers on top of PostgreSQL. Run it as its own project so it never touches the default
+# The "world" profile (docker compose --profile world up -d) adds the Hub, the relay, the Shell, a
+# seed Node of LR and two Map servers on top of PostgreSQL. Each Map server runs its own Node on
+# LR's dev network, whose easy fixed Target wins Blocks in seconds; every Mine is off until its Land
+# owner switches it on. Run it as its own project so it never touches the default
 # stack's state:
 #   POSTGRES_PORT=5433 docker compose -p linked-realms-world --profile world up -d --build
 # Then open the Shell at http://localhost:8788 (README: Run the world).
@@ -24,8 +26,13 @@ x-map: &map
     # The ticket signer comes from the Hub's GET /keys. The relay is pinned: the Hub publishes the
     # address a Map server on this machine dials, and inside compose the relay is relay:8080.
     RELAY_URL: ws://relay:8080
+    # The Land's Node, which the Map server spawns with its chain in /data/lr-node.
+    NODE_NETWORK: dev
+    NODE_SEEDS: seed:9444
   depends_on:
     relay:
+      condition: service_healthy
+    seed:
       condition: service_healthy
   healthcheck:
     test: ["CMD-SHELL", "nc -z 127.0.0.1 2567"]
@@ -104,14 +111,41 @@ services:
       target: shell
       args:
         VITE_HUB_URL: http://localhost:${HUB_PORT:-8787}
+        VITE_NODE_URL: http://localhost:${NODE_RPC_PORT:-9445}
+        VITE_NETWORK: dev
     image: linked-realms-shell:local
     profiles: [world]
     restart: "no"
     ports:
       - "127.0.0.1:${SHELL_PORT:-8788}:80"
 
-  # Each Map server keeps its own key in its volume and names its owner. A Character registers it
-  # from the Shell's "Your Land".
+  # The Node every Land's Node dials first. Its RPC is the world's Public node: the Shell reads
+  # balances and sends Gold through it.
+  seed:
+    <<: *node
+    command:
+      - lr-node
+      - --network
+      - dev
+      - --data
+      - /data
+      - --listen
+      - 0.0.0.0:9444
+      - --rpc
+      - 0.0.0.0:9445
+    ports:
+      - "127.0.0.1:${NODE_RPC_PORT:-9445}:9445"
+    volumes: [seed-data:/data]
+    healthcheck:
+      test: ["CMD-SHELL", "nc -z 127.0.0.1 9444"]
+      interval: 5s
+      timeout: 3s
+      retries: 10
+
+  # Each Map server keeps its own key and its Node's chain in its volume, and names its owner. A
+  # Character registers it from the Shell's "Your Land". The limits show both of the Mine's modes
+  # and the thread cap: map-1 has room for fast mode's 2 GiB dataset and 2 threads (3 CPUs less
+  # one); map-2 mines in light mode with 1 thread.
   map-1:
     <<: *map
     # Development Character 1 (entropy of 32 bytes of 0x01).
@@ -121,6 +155,8 @@ services:
         LAND_OWNER: tlr1qqqanzv64uheqjxt9vau0el7p0gndh7rmaykuhd3g9h3dyu0fzrr0mqulz55w,
       }
     volumes: [map-1-data:/data]
+    mem_limit: 3g
+    cpus: 3
 
   map-2:
     <<: *map
@@ -131,8 +167,11 @@ services:
         LAND_OWNER: tlr1qqq6mwhq8utpqyv32mfjujhr0tquwgkaek95p2rheewme5q2hcm2zzg40pln3,
       }
     volumes: [map-2-data:/data]
+    mem_limit: 1g
+    cpus: 2
 
 volumes:
   postgres-data:
+  seed-data:
   map-1-data:
   map-2-data:
