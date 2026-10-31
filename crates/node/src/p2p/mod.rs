@@ -367,6 +367,14 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
         self.peers.len()
     }
 
+    /// Whether this Node is taking nothing from other Nodes: no Block asked for or still to ask
+    /// for, and no state snapshot. Its Mine starts only then.
+    pub fn synced(&self) -> bool {
+        self.snapshot.is_none()
+            && self.headers_tip.is_none()
+            && (self.peers.values()).all(|peer| peer.wanted.is_empty() && peer.asked.is_empty())
+    }
+
     fn on_message(
         &mut self,
         net: &mut impl Network,
@@ -807,4 +815,4 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32]> Node<H> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

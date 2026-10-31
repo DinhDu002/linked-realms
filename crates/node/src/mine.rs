@@ -147,6 +147,11 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Mine<H> {
         self.status()
     }
 
+    /// The most threads it may run.
+    pub fn max_threads(&self) -> usize {
+        self.max_threads
+    }
+
     pub fn status(&self) -> Status {
         let mut status = self.status.lock().expect("not poisoned").clone();
         status.blocks_won = self.won.lock().expect("not poisoned").len() as u64;
@@ -156,6 +161,12 @@ impl<H: Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send + 'static> Mine<H> {
     /// Whether this Mine found the Block `id` and the Node took it into its best chain.
     pub fn won(&self, id: &[u8; 32]) -> bool {
         self.won.lock().expect("not poisoned").contains(id)
+    }
+
+    /// The ids of the Blocks won, from the `from`th on, in the order they were won.
+    pub fn won_from(&self, from: usize) -> Vec<[u8; 32]> {
+        let won = self.won.lock().expect("not poisoned");
+        won.get(from..).unwrap_or_default().to_vec()
     }
 }
 
@@ -380,6 +391,13 @@ impl Crew {
     }
 }
 
+/// A crew dropped without `retire`, as on a panic, still stops: no thread hashes on unseen.
+impl Drop for Crew {
+    fn drop(&mut self) {
+        self.retired.store(true, SeqCst);
+    }
+}
+
 struct Worker {
     vm: Vm,
     work: Arc<Work>,
@@ -517,4 +535,4 @@ fn cgroup_room(max: &str, current: &str) -> Option<u64> {
 }
 
 #[cfg(test)]
-mod tests;
+pub(crate) mod tests;

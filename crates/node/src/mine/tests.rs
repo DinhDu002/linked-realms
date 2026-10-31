@@ -8,17 +8,17 @@ use crate::p2p::{Node, Tcp};
 use crate::pow::verifier;
 use crate::{Chain, Mempool, Policy};
 
-type Verifier = Box<dyn Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send>;
+pub(crate) type Verifier = Box<dyn Fn(&[u8], &[u8; 32]) -> [u8; 32] + Send>;
 
 /// A dev-network Node at work on `file`, checking Proof of Work with RandomX as a real one does.
-fn dev_node(file: &File, keys: &Arc<Keys>) -> Arc<Running<Verifier>> {
+pub(crate) fn dev_node(file: &File, keys: &Arc<Keys>) -> Arc<Running<Verifier>> {
     let verifier: Verifier = Box::new(verifier(keys.clone()));
     let chain = Chain::open(file.path(), DEV, verifier).unwrap();
     let node = Node::new(chain, Mempool::new(DEV, Policy::default()), &DEV, 0, &[]);
     Arc::new(Running::start(node, Tcp::new(None).unwrap()))
 }
 
-fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
+pub(crate) fn wait_for(what: &str, mut done: impl FnMut() -> bool) {
     let deadline = Instant::now() + Duration::from_secs(300);
     while !done() {
         assert!(Instant::now() < deadline, "{what}");
@@ -197,8 +197,53 @@ fn a_mine_stops_when_its_node_does() {
     mine.start(key(1).address(), 1, Mode::Light).unwrap();
     wait_for("on", || mine.status().state == State::On);
     running.stop().unwrap();
+    let stopped = Instant::now();
     wait_for("off", || mine.status().state == State::Off);
     assert_eq!(mine.status().threads, 0);
+    // At once, not when the next template is due.
+    assert!(stopped.elapsed() < REFRESH / 5, "{:?}", stopped.elapsed());
+}
+
+#[test]
+fn a_block_found_counts_only_if_the_node_takes_it_as_its_tip() {
+    let file = File::new("mine-hand-over");
+    // Any nonce does: what counts here is which Block the Node keeps.
+    let verifier: Verifier = Box::new(|_: &[u8], _: &[u8; 32]| [0; 32]);
+    let chain = Chain::open(file.path(), DEV, verifier).unwrap();
+    let node = Node::new(chain, Mempool::new(DEV, Policy::default()), &DEV, 0, &[]);
+    let running = Arc::new(Running::start(node, Tcp::new(None).unwrap()));
+    let keys = Arc::new(Keys::default());
+    let mine = Mine::new(running.clone(), keys.clone(), 1);
+    let supervisor = Supervisor {
+        running: running.clone(),
+        keys,
+        status: mine.status.clone(),
+        won: mine.won.clone(),
+        stopping: Arc::default(),
+        reward_address: key(1).address(),
+        threads: 1,
+        memory: Memory::Light,
+    };
+    let template = |reward: Address| {
+        let block = running
+            .call_blocking(move |node, _| node.chain.template(reward, Vec::new(), 0).unwrap());
+        block.unwrap()
+    };
+    // Found on the genesis after another Node's Block on it came: the Node keeps that one.
+    let (other, found) = (template(key(2).address()), template(key(1).address()));
+    let id = found.header.id();
+    let taken = running.call_blocking(move |node, _| node.chain.submit_block(&other).unwrap());
+    taken.unwrap();
+    supervisor.hand_over(found);
+    assert!(!mine.won(&id));
+    let found = template(key(1).address());
+    let id = found.header.id();
+    supervisor.hand_over(found);
+    assert!(mine.won(&id));
+    assert_eq!(mine.status().blocks_won, 1);
+    drop(supervisor);
+    drop(mine);
+    running.stop().unwrap();
 }
 
 #[test]
