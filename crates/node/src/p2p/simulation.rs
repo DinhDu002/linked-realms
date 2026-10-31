@@ -181,10 +181,11 @@ fn a_branch_with_more_work_that_forks_below_the_checkpoint_never_wins() {
 
     // Nothing of the branch above Block 10 stays but its headers.
     for i in 0..3 {
-        assert_eq!(
-            mesh.nodes[i].chain.block(&heavier[0].header.id()).unwrap(),
-            None
-        );
+        for block in &heavier[..40] {
+            let id = block.header.id();
+            assert!(mesh.nodes[i].chain.has_header(&id).unwrap(), "Node {i}");
+            assert_eq!(mesh.nodes[i].chain.block(&id).unwrap(), None, "Node {i}");
+        }
     }
 
     // Node 1 pushes one more Block on its branch, past its own Node. Nodes 0 and 2 take it in,
