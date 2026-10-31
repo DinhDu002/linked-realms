@@ -18,12 +18,13 @@ import {
   memoText,
   preparePayment,
   signPayment,
+  type Payment,
 } from "./gold.ts";
 import { prepareHandoff } from "./handoff.ts";
 import { createHubClient } from "./hub.ts";
 import { loadRecord, WrongPasswordError } from "./keystore.ts";
 import { errorText, registerErrorText, sendErrorText } from "./messages.ts";
-import { createModals } from "./modals.ts";
+import { createModals, type PaymentView } from "./modals.ts";
 import {
   createNodeClient,
   NodeError,
@@ -168,9 +169,42 @@ async function main() {
           travelFrom(land, direction, unlock, isCurrent),
         isUnlocked: () => vault.unlocked,
         ensureUnlocked,
+        isCurrent,
+        dialogOpen: () => modals.isOpen,
         confirm: (request) => modals.confirmSign(request),
         sign: (fields) =>
           vault.withKey((key) => signStatement("land-message", fields, key)),
+        async preparePayment(form) {
+          try {
+            return await preparePayment(node, networkId, address, form);
+          } catch (e) {
+            notice(
+              `Land ${land.landId} asked for a payment that cannot be made: ${sendErrorText(e)}`,
+            );
+            throw e;
+          }
+        },
+        confirmPayment: ({ landId, origin, payment }) =>
+          modals.confirmPayment(
+            paymentView(payment, `Land ${landId} (${origin})`),
+          ),
+        async sendPayment(payment) {
+          try {
+            const { id, answered } = await signAndSend(payment);
+            if (!answered)
+              notice(
+                `The Node did not answer about the payment Land ${land.landId} asked for: check your recent transactions before paying again.`,
+              );
+            void refreshGold();
+            return id;
+          } catch (e) {
+            if (!(e instanceof LockedError))
+              notice(
+                `The payment Land ${land.landId} asked for failed: ${sendErrorText(e)}`,
+              );
+            throw e;
+          }
+        },
       }),
   });
 
@@ -488,64 +522,76 @@ async function main() {
   // Block holds them.
   const pending = new Map<string, PlacedTransaction>();
 
+  const gold = (units: bigint) => `${formatAmount(units)} GOLD`;
+
+  /** The payment prompt's lines; `land` names the Land that asked, if one did. */
+  const paymentView = (payment: Payment, land?: string): PaymentView => ({
+    from: account.name ? `${account.name} (${address})` : address,
+    to: payment.to,
+    amount: gold(payment.amount),
+    memo: payment.memo.length === 0 ? "(none)" : memoText(payment.memo),
+    fee: gold(payment.fee),
+    total: gold(payment.amount + payment.fee),
+    land,
+  });
+
+  /**
+   * Signs `payment` and sends it. `answered` is false when the Node's answer was lost: the send
+   * may have reached it. Throws the Node's refusal, and LockedError if the Shell locked.
+   */
+  async function signAndSend(
+    payment: Payment,
+  ): Promise<{ id: string; answered: boolean }> {
+    const { bytes, id } = vault.withKey((key) => signPayment(key, payment));
+    // Tracked before it leaves: if the Node's answer is lost, the list still shows whether the
+    // Node holds it, so the Player does not pay twice by sending again.
+    pending.set(id, {
+      tx: {
+        id,
+        sender: address,
+        nonce: Number(payment.nonce),
+        fee: payment.fee.toString(),
+        kind: "transfer",
+        to: payment.to,
+        amount: payment.amount.toString(),
+        memo: toHex(payment.memo),
+      },
+      block: null,
+    });
+    try {
+      await node.send(bytes);
+      return { id, answered: true };
+    } catch (e) {
+      // A JSON-RPC error is the Node's refusal; anything else may have reached it.
+      if (e instanceof NodeError && e.code < 0) {
+        pending.delete(id);
+        throw e;
+      }
+      return { id, answered: false };
+    }
+  }
+
   sendForm.addEventListener("submit", async (event) => {
     event.preventDefault();
     sendSubmit.disabled = true;
     sendStatus.textContent = "Reading your account…";
     try {
-      const memo = field("send-memo").value;
       const payment = await preparePayment(node, networkId, address, {
-        to: field("send-to").value,
-        amount: field("send-amount").value,
-        memo,
-        fee: field("send-fee").value,
+        to: field("send-to").value.trim(),
+        amount: field("send-amount").value.trim(),
+        memo: field("send-memo").value,
+        fee: field("send-fee").value.trim(),
       });
       sendStatus.textContent = "";
-      const gold = (units: bigint) => `${formatAmount(units)} GOLD`;
-      const answer = await modals.confirmPayment({
-        from: account.name ? `${account.name} (${address})` : address,
-        to: payment.to,
-        amount: gold(payment.amount),
-        memo: memo === "" ? "(none)" : memoText(payment.memo),
-        fee: gold(payment.fee),
-        total: gold(payment.amount + payment.fee),
-      });
-      if (answer !== "approved") {
+      if ((await modals.confirmPayment(paymentView(payment))) !== "approved") {
         sendStatus.textContent = "Not sent: nothing was signed.";
         return;
       }
-      const { bytes, id } = vault.withKey((key) => signPayment(key, payment));
-      // Tracked before it leaves: if the Node's answer is lost, the list still shows whether the
-      // Node holds it, so the Player does not pay twice by sending again.
-      pending.set(id, {
-        tx: {
-          id,
-          sender: address,
-          nonce: Number(payment.nonce),
-          fee: payment.fee.toString(),
-          kind: "transfer",
-          to: payment.to,
-          amount: payment.amount.toString(),
-          memo: toHex(payment.memo),
-        },
-        block: null,
-      });
-      try {
-        await node.send(bytes);
-      } catch (e) {
-        // A JSON-RPC error is the Node's refusal; anything else may have reached it.
-        if (e instanceof NodeError && e.code < 0) {
-          pending.delete(id);
-          throw e;
-        }
-        sendForm.reset();
-        sendStatus.textContent =
-          "The Node did not answer, so the Shell cannot tell whether it was sent. It shows below as waiting while the Node holds it: check there before sending again.";
-        void refreshGold();
-        return;
-      }
+      const { answered } = await signAndSend(payment);
       sendForm.reset();
-      sendStatus.textContent = `Sent ${gold(payment.amount)}. It is confirmed once a Block holds it.`;
+      sendStatus.textContent = answered
+        ? `Sent ${gold(payment.amount)}. It is confirmed once a Block holds it.`
+        : "The Node did not answer, so the Shell cannot tell whether it was sent. It shows below as waiting while the Node holds it: check there before sending again.";
       void refreshGold();
     } catch (e) {
       sendStatus.textContent = sendErrorText(e);

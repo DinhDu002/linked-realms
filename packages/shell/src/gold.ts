@@ -46,12 +46,35 @@ export const transferBytes = (memoBytes: number, withPublicKey: boolean) =>
 
 function readGold(text: string, what: string): bigint {
   try {
-    return parseAmount(text.trim());
+    return parseAmount(text);
   } catch {
     throw new SendError(
       `The ${what} is not an amount of GOLD: digits, then optionally a dot and up to 8 digits.`,
     );
   }
+}
+
+/**
+ * The recipient, amount and memo, checked as given, with no space trimmed: what a Land's `pay`
+ * must already be. Throws SendError.
+ */
+export function readTransfer(form: Omit<SendForm, "fee">): {
+  to: string;
+  amount: bigint;
+  memo: Uint8Array;
+} {
+  if (!isAddress(form.to))
+    throw new SendError(
+      "The recipient is not a Character address: tlr1 and then lowercase letters and digits.",
+    );
+  const amount = readGold(form.amount, "amount");
+  if (amount === 0n) throw new SendError("The amount must be more than 0.");
+  const memo = new TextEncoder().encode(form.memo);
+  if (memo.length > MEMO_MAX_BYTES)
+    throw new SendError(
+      `The memo is at most ${MEMO_MAX_BYTES} bytes; this one has ${memo.length}.`,
+    );
+  return { to: form.to, amount, memo };
 }
 
 /**
@@ -64,18 +87,7 @@ export async function preparePayment(
   sender: string,
   form: SendForm,
 ): Promise<Payment> {
-  const to = form.to.trim();
-  if (!isAddress(to))
-    throw new SendError(
-      "The recipient is not a Character address: tlr1 and then lowercase letters and digits.",
-    );
-  const amount = readGold(form.amount, "amount");
-  if (amount === 0n) throw new SendError("The amount must be more than 0.");
-  const memo = new TextEncoder().encode(form.memo);
-  if (memo.length > MEMO_MAX_BYTES)
-    throw new SendError(
-      `The memo is at most ${MEMO_MAX_BYTES} bytes; this one has ${memo.length}.`,
-    );
+  const { to, amount, memo } = readTransfer(form);
   const [info, account] = await Promise.all([
     node.info(),
     node.account(sender, true),
@@ -88,7 +100,7 @@ export async function preparePayment(
     throw new SendError("You have no Gold to send yet.");
   const withPublicKey = !account.hasKey;
   const fee =
-    form.fee.trim() === ""
+    form.fee === ""
       ? (await node.feeRate()) *
         BigInt(transferBytes(memo.length, withPublicKey))
       : readGold(form.fee, "fee");

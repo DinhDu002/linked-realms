@@ -1,5 +1,11 @@
 import { defineConfig, devices } from "@playwright/test";
-import { HUB_PORT, HUB_URL, SHELL_ORIGIN, SHELL_PORT } from "./e2e/ports.ts";
+import {
+  HUB_PORT,
+  HUB_URL,
+  NODE_URL,
+  SHELL_ORIGIN,
+  SHELL_PORT,
+} from "./e2e/ports.ts";
 
 export default defineConfig({
   testDir: "e2e",
@@ -18,10 +24,10 @@ export default defineConfig({
       reuseExistingServer: false,
     },
     {
-      // The Hub's URL is fixed when the Shell is built.
+      // The Hub's and the Node's URLs are fixed when the Shell is built.
       command: `pnpm vite build && pnpm vite preview --port ${SHELL_PORT}`,
       url: SHELL_ORIGIN,
-      env: { VITE_HUB_URL: HUB_URL },
+      env: { VITE_HUB_URL: HUB_URL, VITE_NODE_URL: NODE_URL },
       reuseExistingServer: false,
       timeout: 120_000,
     },
