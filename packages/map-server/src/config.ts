@@ -1,6 +1,6 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
-import { isAddress } from "@linked-realms/core";
+import { isAddress } from "@dinhdu002/lr-core";
 import { parseRelayUrl } from "@linked-realms/relay/agent";
 import { isHost } from "@linked-realms/shared/identity";
 import type { NodeConfig } from "./node.ts";

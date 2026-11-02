@@ -1,17 +1,17 @@
 # Publishes the Map server image (the Dockerfile's default target) that the Shell's "Your Land"
 # command runs: ghcr.io/<owner>/linked-realms-node, for amd64 and arm64 (ADR 0010).
-# Tags: the branch name, the commit, and `latest` from the default branch. Step 2C's item branches
-# (phase-2/2c-*) build it too, so a change to the image is tried before it is merged.
-# The image holds lr-node, whose Rust and C++ would take hours under emulation, so each platform is
-# built on a runner of its own architecture and pushed by digest; the last job joins the two.
+# Tags: the branch name, the commit, and `latest` from the default branch. Each platform is built on
+# a runner of its own architecture and pushed by digest; the last job joins the two. The build
+# reads @dinhdu002/lr-core from GitHub Packages with the workflow's token, as a BuildKit secret.
 name: image
 
 on:
   push:
-    branches: [main, phase-2/2b-world, "phase-2/2c-*"]
+    branches: [main]
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: image-${{ github.ref }}
@@ -51,6 +51,8 @@ jobs:
         with:
           context: .
           platforms: ${{ matrix.platform }}
+          secrets: |
+            node_auth_token=${{ secrets.GITHUB_TOKEN }}
           labels: ${{ steps.meta.outputs.labels }}
           outputs: type=image,name=${{ env.IMAGE }},push-by-digest=true,name-canonical=true,push=true
           cache-from: type=gha,scope=${{ matrix.runner }}

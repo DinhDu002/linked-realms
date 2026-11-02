@@ -1,4 +1,4 @@
-// The Node RPC methods the Shell uses (docs/protocols/node-rpc.md), on the Public node. The Node
+// The Node RPC methods the Shell uses (https://github.com/DinhDu002/lr/blob/v0.1.0/docs/protocols/node-rpc.md), on the Public node. The Node
 // holds no key: the Shell builds and signs every transaction itself and only sends its bytes.
 
 export class NodeError extends Error {

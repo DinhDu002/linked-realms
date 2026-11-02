@@ -1,8 +1,8 @@
 // The Land's Mine as its Map server reports it (docs/protocols/map-server-node.md). Map servers are
 // untrusted (P1): a MineState or MineWon is shown only when it is well-formed, and what it says is
 // the Land's statement, not proof; Gold is only what the chain says. formatAmount and the switch
-// line's address check need `ready` from @linked-realms/core.
-import { formatAmount } from "@linked-realms/core";
+// line's address check need `ready` from @dinhdu002/lr-core.
+import { formatAmount } from "@dinhdu002/lr-core";
 import { hashRateText, shortAddress } from "@linked-realms/shared";
 import type { MineState, MineWon } from "@linked-realms/shared/land-protocol";
 import { buildMineSwitch } from "@linked-realms/shared/mine-switch";

@@ -9,7 +9,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { Duplex } from "node:stream";
-import { isAddress } from "@linked-realms/core";
+import { isAddress } from "@dinhdu002/lr-core";
 import { verifyStatement } from "@linked-realms/shared/identity";
 import type { LandInfo } from "@linked-realms/shared";
 import { WebSocket, WebSocketServer } from "ws";

@@ -2,7 +2,7 @@
 // Land message's `Message` to switch the Land's Mine. Strict both ways, like identity.md's
 // statements. Exported as `@linked-realms/shared/mine-switch`; it loads the WebAssembly module for
 // the address check.
-import { isAddress } from "@linked-realms/core";
+import { isAddress } from "@dinhdu002/lr-core";
 import { StatementError } from "./identity.ts";
 
 export interface MineSwitch {

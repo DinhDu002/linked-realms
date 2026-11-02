@@ -1,4 +1,4 @@
-import { formatAmount, ready } from "@linked-realms/core";
+import { formatAmount, ready } from "@dinhdu002/lr-core";
 import { shortAddress, type LandInfo } from "@linked-realms/shared";
 import { isName, signStatement } from "@linked-realms/shared/identity";
 import { createAccount } from "./account.ts";

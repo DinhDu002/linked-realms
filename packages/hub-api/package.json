@@ -11,7 +11,7 @@
   },
   "dependencies": {
     "@hono/node-server": "1.19.5",
-    "@linked-realms/core": "workspace:*",
+    "@dinhdu002/lr-core": "0.1.0",
     "@linked-realms/shared": "workspace:*",
     "hono": "4.13.14",
     "pg": "8.23.1"

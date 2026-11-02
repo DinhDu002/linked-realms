@@ -15,7 +15,7 @@
     "load-host": "node scripts/load-host.ts"
   },
   "dependencies": {
-    "@linked-realms/core": "workspace:*",
+    "@dinhdu002/lr-core": "0.1.0",
     "@linked-realms/shared": "workspace:*",
     "ws": "8.22.0"
   },

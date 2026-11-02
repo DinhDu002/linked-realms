@@ -1,6 +1,6 @@
 # Identity: keys, addresses and signed statements
 
-Status: mandatory (ADR 0008, ADR 0009). Every Land, Shell, NPC runner and Hub implements this exactly. The reference implementation is `crates/core` (keys, signatures, addresses) and `packages/shared/src/identity.ts` (statements, exported as `@linked-realms/shared/identity`).
+Status: mandatory (ADR 0008, ADR 0009). Every Land, Shell, NPC runner and Hub implements this exactly. The reference implementation is LR's `crates/core` (DinhDu002/lr; keys, signatures, addresses) and `packages/shared/src/identity.ts` (statements, exported as `@linked-realms/shared/identity`).
 
 ## Keys
 
@@ -97,5 +97,5 @@ A verifier:
 
 ## Test vectors
 
-- `crates/core/test-vectors/identity.json`: words, the seed, the salt and info, `xi`, the public key and the address for several entropies and Character indexes, one signed statement per context, and one invalid address for each rule above.
+- `packages/shared/test-vectors/identity.json`: words, the seed, the salt and info, `xi`, the public key and the address for several entropies and Character indexes, one signed statement per context, and one invalid address for each rule above.
 - `packages/shared/test-vectors/statements.json`: statements that must parse, with their fields, and statements that must be refused, each with the rule it breaks. Refused cases include a repeated key, a missing key, an extra line, a carriage return, U+2028 in a name, a bidi control in a name, a trailing space, an uppercase address and every non-canonical `Message`.

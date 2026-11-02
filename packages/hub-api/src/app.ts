@@ -4,7 +4,7 @@ import { bodyLimit } from "hono/body-limit";
 import { cors } from "hono/cors";
 import { createMiddleware } from "hono/factory";
 import { sign, verify } from "hono/jwt";
-import { isAddress, type Key } from "@linked-realms/core";
+import { isAddress, type Key } from "@dinhdu002/lr-core";
 import {
   DIRECTIONS,
   GATE_NONE,

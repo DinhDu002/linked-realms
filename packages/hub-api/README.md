@@ -9,7 +9,7 @@ cp .env.example .env   # dev values only
 pnpm --filter @linked-realms/hub-api start
 ```
 
-Migrations run at start-up (`src/db.ts`, plain SQL, tracked in the `migration` table). Needs PostgreSQL and, for online status, the relay. Signatures and addresses come from `@linked-realms/core` (the WebAssembly build of `crates/core`).
+Migrations run at start-up (`src/db.ts`, plain SQL, tracked in the `migration` table). Needs PostgreSQL and, for online status, the relay. Signatures and addresses come from `@dinhdu002/lr-core` (the WebAssembly build of `crates/core`).
 
 ## Configuration
 

@@ -1,7 +1,7 @@
 // The unlocked Character: its key (inside the WebAssembly module) and the Hub session token, in
 // memory only. Locking frees the key, wipes the decrypted bytes and drops the token. Limit: the
 // password string and the browser's own copies cannot be wiped from JavaScript.
-import type { Key } from "@linked-realms/core";
+import type { Key } from "@dinhdu002/lr-core";
 import { characterKey } from "@linked-realms/shared/identity";
 import { openEntropy, type KeyRecord } from "./keystore.ts";
 

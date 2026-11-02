@@ -1,5 +1,5 @@
 import type { BlockList } from "node:net";
-import { isAddress } from "@linked-realms/core";
+import { isAddress } from "@dinhdu002/lr-core";
 import { isHost } from "@linked-realms/shared/identity";
 import { trustedProxies } from "./network.ts";
 

@@ -1,4 +1,4 @@
-// What the dashboard reads: the Public node's last Blocks (docs/protocols/node-rpc.md) and the
+// What the dashboard reads: the Public node's last Blocks (https://github.com/DinhDu002/lr/blob/v0.1.0/docs/protocols/node-rpc.md) and the
 // Hub's Directory. Four calls a refresh, well under the RPC's limit of 10 a second.
 import {
   WINDOW_BLOCKS,

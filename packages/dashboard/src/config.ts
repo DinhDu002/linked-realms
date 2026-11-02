@@ -1,6 +1,6 @@
 export interface Config {
   port: number;
-  /** The Public node's RPC (docs/protocols/node-rpc.md). */
+  /** The Public node's RPC (https://github.com/DinhDu002/lr/blob/v0.1.0/docs/protocols/node-rpc.md). */
   nodeUrl: string;
   /** The Hub, for its Directory; without it Lands online is unknown and Lands are not named. */
   hubUrl: string | undefined;

@@ -1,9 +1,10 @@
 {
   "$schema": "https://turborepo.com/schema.json",
   "globalDependencies": ["tsconfig.base.json"],
+  "globalPassThroughEnv": ["NODE_AUTH_TOKEN"],
   "tasks": {
     "build": { "dependsOn": ["^build"] },
-    "typecheck": { "dependsOn": ["^build"] },
-    "test": { "dependsOn": ["^build"] }
+    "typecheck": {},
+    "test": {}
   }
 }

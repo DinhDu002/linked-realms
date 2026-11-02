@@ -1,5 +1,5 @@
 // The Map server's calls to the Hub (docs/protocols/map-server-hub-relay.md).
-import { isAddress, type Key } from "@linked-realms/core";
+import { isAddress, type Key } from "@dinhdu002/lr-core";
 import type { LandInfo } from "@linked-realms/shared";
 import { signStatement } from "@linked-realms/shared/identity";
 import { isRelayUrl, type Config } from "./config.ts";

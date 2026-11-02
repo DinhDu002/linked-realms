@@ -1,6 +1,6 @@
 // Setup (flow 1): the only page that asks for the 24 words, and it never loads a Land. Nothing
 // reaches the Hub: the Character exists only as the encrypted entropy stored here.
-import { entropyFromWords, ready, wordsFromEntropy } from "@linked-realms/core";
+import { entropyFromWords, ready, wordsFromEntropy } from "@dinhdu002/lr-core";
 import { characterKey } from "@linked-realms/shared/identity";
 import { el, make } from "./dom.ts";
 import { loadRecord, saveRecord, sealEntropy } from "./keystore.ts";

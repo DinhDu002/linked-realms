@@ -1,4 +1,4 @@
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import {
   characterKey,
   parseStatement,

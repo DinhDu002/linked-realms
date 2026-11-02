@@ -1,4 +1,4 @@
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import { signStatement } from "@linked-realms/shared/identity";
 import { buildMineSwitch } from "@linked-realms/shared/mine-switch";
 import { describe, expect, it } from "vitest";

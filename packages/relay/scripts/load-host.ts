@@ -6,7 +6,7 @@
 // then start the relay with HUB_URL=http://127.0.0.1:8799 and RELAY_HOST=127.0.0.1:8080
 // (the host of RELAY_URL: the hello names it).
 import { createServer } from "node:http";
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import { WebSocketServer } from "ws";
 import { connectHost } from "../src/agent.ts";
 

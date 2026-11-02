@@ -1,5 +1,7 @@
 # PLAN.md — Execution plan for `linked-realms`
 
+> **2026-11-02:** LR, the chain, moved to its own repository, [DinhDu002/lr](https://github.com/DinhDu002/lr) (ADR 0017), and this repository is the game alone. It takes `@dinhdu002/lr-core` and the `lr-node` image from LR's releases. Everything below about the chain (step 2C's chain items, `crates/`, `packages/core`) is history here: it was built before the cut and now lives in LR.
+
 > `linked-realms` is a working name and can be changed at any time.
 > This document is for both humans and Claude Code. **Claude Code:** read the whole file before starting, follow the phases in order, and update section 12 (Progress) after every completed task.
 
@@ -401,6 +403,11 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 ### Log
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
+
+- 2026-11-02: The cut after ADR 0017: this repository is the game alone, made from the tag `pre-split` with `git filter-repo`, without `crates/`, the Cargo files, `packages/core`, the chain's protocols and ADRs 0011–0013, and the chain's compose files.
+  - `@linked-realms/core` is now `@dinhdu002/lr-core` 0.1.0 from GitHub Packages (installing needs `NODE_AUTH_TOKEN` with `read:packages`; the Docker builds take it as a BuildKit secret), and the Land image copies `lr-node` from `ghcr.io/dinhdu002/lr-node:0.1.0`.
+  - The identity vectors (Character labels) live in `packages/shared/test-vectors/identity.json`; the Shell's test fixes LR's network ids (test 3, dev 2).
+  - CI has no Rust and no `rust` job (LR's CI runs them); `image.yml` publishes from `main` only. The game's redesign for Hub v1 is a later step for the project owner.
 
 - 2026-11-02: ADR 0016 on branch `phase-2/2c-lr-names`: the project owner settled the game terms in LR's paths.
   - Key derivation takes its salt and info as parameters; Linked Realms' labels moved to `packages/shared` (`characterKey`), with every key and address unchanged.

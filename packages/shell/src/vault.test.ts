@@ -1,6 +1,6 @@
 import { describe, expect, it, vi } from "vitest";
 import { sealEntropy, WrongPasswordError } from "./keystore.ts";
-import type { Key } from "@linked-realms/core";
+import type { Key } from "@dinhdu002/lr-core";
 import { createVault, LockedError } from "./vault.ts";
 
 const fakeKey = (address: string, free: () => void) =>

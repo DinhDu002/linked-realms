@@ -2,7 +2,7 @@
 // holds 10 GOLD with no key yet, and `lr_sendTransaction` keeps what it was sent without checking
 // it. `GET /__sent` lists the transfers it holds.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { addressFromBytes, transactionId } from "@linked-realms/core";
+import { addressFromBytes, transactionId } from "@dinhdu002/lr-core";
 import { NODE_PORT } from "./ports.ts";
 import { listenOnLoopbacks } from "./listen.ts";
 

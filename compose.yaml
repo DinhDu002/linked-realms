@@ -6,13 +6,16 @@ name: linked-realms
 # until its Land owner switches it on. Run it as its own project so it never touches the default
 # stack's state:
 #   POSTGRES_PORT=5433 docker compose -p linked-realms-world --profile world up -d --build
+# Building needs NODE_AUTH_TOKEN, a token with read:packages (README: Requirements).
 # Then open the Shell at http://localhost:8788 (README: Run the world).
 #
 # DEVELOPMENT KEYS. Every key and Character below is public: local development only, never for
 # anything that holds value. The Characters' 24 words are in the README and the world e2e test.
 
 x-node: &node
-  build: .
+  build:
+    context: .
+    secrets: [node_auth_token]
   image: linked-realms-node:local
   profiles: [world]
   restart: "no"
@@ -109,6 +112,7 @@ services:
     build:
       context: .
       target: shell
+      secrets: [node_auth_token]
       args:
         VITE_HUB_URL: http://localhost:${HUB_PORT:-8787}
         VITE_NODE_URL: http://localhost:${NODE_RPC_PORT:-9445}
@@ -190,6 +194,11 @@ services:
     volumes: [map-2-data:/data]
     mem_limit: 1g
     cpus: 2
+
+# @dinhdu002/lr-core comes from GitHub Packages: export NODE_AUTH_TOKEN=$(gh auth token) first.
+secrets:
+  node_auth_token:
+    environment: NODE_AUTH_TOKEN
 
 volumes:
   postgres-data:

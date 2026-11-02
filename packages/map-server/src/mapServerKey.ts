@@ -7,7 +7,7 @@ import {
 } from "node:fs";
 import { randomBytes } from "node:crypto";
 import { dirname } from "node:path";
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 
 /**
  * Reads the Map server key's seed (64 hex characters) from `path`, or creates the file (mode

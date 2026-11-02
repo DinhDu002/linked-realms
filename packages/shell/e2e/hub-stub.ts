@@ -1,7 +1,7 @@
 // A small stand-in for the Hub (packages/hub-api): the routes the Shell uses, with real checks
 // on every signed statement, and a few fixed Lands. `GET /__state` shows what it was asked.
 import type { IncomingMessage, ServerResponse } from "node:http";
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import { signStatement, verifyStatement } from "@linked-realms/shared/identity";
 import { HUB_PORT, LAND_PORT, SHELL_ORIGIN } from "./ports.ts";
 import { listenOnLoopbacks } from "./listen.ts";

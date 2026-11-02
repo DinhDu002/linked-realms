@@ -4,7 +4,7 @@ import {
   type ServerResponse,
 } from "node:http";
 import type { AddressInfo } from "node:net";
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import type { LandInfo } from "@linked-realms/shared";
 import { verifyStatement } from "@linked-realms/shared/identity";
 import { afterEach, describe, expect, it, vi } from "vitest";

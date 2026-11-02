@@ -2,7 +2,7 @@
 
 A game made of many Lands. Each player hosts their own Land, and the Lands join into one shared world through the Hub, which only connects Lands and lets Characters travel between them. Gold is mined by Proof of Work on LR, the project's own chain, like Bitcoin. Players' keys stay in the Shell, and each Land makes its own rules.
 
-> **Status:** Phase 2, step 2C: the chain. LR's Node, the Mine, Gold in the Shell and the dashboard run in the local world below. Next comes the check with three Players on three machines, then LR moves to its own repository and the project owner launches the main network. **No network runs yet:** a test network serves step 2C's acceptance test, then the main network starts and is never reset (P7).
+> **Status:** Phase 2, step 2C: the chain. LR's Node, the Mine, Gold in the Shell and the dashboard run in the local world below. LR has moved to its own repository, [DinhDu002/lr](https://github.com/DinhDu002/lr) (ADR 0017), and the game takes its releases. **No network runs yet:** a test network serves step 2C's acceptance test, then the main network starts and is never reset (P7).
 
 ## Stage 1
 
@@ -16,13 +16,12 @@ The test world runs at <https://play.linkedrealms.com>. Open it, make a Characte
 
 ## Development
 
-Requirements: Node.js 26 (see `.nvmrc`), pnpm 11.3, Rust through `rustup` (the version is pinned in `rust-toolchain.toml`) with `wasm-bindgen-cli` 0.2.129, and Docker.
+Requirements: Node.js 26 (see `.nvmrc`), pnpm 11.3, Docker, and `NODE_AUTH_TOKEN`: a GitHub token with `read:packages`, which GitHub Packages asks for even though `@dinhdu002/lr-core` is public. LR, the chain, is in [DinhDu002/lr](https://github.com/DinhDu002/lr); this repository takes its package and its `lr-node` image as releases (ADR 0017).
 
 ```bash
-cargo install wasm-bindgen-cli --version 0.2.129 --locked
+export NODE_AUTH_TOKEN=$(gh auth token)   # never write it to a file
 pnpm install
-pnpm format:check && pnpm lint && pnpm typecheck && pnpm test   # builds packages/core (WebAssembly) first
-cargo fmt --check && cargo clippy --all-targets -- -D warnings && cargo test
+pnpm format:check && pnpm lint && pnpm typecheck && pnpm test
 docker compose up -d   # PostgreSQL on 127.0.0.1:5432
 ```
 

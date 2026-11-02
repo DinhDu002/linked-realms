@@ -7,6 +7,7 @@ on:
 
 permissions:
   contents: read
+  packages: read
 
 concurrency:
   group: ci-${{ github.ref }}
@@ -22,16 +23,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
-      # packages/core is the WASM build of crates/core (ADR 0009).
-      - run: rustup toolchain install
-      - name: Install wasm-bindgen-cli
-        run: |
-          curl -sSfL -o wasm-bindgen.tar.gz "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$V/wasm-bindgen-$V-x86_64-unknown-linux-musl.tar.gz"
-          echo "82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e  wasm-bindgen.tar.gz" | sha256sum -c
-          tar -xzf wasm-bindgen.tar.gz --strip-components=1 -C "$HOME/.cargo/bin" "wasm-bindgen-$V-x86_64-unknown-linux-musl/wasm-bindgen"
-        env:
-          V: 0.2.129 # the wasm-bindgen version in crates/core/Cargo.toml
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm format:check
       - run: pnpm lint
       - run: pnpm typecheck
@@ -48,17 +42,9 @@ jobs:
         with:
           node-version-file: .nvmrc
           cache: pnpm
-      # packages/core is the WASM build of crates/core (ADR 0009); the Shell is built on it.
-      - run: rustup toolchain install
-      - name: Install wasm-bindgen-cli
-        run: |
-          curl -sSfL -o wasm-bindgen.tar.gz "https://github.com/wasm-bindgen/wasm-bindgen/releases/download/$V/wasm-bindgen-$V-x86_64-unknown-linux-musl.tar.gz"
-          echo "82d12bb940e2d4e72e0d5605387fc1b8ca179044e012b620f0ce4e7440e8320e  wasm-bindgen.tar.gz" | sha256sum -c
-          tar -xzf wasm-bindgen.tar.gz --strip-components=1 -C "$HOME/.cargo/bin" "wasm-bindgen-$V-x86_64-unknown-linux-musl/wasm-bindgen"
-        env:
-          V: 0.2.129 # the wasm-bindgen version in crates/core/Cargo.toml
       - run: pnpm install --frozen-lockfile
-      - run: pnpm --filter @linked-realms/core build
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm --filter @linked-realms/shell exec playwright install --with-deps chromium firefox
       - run: pnpm --filter @linked-realms/shell test:browser
       # The Land's Mine: the Land UI and its Map server, with a fake Node, in a stub Shell.
@@ -75,42 +61,23 @@ jobs:
           node-version-file: .nvmrc
           cache: pnpm
       - run: pnpm install --frozen-lockfile
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
       - run: pnpm --filter @linked-realms/shared proto
       - name: Generated code in packages/shared/src/gen is current
         run: |
           git status --porcelain -- packages/shared/src/gen
           test -z "$(git status --porcelain -- packages/shared/src/gen)"
 
-  # On both architectures the image is built for, so RandomX's vectors run natively on each.
-  rust:
-    strategy:
-      fail-fast: false
-      matrix:
-        runner: [ubuntu-24.04, ubuntu-24.04-arm]
-    runs-on: ${{ matrix.runner }}
-    env:
-      # crates/randomx builds RandomX with these rather than the runner image's own CMake.
-      CMAKE: /usr/bin/cmake
-      CC: gcc-13
-      CXX: g++-13
-    steps:
-      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # CMake at Ubuntu 24.04's only version; GCC 13 takes Ubuntu's fixes, so only its major is pinned.
-      - run: |
-          sudo apt-get update
-          sudo apt-get install -y --no-install-recommends cmake=3.28.3-1build7 g++-13
-          "$CMAKE" --version && "$CXX" --version
-      - run: rustup toolchain install
-      - run: cargo fmt --check
-      - run: cargo clippy --all-targets --all-features -- -D warnings
-      - run: cargo test
-      # The same vectors on musl, in the Dockerfile stage that builds lr-node for the Alpine image.
-      - run: docker build --target lr-node .
-
   image:
     runs-on: ubuntu-24.04
     steps:
       - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
-      # Build only: image.yml publishes the Map server image from main and the working branch.
-      - run: docker build -t linked-realms-node:ci .
-      - run: docker build --target shell -t linked-realms-shell:ci .
+      # Build only: image.yml publishes the Map server image from main. The token is a BuildKit
+      # secret (the Dockerfile's header), so it never lands in a layer.
+      - run: docker build --secret id=node_auth_token,env=NODE_AUTH_TOKEN -t linked-realms-node:ci .
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+      - run: docker build --secret id=node_auth_token,env=NODE_AUTH_TOKEN --target shell -t linked-realms-shell:ci .
+        env:
+          NODE_AUTH_TOKEN: ${{ secrets.GITHUB_TOKEN }}

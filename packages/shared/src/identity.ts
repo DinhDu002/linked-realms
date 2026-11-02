@@ -1,6 +1,6 @@
 // Characters' keys and signed statements (docs/protocols/identity.md): derive a Character's key,
 // build, strictly parse and verify the seven statements, and check an arrival handoff
-// (docs/protocols/arrival.md). Keys, signatures and addresses come from @linked-realms/core. Exported as `@linked-realms/shared/identity`, so a page
+// (docs/protocols/arrival.md). Keys, signatures and addresses come from @dinhdu002/lr-core. Exported as `@linked-realms/shared/identity`, so a page
 // that never verifies anything does not load the WebAssembly module.
 import {
   SCHEME_ML_DSA_44,
@@ -8,7 +8,7 @@ import {
   isAddress,
   verify,
   Key,
-} from "@linked-realms/core";
+} from "@dinhdu002/lr-core";
 
 /** Linked Realms' HKDF salt for its Characters' keys; LR's code takes any (ADR 0016). */
 export const CHARACTER_SALT = "linked-realms/ml-dsa-44/v1";

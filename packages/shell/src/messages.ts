@@ -1,10 +1,10 @@
 // Wording for what the Hub, the Node and the vault can refuse.
-import { formatAmount } from "@linked-realms/core";
+import { formatAmount } from "@dinhdu002/lr-core";
 import { HubError } from "./hub.ts";
 import { NodeError } from "./node.ts";
 import { LockedError } from "./vault.ts";
 
-/** The least a transfer moves to an address with no Account (docs/protocols/transactions.md). */
+/** The least a transfer moves to an address with no Account (https://github.com/DinhDu002/lr/blob/v0.1.0/docs/protocols/transactions.md). */
 const DUST = 38_290n;
 
 /** What the Player reads when registering a Map server fails. */

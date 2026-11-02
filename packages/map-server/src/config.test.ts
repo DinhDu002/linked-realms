@@ -1,6 +1,6 @@
 import { resolve } from "node:path";
 import { describe, expect, it } from "vitest";
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import { loadConfig } from "./config.ts";
 
 const address = (byte: number) =>

@@ -12,7 +12,7 @@ import {
   type Browser,
   type BrowserContext,
 } from "@playwright/test";
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import { parseLandMap } from "@linked-realms/shared";
 import { signStatement } from "@linked-realms/shared/identity";
 import {

@@ -1,4 +1,3 @@
-import { readFileSync } from "node:fs";
 import { describe, expect, it } from "vitest";
 import { landCommand, networkIdOf } from "./config.ts";
 
@@ -21,19 +20,9 @@ describe("landCommand", () => {
 
 describe("networkIdOf", () => {
   it("knows each network by its lr-node name, with core's id", () => {
-    const chain = JSON.parse(
-      readFileSync(
-        new URL(
-          "../../../crates/core/test-vectors/chain.json",
-          import.meta.url,
-        ),
-        "utf8",
-      ),
-    ) as { networks: { name: string; networkId: number }[] };
-    const id = (name: string) =>
-      chain.networks.find((n) => n.name === name)?.networkId;
-    expect(networkIdOf("test")).toBe(id("testnet"));
-    expect(networkIdOf("dev")).toBe(id("dev"));
+    // LR's ids (DinhDu002/lr, crates/core/test-vectors/chain.json at v0.1.0).
+    expect(networkIdOf("test")).toBe(3);
+    expect(networkIdOf("dev")).toBe(2);
     expect(() => networkIdOf("main")).toThrow(/unknown network/);
     expect(() => networkIdOf("constructor")).toThrow(/unknown network/);
   });

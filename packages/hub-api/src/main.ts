@@ -1,7 +1,7 @@
 import { Resolver } from "node:dns/promises";
 import { serve } from "@hono/node-server";
 import { getConnInfo } from "@hono/node-server/conninfo";
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import { createApp } from "./app.ts";
 import { loadConfig } from "./config.ts";
 import { createPool, migrate } from "./db.ts";

@@ -1,5 +1,5 @@
 import { readFileSync } from "node:fs";
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import { describe, expect, it } from "vitest";
 import {
   ArrivalRefused,
@@ -42,7 +42,7 @@ const identity = read<{
     address: string;
     signature: string;
   }[];
-}>("../../../crates/core/test-vectors/identity.json");
+}>("../test-vectors/identity.json");
 
 const hexToBase64 = (hex: string) => toBase64(Buffer.from(hex, "hex"));
 

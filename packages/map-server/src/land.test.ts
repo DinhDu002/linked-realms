@@ -6,7 +6,7 @@ import { join } from "node:path";
 import { readFileSync } from "node:fs";
 import { fileURLToPath } from "node:url";
 import { create, fromBinary, toBinary } from "@bufbuild/protobuf";
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import {
   CHARACTER_HALF_SIZE_PX,
   gateNumber,

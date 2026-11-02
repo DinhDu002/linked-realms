@@ -1,6 +1,6 @@
 # @linked-realms/dashboard
 
-The world's public figures on one page with no script: Lands online, Mines mining (reward addresses that won a Block in the last 24 hours), mean Block time and estimated hash rate over the last 100 gaps, the winners of the last 2000 Blocks with the Accounts their Blocks created, and the latest Blocks. It reads the Public node's RPC (`lr_getInfo`, `lr_getHeaders`, `lr_getNewAccountCounts`; [docs/protocols/node-rpc.md](../../docs/protocols/node-rpc.md)) and the Hub's `GET /directory`, and holds no state: one read serves every viewer for 10 seconds, and the page refreshes every 30.
+The world's public figures on one page with no script: Lands online, Mines mining (reward addresses that won a Block in the last 24 hours), mean Block time and estimated hash rate over the last 100 gaps, the winners of the last 2000 Blocks with the Accounts their Blocks created, and the latest Blocks. It reads the Public node's RPC (`lr_getInfo`, `lr_getHeaders`, `lr_getNewAccountCounts`; [docs/protocols/node-rpc.md](https://github.com/DinhDu002/lr/blob/v0.1.0/docs/protocols/node-rpc.md)) and the Hub's `GET /directory`, and holds no state: one read serves every viewer for 10 seconds, and the page refreshes every 30.
 
 | Variable       | What it is                                                                     | Default  |
 | -------------- | ------------------------------------------------------------------------------ | -------- |

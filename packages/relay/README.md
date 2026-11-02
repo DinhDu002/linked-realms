@@ -89,7 +89,7 @@ chunks of at most 64 KiB. Every control message is validated on receipt.
 ## Agent
 
 ```ts
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import { connectHost } from "@linked-realms/relay/agent";
 
 const link = connectHost({ relayUrl: "wss://relay.example", landId, mapServerKey: key, localPort, log: console.log });
@@ -98,7 +98,7 @@ await link.close();
 
 `relayUrl` is a `ws://` or `wss://` base URL without a path; the agent dials `<relayUrl>/host/<landId>`, and the
 hello's `Relay` is `new URL(relayUrl).host`, so the relay's `RELAY_HOST` must be that host. It answers the challenge
-with a `relay-host` statement signed by `mapServerKey` (a `Key` from `@linked-realms/core`), opens a local WebSocket to
+with a `relay-host` statement signed by `mapServerKey` (a `Key` from `@dinhdu002/lr-core`), opens a local WebSocket to
 `ws://127.0.0.1:<localPort><path>` for every `open`, runs `http` requests against `http://127.0.0.1:<localPort>` and
 streams the response body in frames of at most 64 KiB (`http-end` with `aborted: true` if the local body fails), and
 reconnects with backoff (1 s doubling to 30 s) until closed. It drops a link that hears nothing from the relay for 45 s.

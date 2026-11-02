@@ -1,4 +1,4 @@
-import { ready } from "@linked-realms/core";
+import { ready } from "@dinhdu002/lr-core";
 import { connect, playUrl, type Connection } from "./connection.ts";
 import { createGateEdge } from "./gate.ts";
 import { attachPad } from "./input.ts";

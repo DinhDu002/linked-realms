@@ -6,7 +6,7 @@ import {
   parseAmount,
   transactionId,
   type Key,
-} from "@linked-realms/core";
+} from "@dinhdu002/lr-core";
 import { visibleEscapes } from "./escape.ts";
 import { toHex, type NodeClient, type PlacedTransaction } from "./node.ts";
 

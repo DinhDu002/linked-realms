@@ -3,3 +3,6 @@ packages:
 allowBuilds:
   # Its postinstall only swaps the JavaScript launcher for the platform binary; the launcher works.
   "@bufbuild/buf": false
+minimumReleaseAgeExclude:
+  # LR's own release, younger than the minimum age.
+  - "@dinhdu002/lr-core@0.1.0"

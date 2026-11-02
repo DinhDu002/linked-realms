@@ -1,6 +1,6 @@
 # @linked-realms/shell
 
-The Shell: the page where a Player keeps their Character's key and enters Lands. It is a static Vite + TypeScript site, with no framework. Everything a Land can ask of it goes through the API in `docs/protocols/shell-land-ui.md`; keys, signatures and addresses come from `@linked-realms/core` (the WebAssembly build of `crates/core`), and statements from `@linked-realms/shared/identity`. Design: `docs/plans/phase-2b-world-without-chain.md`.
+The Shell: the page where a Player keeps their Character's key and enters Lands. It is a static Vite + TypeScript site, with no framework. Everything a Land can ask of it goes through the API in `docs/protocols/shell-land-ui.md`; keys, signatures and addresses come from `@dinhdu002/lr-core` (the WebAssembly build of `crates/core`), and statements from `@linked-realms/shared/identity`. Design: `docs/plans/phase-2b-world-without-chain.md`.
 
 - **`setup.html`** creates a Character (24 words to write down, three of them confirmed, a password) or restores one from its 24 words. It is the only page that asks for the words and it never loads a Land.
 - **`index.html`** unlocks the Character, shows its address and name, its Gold (balance, Send, recent transactions), lists the Directory with "Enter", registers a Map server ("Your Land"), and holds the Land's frame, Report and Lock. "Full screen" puts the whole page in full screen, not the frame, so the signing prompt stays in view; where the browser has none (iPhone) a touch screen gets a hint to add the Shell to the Home Screen instead, which `public/manifest.json` (`display: standalone`) opens without the browser's bars. A Home Screen app on iPhone keeps its own storage, so the Character is restored there with its 24 words.
@@ -9,7 +9,6 @@ The Shell: the page where a Player keeps their Character's key and enters Lands.
 
 ```bash
 cp .env.example .env              # optional
-pnpm --filter @linked-realms/core build   # once; needs Rust and wasm-bindgen-cli
 pnpm --filter @linked-realms/shell dev    # http://localhost:5182
 pnpm --filter @linked-realms/shell build  # dist/
 ```
@@ -21,7 +20,7 @@ WebCrypto and WebAssembly need a secure context: `localhost` in development, HTT
 | Variable | Default | Meaning |
 |---|---|---|
 | `VITE_HUB_URL` | `http://localhost:8787` | The Hub's URL, fixed when the Shell is built. Statements name its host (`localhost:8787`, or `hub.example.org` for an `https` URL on port 443), so it must equal the Hub's `HUB_DOMAIN`. The Hub also needs this Shell's origin in `HUB_ALLOWED_ORIGINS`. |
-| `VITE_NODE_URL` | `http://localhost:9445` | The Public node's RPC (`docs/protocols/node-rpc.md`), fixed when the Shell is built so the CSP can name it. The Shell reads balances, the fee rate and transactions there and sends the transactions it signed. |
+| `VITE_NODE_URL` | `http://localhost:9445` | The Public node's RPC (`https://github.com/DinhDu002/lr/blob/v0.1.0/docs/protocols/node-rpc.md`), fixed when the Shell is built so the CSP can name it. The Shell reads balances, the fee rate and transactions there and sends the transactions it signed. |
 | `VITE_NETWORK` | `test` | The network the Shell signs for, `test` or `dev` (the names `lr-node --network` takes). A Node on another network is refused before anything is signed. |
 
 ## Security model

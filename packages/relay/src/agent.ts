@@ -1,7 +1,7 @@
 // The Map server's side of the host link: one outbound WebSocket to the relay that carries
 // Player HTTP requests and WebSockets to the local Map server (node:http + ws) on 127.0.0.1.
 import { request as httpRequest, type ClientRequest } from "node:http";
-import type { Key } from "@linked-realms/core";
+import type { Key } from "@dinhdu002/lr-core";
 import { signStatement } from "@linked-realms/shared/identity";
 import { WebSocket } from "ws";
 import {

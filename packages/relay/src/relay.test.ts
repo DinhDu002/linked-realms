@@ -6,7 +6,7 @@ import {
 } from "node:http";
 import type { AddressInfo } from "node:net";
 import { afterEach, describe, expect, it, vi } from "vitest";
-import { Key } from "@linked-realms/core";
+import { Key } from "@dinhdu002/lr-core";
 import { signStatement } from "@linked-realms/shared/identity";
 import { WebSocket, WebSocketServer } from "ws";
 import { connectHost } from "./agent.ts";

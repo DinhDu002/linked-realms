@@ -4,12 +4,7 @@ import tseslint from "typescript-eslint";
 
 export default defineConfig(
   {
-    ignores: [
-      "**/dist/",
-      "target/",
-      "packages/core/pkg/",
-      "packages/shared/src/gen/",
-    ],
+    ignores: ["**/dist/", "packages/shared/src/gen/"],
   },
   js.configs.recommended,
   tseslint.configs.recommended,
