@@ -1,4 +1,5 @@
-import { Key, transactionId } from "@linked-realms/core";
+import { transactionId } from "@linked-realms/core";
+import { characterKey } from "@linked-realms/shared/identity";
 import { describe, expect, it, vi } from "vitest";
 import {
   describeTransaction,
@@ -11,8 +12,9 @@ import {
 import { toHex, type Account, type NodeClient } from "./node.ts";
 
 const DEV = 2;
-const sender = Key.fromEntropy(new Uint8Array(32).fill(7), 0);
-const recipient = Key.fromEntropy(new Uint8Array(32).fill(8), 0).address;
+const TEST = 3;
+const sender = characterKey(new Uint8Array(32).fill(7), 0);
+const recipient = characterKey(new Uint8Array(32).fill(8), 0).address;
 
 function stubNode({
   networkId = DEV,
@@ -171,7 +173,7 @@ describe("signPayment", () => {
     const { bytes, id } = signPayment(sender, payment);
     expect(bytes).toHaveLength(transferBytes(6, true));
     expect(id).toBe(toHex(transactionId(DEV, bytes)));
-    expect(id).not.toBe(toHex(transactionId(1, bytes)));
+    expect(id).not.toBe(toHex(transactionId(TEST, bytes)));
   });
 });
 

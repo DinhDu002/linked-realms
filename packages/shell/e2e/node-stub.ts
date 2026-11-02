@@ -6,7 +6,7 @@ import { addressFromBytes, transactionId } from "@linked-realms/core";
 import { NODE_PORT } from "./ports.ts";
 import { listenOnLoopbacks } from "./listen.ts";
 
-const TEST_NETWORK = 1;
+const TEST_NETWORK = 3;
 
 export interface SentTransfer {
   id: string;

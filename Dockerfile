@@ -30,8 +30,8 @@ RUN tar -xzf /tmp/wasm-bindgen.tar.gz --strip-components=1 -C /usr/local/bin --w
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates crates
-RUN cargo build --locked -p linked-realms-core --features wasm --target wasm32-unknown-unknown --profile wasm \
- && wasm-bindgen --target web --out-dir /pkg target/wasm32-unknown-unknown/wasm/linked_realms_core.wasm
+RUN cargo build --locked -p lr-core --features wasm --target wasm32-unknown-unknown --profile wasm \
+ && wasm-bindgen --target web --out-dir /pkg target/wasm32-unknown-unknown/wasm/lr_core.wasm
 
 # The chain on musl: crates/randomx's vectors, which prove the RandomX it links builds and hashes
 # right on musl, then lr-node. CMake and the C++ compiler come from the image's Alpine release, at
@@ -42,8 +42,8 @@ RUN apk add --no-cache cmake~4.2 g++~15.2 make~4.4 linux-headers~7.0
 WORKDIR /src
 COPY Cargo.toml Cargo.lock rust-toolchain.toml ./
 COPY crates crates
-RUN cargo test --locked -p linked-realms-randomx \
- && cargo build --locked --release -p linked-realms-node --bin lr-node
+RUN cargo test --locked -p lr-randomx \
+ && cargo build --locked --release -p lr-node --bin lr-node
 
 # Only the binary: no key is in this image. A Checkpoint signer's words are a secret file on its
 # own machine (deploy/compose.signer.yaml). The chain lives in the /data volume, writable by the

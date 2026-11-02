@@ -1,7 +1,8 @@
 // The unlocked Character: its key (inside the WebAssembly module) and the Hub session token, in
 // memory only. Locking frees the key, wipes the decrypted bytes and drops the token. Limit: the
 // password string and the browser's own copies cannot be wiped from JavaScript.
-import { Key } from "@linked-realms/core";
+import type { Key } from "@linked-realms/core";
+import { characterKey } from "@linked-realms/shared/identity";
 import { openEntropy, type KeyRecord } from "./keystore.ts";
 
 export const IDLE_LOCK_MS = 15 * 60 * 1000;
@@ -51,7 +52,7 @@ export function createVault(
   {
     idleMs = IDLE_LOCK_MS,
     isBusy = () => false,
-    deriveKey = (entropy) => Key.fromEntropy(entropy, 0),
+    deriveKey = (entropy) => characterKey(entropy, 0),
     open = openEntropy,
   }: VaultOptions = {},
 ): Vault {

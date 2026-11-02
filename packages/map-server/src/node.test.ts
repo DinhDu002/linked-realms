@@ -23,7 +23,7 @@ import {
 const ADDRESS =
   "tlr1qqqcfumqdlzsgtqzvz39p459ttpuy9l3krp4y6gtt6pf5svrnjp0kxqsnx73t";
 const OFF = {
-  id: "land",
+  id: "default",
   state: "off",
   threads: 0,
   mode: null,
@@ -165,7 +165,7 @@ describe("connectControl", () => {
     );
     expect(control.requests[0]).toEqual({
       method: "mine_subscribe",
-      params: { id: "land" },
+      params: { id: "default" },
     });
     expect(link.info()).toEqual({
       synced: true,
@@ -176,7 +176,7 @@ describe("connectControl", () => {
     control.notify("mine_status", ON);
     await until(() => link.status()?.state === "on");
     control.notify("mine_blockFound", {
-      id: "land",
+      id: "default",
       height: 1240,
       hash: "0a",
       reward: "500004000",
@@ -205,14 +205,19 @@ describe("connectControl", () => {
     expect((await link.start(ADDRESS, 2)).state).toBe("on");
     expect(control.requests.at(-1)).toEqual({
       method: "mine_start",
-      params: { id: "land", rewardAddress: ADDRESS, threads: 2, mode: "auto" },
+      params: {
+        id: "default",
+        rewardAddress: ADDRESS,
+        threads: 2,
+        mode: "auto",
+      },
     });
     expect(link.status()?.state).toBe("on");
     expect(changes.at(-1)).toBe("on");
     expect((await link.stop()).state).toBe("off");
     expect(control.requests.at(-1)).toEqual({
       method: "mine_stop",
-      params: { id: "land" },
+      params: { id: "default" },
     });
     const refused = link.start(ADDRESS, 9);
     await expect(refused).rejects.toBeInstanceOf(NodeRefused);

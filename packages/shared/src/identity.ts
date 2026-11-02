@@ -1,14 +1,26 @@
-// Signed statements (docs/protocols/identity.md): build, strictly parse and verify the seven
-// statements, and check an arrival handoff (docs/protocols/arrival.md). Keys, signatures and
-// addresses come from @linked-realms/core. Exported as `@linked-realms/shared/identity`, so a page
+// Characters' keys and signed statements (docs/protocols/identity.md): derive a Character's key,
+// build, strictly parse and verify the seven statements, and check an arrival handoff
+// (docs/protocols/arrival.md). Keys, signatures and addresses come from @linked-realms/core. Exported as `@linked-realms/shared/identity`, so a page
 // that never verifies anything does not load the WebAssembly module.
 import {
   SCHEME_ML_DSA_44,
   addressFromPublicKey,
   isAddress,
   verify,
-  type Key,
+  Key,
 } from "@linked-realms/core";
+
+/** Linked Realms' HKDF salt for its Characters' keys; LR's code takes any (ADR 0016). */
+export const CHARACTER_SALT = "linked-realms/ml-dsa-44/v1";
+
+/** Character `index` behind the entropy of 24 words. Call `free()` on the key when done. */
+export function characterKey(entropy: Uint8Array, index: number): Key {
+  // Out of range, not taken modulo 2^32: index 2^32 + 1 is not Character 1.
+  if (!Number.isInteger(index) || index < 0 || index > 0xffff_ffff) {
+    throw new RangeError("index is not an integer in range");
+  }
+  return Key.fromEntropy(entropy, CHARACTER_SALT, `character/${index}`);
+}
 
 export class StatementError extends Error {
   override name = "StatementError";

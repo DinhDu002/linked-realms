@@ -1,6 +1,6 @@
 import type { Frame, Page } from "@playwright/test";
-import { Key } from "@linked-realms/core";
 import {
+  characterKey,
   parseStatement,
   verifyStatement,
   type Handoff,
@@ -24,7 +24,7 @@ import { HUB_URL, landOrigin, NODE_URL } from "./ports.ts";
 import type { SentTransfer } from "./node-stub.ts";
 
 /** A Character who never signs in: the address a Land asks to be paid at. */
-const RECIPIENT = Key.fromEntropy(new Uint8Array(32).fill(8), 0).address;
+const RECIPIENT = characterKey(new Uint8Array(32).fill(8), 0).address;
 
 /** The transfers the Node stub holds from one sender. */
 async function nodeSent(sender: string): Promise<SentTransfer[]> {

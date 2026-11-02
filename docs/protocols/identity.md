@@ -9,12 +9,14 @@ Status: mandatory (ADR 0008, ADR 0009). Every Land, Shell, NPC runner and Hub im
 - Signing uses the pure, external interface `ML-DSA.Sign(sk, M, ctx)`, where the context `ctx` is the ASCII string listed for each statement below.
 - Signing is hedged: 32 fresh random bytes per signature. A verifier cannot tell the difference, and deterministic signatures still verify.
 
-**A Character's key** comes from 24 words:
+**A key from 24 words.** LR derives a key from 24 words under a `salt` and an `info` that the application chooses (ADR 0016):
 1. `entropy`: 32 random bytes.
 2. The words: BIP-39 over `entropy`, using the English word list and its 8-bit checksum.
 3. `seed`: the BIP-39 seed, PBKDF2-HMAC-SHA512 over the NFKD-normalised words with the salt `"mnemonic"` and an empty passphrase, 2048 rounds, 64 bytes.
-4. `xi = HKDF-SHA512(salt = "linked-realms/ml-dsa-44/v1", ikm = seed, info = "character/" + index, length = 32)`. `index` is a decimal number without leading zeros; a Player's own Character is index `0`.
+4. `xi = HKDF-SHA512(salt, ikm = seed, info, length = 32)`.
 5. `(pk, sk) = ML-DSA-44.KeyGen_internal(xi)`, the key generation from a seed in FIPS 204.
+
+**A Character's key** is the key from its Player's 24 words under the salt `"linked-realms/ml-dsa-44/v1"` and the info `"character/" + index`. `index` is a decimal number from `0` to `2^32 - 1` without leading zeros; a Player's own Character is index `0`. These labels are Linked Realms' own: LR's code takes them as parameters (`packages/shared/src/identity.ts`, `characterKey`).
 
 **Other keys.** A Map server key and the Hub's ticket key are generated from 32 random bytes of `xi` and stored on their server. They are never derived from words.
 
@@ -95,5 +97,5 @@ A verifier:
 
 ## Test vectors
 
-- `crates/core/test-vectors/identity.json`: words, the seed, `xi`, the public key and the address for several entropies and indexes, one signed statement per context, and one invalid address for each rule above.
+- `crates/core/test-vectors/identity.json`: words, the seed, the salt and info, `xi`, the public key and the address for several entropies and Character indexes, one signed statement per context, and one invalid address for each rule above.
 - `packages/shared/test-vectors/statements.json`: statements that must parse, with their fields, and statements that must be refused, each with the rule it breaks. Refused cases include a repeated key, a missing key, an extra line, a carriage return, U+2028 in a name, a bidi control in a name, a trailing space, an uppercase address and every non-canonical `Message`.

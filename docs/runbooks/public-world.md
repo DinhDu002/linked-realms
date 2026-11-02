@@ -106,6 +106,8 @@ docker compose -f deploy/compose.signer.yaml logs -f   # "checkpoint <height> <B
 
 `LR_SEED` is the chain server's name, or its address, and the P2P port. A name is looked up when the signer starts, so restart the signer after the server's address changes.
 
+**After a reset of the test network** (ADR 0012 decision 6; ADR 0016 made it id 3), a Node refuses the data of the old one (`OtherNetwork`). Before starting images from after the reset, delete the old chain data. Remove the chain's and the signer's volumes with `docker compose -f deploy/compose.chain.yaml down -v` and `docker compose -f deploy/compose.signer.yaml down -v`; the words file is not in a volume. Each Land deletes `/data/lr-node` in its volume and keeps the rest of `/data`, which holds its Map server key.
+
 ## 8. The check with three Players
 
 Step 2C ends when three Players on three machines play on the test network (`PLAN.md`, 2C "Done when"). With the world (sections 3 to 6) and the chain (section 7) running, and the signer printing Checkpoints:

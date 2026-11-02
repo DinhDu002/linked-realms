@@ -43,10 +43,11 @@ What stays with Linked Realms and then depends on LR:
 - the Rust and `wasm-bindgen` steps of the `typescript` and `browser` CI jobs, which go once `packages/core` comes as a package;
 - the tests that read LR's vectors by path: `packages/shell/src/config.test.ts` (`chain.json`) and `packages/shared/src/identity.test.ts` (`identity.json`).
 
-Some game terms are already in LR's paths, and the project owner decides them before the split, because changing a label changes every key or signature made with it:
+The project owner settled the game terms that were in LR's paths (ADR 0016):
 
-- `character/{index}` and the salt `linked-realms/ml-dsa-44/v1` in key derivation (`crates/core/src/lib.rs`): every key and address made from 24 words;
-- the contexts `linked-realms/tx/v1` (`tx.rs`) and `linked-realms/checkpoint/v1` (`checkpoint.rs`): every transaction and Checkpoint signed so far;
-- the statement contexts in `crates/core/test-vectors/identity.json`, which are game data and can move to the game's vectors;
-- `MINE_ID = "land"` in `crates/node/src/control.rs`, which the Map server sends too;
-- the names `linked-realms-core`, `linked-realms-node`, `linked-realms-randomx` and `character_seed`, and the Cargo `repository` field.
+- key derivation takes the salt and info as parameters, and Linked Realms keeps its own, `linked-realms/ml-dsa-44/v1` and `character/{index}`, in `packages/shared` (`characterKey`);
+- the signing contexts are LR's, `lr/tx/v1` and `lr/checkpoint/v1`;
+- the Node's Mine id is `default`;
+- the crates are `lr-core`, `lr-node` and `lr-randomx`.
+
+Left for the split: the identity vectors that use Linked Realms' labels and statement contexts move from `crates/core/test-vectors/identity.json` to Linked Realms, and the Cargo `repository` field and the name of the published WebAssembly package are set once LR's repository exists.

@@ -47,7 +47,7 @@ export interface NodeLink {
   onWon(listener: (found: BlockFound) => void): void;
 }
 
-const MINE = { id: "land" };
+const MINE = { id: "default" };
 const INFO_EVERY_MS = 2000;
 const RETRY_MS = 1000;
 // mine_start stops a running Mine first, which waits up to about 20 seconds for a dataset build.
