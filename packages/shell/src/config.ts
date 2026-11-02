@@ -4,7 +4,7 @@ const DEFAULT_LAND_IMAGE = "ghcr.io/dinhdu002/linked-realms-node:latest";
 const DEFAULT_NODE_URL = "http://localhost:9445";
 
 /** LR's networks by the names `lr-node --network` takes (crates/core/test-vectors/chain.json). */
-export const NETWORK_IDS = { test: 1, dev: 2 } as const;
+export const NETWORK_IDS = { test: 3, dev: 2 } as const;
 
 /** The id of the network named `name`; throws for one the Shell does not know. */
 export function networkIdOf(name: string): number {

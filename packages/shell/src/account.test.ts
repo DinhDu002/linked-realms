@@ -1,5 +1,6 @@
 import { Key } from "@linked-realms/core";
 import {
+  characterKey,
   parseStatement,
   signStatement,
   verifyStatement,
@@ -17,7 +18,7 @@ const ticketKey = Key.fromSeed(new Uint8Array(32).fill(0x48));
 const small = { m: 8, t: 1, p: 1 };
 
 async function setup(now = () => 1_700_000_000_000) {
-  const character = Key.fromEntropy(entropy, 0);
+  const character = characterKey(entropy, 0);
   const address = character.address;
   character.free();
   const vault = createVault(await sealEntropy(entropy, address, "pw", small));

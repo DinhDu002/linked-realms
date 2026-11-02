@@ -1,4 +1,4 @@
-import { Key } from "@linked-realms/core";
+import { characterKey } from "@linked-realms/shared/identity";
 import { describe, expect, it, vi } from "vitest";
 import type { Payment } from "./gold.ts";
 import { NodeError } from "./node.ts";
@@ -143,7 +143,7 @@ describe("travel", () => {
   });
 });
 
-const RECIPIENT = Key.fromEntropy(new Uint8Array(32).fill(8), 0).address;
+const RECIPIENT = characterKey(new Uint8Array(32).fill(8), 0).address;
 const payment: Payment = {
   networkId: 1,
   sender: "tlr1abc",

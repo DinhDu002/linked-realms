@@ -21,7 +21,7 @@ Transport:
 - At most 32 connections are open at once, with the secret or not; more are closed as they come. A TCP connection that has not sent the secret within 5 seconds is closed.
 - Amounts are decimal strings of base units; heights, threads and counts are numbers; ids are lowercase hex; addresses are their text form (`identity.md`).
 
-The Node has one Mine, with the id `land` (one per Land in Linked Realms; ADR 0014). The id stays in the API as a field. The Mine is off whenever `lr-node` starts: nothing about "on" is stored (P5).
+The Node has one Mine, with the id `default` (ADR 0016); in Linked Realms that is the Land's Mine (ADR 0014). The id stays in the API as a field. The Mine is off whenever `lr-node` starts: nothing about "on" is stored (P5).
 
 ## Methods
 
@@ -36,10 +36,10 @@ ADR 0013 also names `lr_getConnections` and `lr_addNode` for this listener; they
 - `maxThreads` is `max(1, cores − 1)`, lowered by `MINE_MAX_THREADS` if it is set.
 - `memoryAvailableMiB` is `null` where the Node cannot read it.
 
-**`mine_status({ "id": "land" })`**: what the Mine is really doing, not what was asked.
+**`mine_status({ "id": "default" })`**: what the Mine is really doing, not what was asked.
 
 ```json
-{ "id": "land", "state": "on", "threads": 2, "mode": "fast", "hashRate": 1180.5, "blocksWon": 3, "rewardAddress": "tlr1…" }
+{ "id": "default", "state": "on", "threads": 2, "mode": "fast", "hashRate": 1180.5, "blocksWon": 3, "rewardAddress": "tlr1…" }
 ```
 
 - `state` is `off`, `starting` (the RandomX dataset is being built) or `on`.
@@ -48,21 +48,21 @@ ADR 0013 also names `lr_getConnections` and `lr_addNode` for this listener; they
 - `blocksWon` counts the Blocks this Mine found that the Node took into its best chain since it started.
 - `rewardAddress` is the address of the last start, or `null` before the first.
 
-**`mine_start({ "id": "land", "rewardAddress": "tlr1…", "threads": 2, "mode": "auto" })`** returns the status.
+**`mine_start({ "id": "default", "rewardAddress": "tlr1…", "threads": 2, "mode": "auto" })`** returns the status.
 
 - `threads` is 1 to `maxThreads`.
 - `mode` is `auto` (fast if at least 2.5 GiB is available, else light), `fast` or `light`.
 - The Node must be synced. A start while the Mine runs stops it first, then starts it with the new settings.
 
-**`mine_stop({ "id": "land" })`** returns the status, once the threads have stopped.
+**`mine_stop({ "id": "default" })`** returns the status, once the threads have stopped.
 
-**`mine_subscribe({ "id": "land" })`** (WebSocket; `mine_unsubscribe` ends it) sends notifications:
+**`mine_subscribe({ "id": "default" })`** (WebSocket; `mine_unsubscribe` ends it) sends notifications:
 
 - `mine_status`: the status, once at the start, then on each change, at most every 2 seconds;
 - `mine_blockFound`, once the Node has taken a Block this Mine's own `submit` produced into its best chain (P3):
 
 ```json
-{ "id": "land", "height": 1240, "hash": "0a91…", "reward": "500004000", "rewardAddress": "tlr1…", "time": 1793232000 }
+{ "id": "default", "height": 1240, "hash": "0a91…", "reward": "500004000", "rewardAddress": "tlr1…", "time": 1793232000 }
 ```
 
 - `reward` is the Block reward at that height plus the Block's fees.
@@ -75,7 +75,7 @@ ADR 0013 also names `lr_getConnections` and `lr_addNode` for this listener; they
 | -32002 | `node-unavailable` | the Node is not running, or not synced for `mine_start` |
 | -32602 | `bad-address` | `rewardAddress` is not an address |
 | -32602 | `bad-threads` | `threads` is 0 or more than `maxThreads` |
-| -32602 | `unknown-mine` | a Mine id other than `land` |
+| -32602 | `unknown-mine` | a Mine id other than `default` |
 | -32602 | (jsonrpsee's) | other malformed parameters |
 | -32601 | | no such method |
 | HTTP 401 | | a TCP request without the secret |

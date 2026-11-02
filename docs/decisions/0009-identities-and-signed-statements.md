@@ -1,6 +1,6 @@
 # 0009 — Identities, addresses and signed statements
 
-Status: accepted, 2026-10-29 — by the project owner, with the step 2B plan (`docs/plans/phase-2b-world-without-chain.md`)
+Status: accepted, 2026-10-29 — by the project owner, with the step 2B plan (`docs/plans/phase-2b-world-without-chain.md`). Decision 2 changed on 2026-11-02 by ADR 0016: the salt and info are Linked Realms' own and live in its code, not in LR's; their values are unchanged.
 
 ## Context
 

@@ -1,6 +1,6 @@
 # 0014 — The Mine in the Land: the switch and the win
 
-Status: accepted, 2026-10-31 — in step 2C item 21 (plan `docs/plans/phase-2c-the-chain.md`). The project owner decided the switch and the win on 2026-10-30 (the plan's decisions 1 and 2) and "No Land, no Mine" (Answer 19, changed by ADR 0015 decision 3). The details marked as defaults were chosen under the authority the project owner gave for step 2C's items and are not yet confirmed by them. It supersedes ADR 0006 point 11 for Linked Realms.
+Status: accepted, 2026-10-31 — in step 2C item 21 (plan `docs/plans/phase-2c-the-chain.md`). The project owner decided the switch and the win on 2026-10-30 (the plan's decisions 1 and 2) and "No Land, no Mine" (Answer 19, changed by ADR 0015 decision 3). The details marked as defaults were chosen under the authority the project owner gave for step 2C's items and are not yet confirmed by them. It supersedes ADR 0006 point 11 for Linked Realms. The Mine id changed from `land` to `default` on 2026-11-02 (ADR 0016 decision 3).
 
 ## Context
 

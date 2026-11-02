@@ -5,6 +5,7 @@ import {
   ArrivalRefused,
   StatementError,
   buildStatement,
+  characterKey,
   fromBase64,
   isHost,
   isName,
@@ -28,6 +29,12 @@ const grammar = read<{
 }>("../test-vectors/statements.json");
 
 const identity = read<{
+  characters: {
+    entropy: string;
+    index: number;
+    publicKey: string;
+    address: string;
+  }[];
   statements: {
     context: string;
     statement: string;
@@ -38,6 +45,27 @@ const identity = read<{
 }>("../../../crates/core/test-vectors/identity.json");
 
 const hexToBase64 = (hex: string) => toBase64(Buffer.from(hex, "hex"));
+
+describe("characterKey", () => {
+  it.each(identity.characters)(
+    "derives Character $index of $entropy",
+    ({ entropy, index, publicKey, address }) => {
+      using key = characterKey(Buffer.from(entropy, "hex"), index);
+      expect(Buffer.from(key.publicKey).toString("hex")).toBe(publicKey);
+      expect(key.address).toBe(address);
+    },
+  );
+
+  it("refuses an index out of range instead of wrapping it", () => {
+    // Index 2^32 + 1 is not Character 1.
+    const entropy = new Uint8Array(32);
+    for (const index of [-1, 2 ** 32, 2 ** 32 + 1, 1.5, NaN]) {
+      expect(() => characterKey(entropy, index)).toThrow(
+        "index is not an integer in range",
+      );
+    }
+  });
+});
 
 describe("statement grammar", () => {
   it.each(grammar.valid)(

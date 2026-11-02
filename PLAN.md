@@ -402,6 +402,13 @@ Also decided on 2026-10-29: Node.js 26 LTS; the repo is public from day one; all
 
 <!-- Claude Code records the date and the completed work here, newest first. -->
 
+- 2026-11-02: ADR 0016 on branch `phase-2/2c-lr-names`: the project owner settled the game terms in LR's paths.
+  - Key derivation takes its salt and info as parameters; Linked Realms' labels moved to `packages/shared` (`characterKey`), with every key and address unchanged.
+  - The signing contexts are `lr/tx/v1` and `lr/checkpoint/v1`. The test network was therefore reset under ADR 0012 decision 6: id 3, genesis 2026-11-02 00:00 UTC.
+  - The Node's Mine id is `default`, and the crates are `lr-core`, `lr-node` and `lr-randomx`.
+  - At item 28, LR publishes its WebAssembly package as `@dinhdu002/lr-core` on GitHub Packages, which scopes a package to its owner's account, so `@lr/core` does not fit. The Cargo `repository` field is set once LR's repository exists.
+  - Old chain data must be deleted before images from this change run (runbook section 7).
+
 - 2026-11-02: For item 28, the list of what goes with LR at the split in `CONTEXT-MAP.md` is complete, on branch `phase-2/2c-split-list`. It now covers whole paths and parts of files (protocols, ADR 0009, the runbook, the Dockerfile stages, CI, the deploy files). It also lists what both sides copy, what stays with Linked Realms and depends on LR, and the game terms in LR's paths that the project owner decides before the split.
 
 - 2026-10-31: Step 2C item 27 on branch `phase-2/2c-27-close-out`: the close-out, but for the check with three Players, which needs the project owner. `pnpm e2e:chain` now runs against the `world` profile. Land 1's owner switches the Mine on and the other Character sees it win. The Land owner then sends 1.25 GOLD with a memo to the other Character through the Shell's prompt, and the Mine is off after `map-1` restarts. It passed twice against the real stack. `README.md` gives the step's status, section 6 ticks the parts of 2C that are built, and the public-world runbook lists the steps of the check with three Players. Defaults are in the plan's item 27.

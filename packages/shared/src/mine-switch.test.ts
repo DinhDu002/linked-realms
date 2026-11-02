@@ -1,7 +1,7 @@
 import { readFileSync } from "node:fs";
-import { Key } from "@linked-realms/core";
 import { toBinary, create } from "@bufbuild/protobuf";
 import { describe, expect, it } from "vitest";
+import { characterKey } from "./identity.ts";
 import { ClientMessageSchema } from "./gen/linked_realms/land/v1/land_pb.ts";
 import {
   StatementError,
@@ -52,7 +52,7 @@ describe("the Mine switch line", () => {
   });
 
   it("travels in a Land message as written, and a signed switch fits the relay's frame", () => {
-    const key = Key.fromEntropy(new Uint8Array(32).fill(9), 0);
+    const key = characterKey(new Uint8Array(32).fill(9), 0);
     const line = vectors.valid[0]!.text;
     // Printable ASCII only: the Shell's prompt shows it with no escapes.
     expect(encodeMessage(line)).toBe(`"${line}"`);
