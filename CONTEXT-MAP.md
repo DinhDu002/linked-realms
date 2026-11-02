@@ -50,4 +50,4 @@ The project owner settled the game terms that were in LR's paths (ADR 0016):
 - the Node's Mine id is `default`;
 - the crates are `lr-core`, `lr-node` and `lr-randomx`.
 
-Left for the split: the identity vectors that use Linked Realms' labels and statement contexts move from `crates/core/test-vectors/identity.json` to Linked Realms, and the Cargo `repository` field and the name of the published WebAssembly package are set once LR's repository exists.
+Left for the split: the identity vectors that use Linked Realms' labels and statement contexts move from `crates/core/test-vectors/identity.json` to Linked Realms, the Cargo `repository` field is set once LR's repository exists, and LR publishes the WebAssembly package as `@dinhdu002/lr-core` on GitHub Packages.

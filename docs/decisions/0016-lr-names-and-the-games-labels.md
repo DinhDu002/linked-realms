@@ -18,9 +18,9 @@ LR moves to its own repository before the genesis (ADR 0015 decision 6), and Lin
    - Old transactions and Checkpoints stop verifying, so the test network is reset the way ADR 0012 decision 6 sets out: network id 3 instead of 1, and the genesis timestamp 2026-11-02 00:00 UTC (1,793,577,600). A Node then refuses a data folder from before the reset, and its P2P magic, which comes from the genesis id, no longer matches an old Node's. The dev network keeps id 2 and its genesis; its data on any machine is only for development.
    - Rejected: keeping them, which would freeze the game's name into every LR signature forever.
 3. **The Node's one Mine is `default`, not `land`.** The Map server sends the new id; the two ship together in the Land image.
-4. **The crates are `lr-core`, `lr-node` and `lr-randomx`.** LR's repository is to be `DinhDu002/lr`, which the project owner creates at item 28. Two names wait for item 28:
+4. **The crates are `lr-core`, `lr-node` and `lr-randomx`.** LR's repository is to be `DinhDu002/lr`, which the project owner creates at item 28. Two names take effect at item 28:
    - the Cargo `repository` field, until that repository exists;
-   - the name LR publishes its WebAssembly package under. GitHub Packages takes a package only under its owner's scope (`@dinhdu002/…` for this account), so the `@lr/core` first proposed does not fit it. Until then the package stays `@linked-realms/core` inside this repository.
+   - the name LR publishes its WebAssembly package under, `@dinhdu002/lr-core` on GitHub Packages, which the project owner chose on 2026-11-02. GitHub Packages takes a package only under its owner's scope, so the `@lr/core` first proposed does not fit it. Until item 28 the package stays `@linked-realms/core` inside this repository.
    - The Land image keeps its name, `linked-realms-node`: it is Linked Realms' artifact, and published commands use it.
 
 ## Consequences
